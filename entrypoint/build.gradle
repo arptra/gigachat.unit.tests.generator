@@ -2,6 +2,8 @@ plugins {
     id 'application'
 }
 
+ext.convention = new LegacyConventionAdapter(project)
+
 dependencies {
     implementation libs.javaparser
 
@@ -32,4 +34,28 @@ tasks.register('MainAgentEntry.main', JavaExec) {
     mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
     classpath = sourceSets.main.runtimeClasspath
     workingDir = project.rootProject.projectDir
+}
+
+class LegacyConventionAdapter {
+    private final Project project
+
+    LegacyConventionAdapter(Project project) {
+        this.project = project
+    }
+
+    def getPlugin(Class<?> type) {
+        project.extensions.getByType(type)
+    }
+
+    def findPlugin(Class<?> type) {
+        project.extensions.findByType(type)
+    }
+
+    def getPlugins() {
+        this
+    }
+
+    def propertyMissing(String name) {
+        project.extensions.findByName(name)
+    }
 }
