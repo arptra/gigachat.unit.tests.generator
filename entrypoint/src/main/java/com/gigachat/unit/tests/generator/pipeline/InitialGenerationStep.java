@@ -170,7 +170,18 @@ public class InitialGenerationStep {
             switch (character) {
                 case '\\' -> builder.append("\\\\");
                 case '"' -> builder.append("\\\"");
-                default -> builder.append(character);
+                case '\n' -> builder.append("\\n");
+                case '\r' -> builder.append("\\r");
+                case '\t' -> builder.append("\\t");
+                case '\f' -> builder.append("\\f");
+                case '\b' -> builder.append("\\b");
+                default -> {
+                    if (character < 0x20) {
+                        builder.append(String.format("\\u%04x", (int) character));
+                    } else {
+                        builder.append(character);
+                    }
+                }
             }
         }
         return builder.toString();
