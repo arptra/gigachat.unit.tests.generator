@@ -1,0 +1,23 @@
+plugins {
+    id 'application'
+}
+
+dependencies {
+    implementation libs.javaparser
+
+    testImplementation libs.junit
+    testRuntimeOnly libs.junit.platform.launcher
+}
+
+application {
+    mainClass = 'com.testagent.entrypoint.MainAgentEntry'
+}
+
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
