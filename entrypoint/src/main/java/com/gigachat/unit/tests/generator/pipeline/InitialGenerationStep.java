@@ -119,8 +119,9 @@ public class InitialGenerationStep {
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
         String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
+        String escapedPrompt = escapeForTransmission(llmPrompt);
         logger.info("Prepared LLM prompt for method " + methodInfo.getSignature());
-        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
+        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(escapedPrompt, classInfo, methodInfo, plan);
         DiffEngine.MergeResult mergeResult = diffEngine.merge(classInfo, snippet);
         if (!mergeResult.changed()) {
             logger.warn("Merge step did not change target class for method " + snippet.methodName());
@@ -157,6 +158,22 @@ public class InitialGenerationStep {
             logger.info("Execution disabled via configuration; skipping execution step.");
         }
         logger.info("Generation pipeline completed successfully for method " + snippet.methodName());
+    }
+
+    private String escapeForTransmission(String prompt) {
+        if (prompt == null || prompt.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder(prompt.length());
+        for (int index = 0; index < prompt.length(); index++) {
+            char character = prompt.charAt(index);
+            switch (character) {
+                case '\\' -> builder.append("\\\\");
+                case '"' -> builder.append("\\\"");
+                default -> builder.append(character);
+            }
+        }
+        return builder.toString();
     }
 
     private JSONObject toJsonObject(String promptJson, TestMethodInfo methodInfo) {
