@@ -1,4 +1,4 @@
-package com.testagent.entrypoint.config;
+package com.gigachat.unit.tests.generator.config;
 
 import java.net.URI;
 import java.util.Optional;

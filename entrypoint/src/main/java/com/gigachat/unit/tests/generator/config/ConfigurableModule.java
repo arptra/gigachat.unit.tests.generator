@@ -1,4 +1,4 @@
-package com.testagent.entrypoint.config;
+package com.gigachat.unit.tests.generator.config;
 
 public interface ConfigurableModule {
 

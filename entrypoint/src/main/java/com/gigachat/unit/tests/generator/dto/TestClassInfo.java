@@ -1,4 +1,4 @@
-package com.testagent.entrypoint.dto;
+package com.gigachat.unit.tests.generator.dto;
 
 import java.nio.file.Path;
 import java.util.List;

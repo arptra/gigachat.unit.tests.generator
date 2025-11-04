@@ -1,10 +1,10 @@
-package com.testagent.entrypoint;
+package com.gigachat.unit.tests.generator;
 
-import com.testagent.entrypoint.config.AgentConfig;
-import com.testagent.entrypoint.dto.TestClassInfo;
-import com.testagent.entrypoint.pipeline.TestPipeline;
-import com.testagent.entrypoint.scanner.JavaProjectScanner;
-import com.testagent.entrypoint.util.ArgsParser;
+import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.pipeline.TestPipeline;
+import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
+import com.gigachat.unit.tests.generator.util.ArgsParser;
 
 import java.io.IOException;
 import java.util.List;

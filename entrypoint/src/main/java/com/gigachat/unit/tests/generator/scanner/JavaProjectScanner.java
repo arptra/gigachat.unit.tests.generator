@@ -1,12 +1,12 @@
-package com.testagent.entrypoint.scanner;
+package com.gigachat.unit.tests.generator.scanner;
 
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
-import com.testagent.entrypoint.config.AgentConfig;
-import com.testagent.entrypoint.dto.TestClassInfo;
-import com.testagent.entrypoint.dto.TestMethodInfo;
+import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 
 import java.io.IOException;
 import java.nio.file.Files;

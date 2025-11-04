@@ -1,7 +1,7 @@
-package com.testagent.entrypoint.pipeline;
+package com.gigachat.unit.tests.generator.pipeline;
 
-import com.testagent.entrypoint.config.AgentConfig;
-import com.testagent.entrypoint.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 
 import java.time.Duration;
 import java.time.Instant;

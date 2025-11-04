@@ -1,7 +1,7 @@
 subprojects {
     apply plugin: 'java'
 
-    group = 'com.testagent'
+    group = 'com.gigachat.unit.tests.generator'
     version = '0.1.0'
 
     repositories {

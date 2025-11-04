@@ -1,4 +1,4 @@
-package com.testagent.entrypoint.dto;
+package com.gigachat.unit.tests.generator.dto;
 
 import java.util.Objects;
 

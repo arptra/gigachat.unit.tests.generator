@@ -10,7 +10,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'com.testagent.entrypoint.MainAgentEntry'
+    mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
 }
 
 java {

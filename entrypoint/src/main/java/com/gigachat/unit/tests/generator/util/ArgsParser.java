@@ -1,7 +1,7 @@
-package com.testagent.entrypoint.util;
+package com.gigachat.unit.tests.generator.util;
 
-import com.testagent.entrypoint.config.AgentConfig;
-import com.testagent.entrypoint.config.GigaChatClientConfig;
+import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.config.GigaChatClientConfig;
 
 import java.net.URI;
 import java.net.URISyntaxException;
