@@ -33,10 +33,9 @@ public class MainAgentEntry {
             report(filtered);
         } catch (IllegalArgumentException exception) {
             System.err.println("Invalid arguments: " + exception.getMessage());
-            System.exit(1);
+            printUsage();
         } catch (IOException exception) {
             System.err.println("Failed to scan project: " + exception.getMessage());
-            System.exit(2);
         }
     }
 
@@ -78,5 +77,12 @@ public class MainAgentEntry {
                     info.resolveTestFile(),
                     info.getMethods().size());
         }
+    }
+
+    private void printUsage() {
+        System.out.println("Usage: --mode <scan|test|repair|monitor> [--path <projectDir>] [--project] [--class <fqcn>]" +
+                " [--include-modules <names>] [--include-classes <names>] [--parallel]" +
+                " [--gigachat-token <token>] [--gigachat-endpoint <uri>]");
+        System.out.println("Defaults: mode=scan, path=current working directory, project=false, parallel=false");
     }
 }

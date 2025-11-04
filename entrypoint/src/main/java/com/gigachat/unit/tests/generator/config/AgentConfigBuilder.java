@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.Map;
 
 public class AgentConfigBuilder {
-    private AgentMode mode;
-    private Path projectPath;
+    private AgentMode mode = AgentMode.SCAN;
+    private Path projectPath = Path.of("").toAbsolutePath().normalize();
     private final List<String> includeModules = new ArrayList<>();
     private final List<String> includeClasses = new ArrayList<>();
     private boolean parallelExecution;
@@ -19,12 +19,16 @@ public class AgentConfigBuilder {
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
 
     public AgentConfigBuilder mode(AgentMode mode) {
-        this.mode = mode;
+        if (mode != null) {
+            this.mode = mode;
+        }
         return this;
     }
 
     public AgentConfigBuilder projectPath(Path projectPath) {
-        this.projectPath = projectPath;
+        if (projectPath != null) {
+            this.projectPath = projectPath.toAbsolutePath().normalize();
+        }
         return this;
     }
 
@@ -87,12 +91,6 @@ public class AgentConfigBuilder {
     }
 
     public AgentConfig build() {
-        if (mode == null) {
-            throw new IllegalStateException("Mode must be defined");
-        }
-        if (projectPath == null) {
-            throw new IllegalStateException("Project path must be defined");
-        }
         return new AgentConfig(
                 mode,
                 projectPath,
