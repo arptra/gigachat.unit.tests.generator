@@ -2,6 +2,14 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.github.javaparser.ParseProblemException;
+import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.BodyDeclaration;
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.AnnotationExpr;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -81,6 +89,36 @@ public class TestClassWriter {
         }
     }
 
+    public String applyClassStructure(String source, GeneratedTestSnippet snippet) {
+        boolean hasAnnotations = snippet.classAnnotations() != null && !snippet.classAnnotations().isEmpty();
+        boolean hasFields = snippet.fieldDeclarations() != null && !snippet.fieldDeclarations().isEmpty();
+        boolean hasHelpers = snippet.helperMethods() != null && !snippet.helperMethods().isEmpty();
+        if (!(hasAnnotations || hasFields || hasHelpers)) {
+            return source;
+        }
+        try {
+            CompilationUnit unit = StaticJavaParser.parse(source);
+            ClassOrInterfaceDeclaration declaration = locateClass(unit, snippet.className());
+            if (declaration == null) {
+                return source;
+            }
+            boolean changed = false;
+            if (hasAnnotations) {
+                changed |= ensureClassAnnotations(declaration, snippet.classAnnotations());
+            }
+            if (hasFields) {
+                changed |= ensureFields(declaration, snippet.fieldDeclarations());
+            }
+            if (hasHelpers) {
+                changed |= ensureHelperMethods(declaration, snippet.helperMethods());
+            }
+            return changed ? unit.toString() : source;
+        } catch (ParseProblemException exception) {
+            logger.warn("Unable to parse existing test class for structure merge: " + exception.getMessage());
+            return source;
+        }
+    }
+
     public String ensureImports(String source, List<String> newImports) {
         if (newImports == null || newImports.isEmpty()) {
             return source;
@@ -145,6 +183,99 @@ public class TestClassWriter {
             lines.add(insertIndex, "");
         }
         return joinLines(lines);
+    }
+
+    private ClassOrInterfaceDeclaration locateClass(CompilationUnit unit, String className) {
+        return unit.getClassByName(className)
+                .orElseGet(() -> unit.getPrimaryType()
+                        .flatMap(type -> type.toClassOrInterfaceDeclaration())
+                        .orElse(null));
+    }
+
+    private boolean ensureClassAnnotations(ClassOrInterfaceDeclaration declaration, List<String> annotations) {
+        boolean changed = false;
+        for (String raw : annotations) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            try {
+                AnnotationExpr candidate = StaticJavaParser.parseAnnotation(raw.trim());
+                boolean exists = declaration.getAnnotations().stream()
+                        .anyMatch(existing -> existing.equals(candidate) || existing.toString().equals(candidate.toString()));
+                if (!exists) {
+                    declaration.addAnnotation(candidate);
+                    changed = true;
+                }
+            } catch (ParseProblemException exception) {
+                logger.warn("Failed to parse class annotation from snippet: " + raw + " -> " + exception.getMessage());
+            }
+        }
+        return changed;
+    }
+
+    private boolean ensureFields(ClassOrInterfaceDeclaration declaration, List<String> fields) {
+        boolean changed = false;
+        for (String raw : fields) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            try {
+                BodyDeclaration<?> body = StaticJavaParser.parseBodyDeclaration(raw.trim());
+                if (!body.isFieldDeclaration()) {
+                    continue;
+                }
+                FieldDeclaration field = body.asFieldDeclaration();
+                if (containsField(declaration, field)) {
+                    continue;
+                }
+                declaration.addMember(field);
+                changed = true;
+            } catch (ParseProblemException exception) {
+                logger.warn("Failed to parse field declaration from snippet: " + raw + " -> " + exception.getMessage());
+            }
+        }
+        return changed;
+    }
+
+    private boolean ensureHelperMethods(ClassOrInterfaceDeclaration declaration, List<String> methods) {
+        boolean changed = false;
+        for (String raw : methods) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            try {
+                BodyDeclaration<?> body = StaticJavaParser.parseBodyDeclaration(raw.trim());
+                if (!body.isMethodDeclaration()) {
+                    continue;
+                }
+                MethodDeclaration method = body.asMethodDeclaration();
+                boolean exists = declaration.getMethods().stream()
+                        .anyMatch(existing -> existing.getSignature().equals(method.getSignature()));
+                if (exists) {
+                    continue;
+                }
+                declaration.addMember(method);
+                changed = true;
+            } catch (ParseProblemException exception) {
+                logger.warn("Failed to parse helper method from snippet: " + raw + " -> " + exception.getMessage());
+            }
+        }
+        return changed;
+    }
+
+    private boolean containsField(ClassOrInterfaceDeclaration declaration, FieldDeclaration candidate) {
+        for (FieldDeclaration existing : declaration.getFields()) {
+            if (!existing.getElementType().toString().equals(candidate.getElementType().toString())) {
+                continue;
+            }
+            boolean allVariablesPresent = candidate.getVariables().stream()
+                    .allMatch(variable -> existing.getVariables().stream()
+                            .anyMatch(existingVar -> existingVar.getNameAsString().equals(variable.getNameAsString())));
+            if (allVariablesPresent) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean containsImport(List<String> lines, String importLine) {

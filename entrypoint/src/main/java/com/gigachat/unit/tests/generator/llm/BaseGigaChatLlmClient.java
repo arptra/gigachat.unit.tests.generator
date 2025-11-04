@@ -18,7 +18,9 @@ import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
+import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 
 import java.lang.reflect.Field;
@@ -204,10 +206,56 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
                 imports.add(line);
             }
         }
+        List<String> classAnnotations = collectClassAnnotations(classDeclaration);
+        List<String> fields = collectFieldDeclarations(classDeclaration);
+        List<String> helperMethods = collectHelperMethods(classDeclaration, method);
         return Optional.of(new GeneratedTestSnippet(classInfo.getTestClassName(),
                 copy.getNameAsString(),
                 methodSource,
-                imports));
+                imports,
+                classAnnotations,
+                fields,
+                helperMethods));
+    }
+
+    private List<String> collectClassAnnotations(ClassOrInterfaceDeclaration declaration) {
+        List<String> annotations = new ArrayList<>();
+        declaration.getAnnotations().forEach(annotation -> {
+            String value = normaliseLineEndings(annotation.toString()).trim();
+            if (!value.isEmpty() && !annotations.contains(value)) {
+                annotations.add(value);
+            }
+        });
+        return annotations;
+    }
+
+    private List<String> collectFieldDeclarations(ClassOrInterfaceDeclaration declaration) {
+        List<String> fields = new ArrayList<>();
+        for (BodyDeclaration<?> member : declaration.getMembers()) {
+            if (!member.isFieldDeclaration()) {
+                continue;
+            }
+            FieldDeclaration field = member.asFieldDeclaration();
+            String value = normaliseLineEndings(field.toString()).trim();
+            if (!value.isEmpty() && !fields.contains(value)) {
+                fields.add(value);
+            }
+        }
+        return fields;
+    }
+
+    private List<String> collectHelperMethods(ClassOrInterfaceDeclaration declaration, MethodDeclaration primaryMethod) {
+        List<String> helpers = new ArrayList<>();
+        for (MethodDeclaration candidate : declaration.getMethods()) {
+            if (candidate.equals(primaryMethod)) {
+                continue;
+            }
+            String value = normaliseLineEndings(candidate.toString()).trim();
+            if (!value.isEmpty() && !helpers.contains(value)) {
+                helpers.add(value);
+            }
+        }
+        return helpers;
     }
 
     private String prepareContent(String content, String expectedClassName) {

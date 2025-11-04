@@ -23,7 +23,8 @@ public class DiffEngine {
         Objects.requireNonNull(snippet, "snippet");
         Path file = classInfo.getTargetPath();
         String originalSource = writer.readSource(file);
-        String withImports = writer.ensureImports(originalSource, snippet.imports());
+        String withStructure = writer.applyClassStructure(originalSource, snippet);
+        String withImports = writer.ensureImports(withStructure, snippet.imports());
         String mergedSource = writer.appendMethod(withImports, snippet);
         boolean changed = !mergedSource.equals(originalSource);
         if (changed) {
