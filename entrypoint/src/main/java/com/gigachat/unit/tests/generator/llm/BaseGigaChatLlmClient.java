@@ -171,8 +171,13 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
         if (content == null || content.isBlank()) {
             return Optional.empty();
         }
+        String prepared = prepareContent(content, classInfo.getTestClassName());
+        if (prepared.isBlank()) {
+            logger.warn("GigaChat response did not contain parsable Java code.");
+            return Optional.empty();
+        }
         JavaParser parser = new JavaParser();
-        ParseResult<CompilationUnit> result = parser.parse(content);
+        ParseResult<CompilationUnit> result = parser.parse(prepared);
         if (result.getResult().isEmpty()) {
             return Optional.empty();
         }
@@ -203,6 +208,73 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
                 copy.getNameAsString(),
                 methodSource,
                 imports));
+    }
+
+    private String prepareContent(String content, String expectedClassName) {
+        String trimmed = content == null ? "" : content.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        String withoutFence = stripCodeFences(trimmed);
+        String normalised = withoutFence.replace("\r\n", "\n").replace('\r', '\n').trim();
+        if (normalised.isEmpty()) {
+            return "";
+        }
+        int anchor = findSourceAnchor(normalised, expectedClassName);
+        String candidate = anchor >= 0 ? normalised.substring(anchor) : normalised;
+        return candidate.trim();
+    }
+
+    private String stripCodeFences(String content) {
+        String value = content;
+        int firstFence = value.indexOf("```");
+        if (firstFence >= 0) {
+            if (firstFence > 0) {
+                value = value.substring(firstFence);
+            }
+            int firstLineBreak = value.indexOf('\n');
+            if (firstLineBreak >= 0) {
+                value = value.substring(firstLineBreak + 1);
+            } else {
+                value = value.substring(3);
+            }
+            int closingFence = value.lastIndexOf("```");
+            if (closingFence >= 0) {
+                value = value.substring(0, closingFence);
+            }
+        }
+        if (value.startsWith("java\n")) {
+            value = value.substring("java\n".length());
+        }
+        if (value.endsWith("```")) {
+            value = value.substring(0, value.length() - 3);
+        }
+        return value;
+    }
+
+    private int findSourceAnchor(String content, String expectedClassName) {
+        int packageIndex = content.indexOf("package ");
+        if (packageIndex >= 0) {
+            return packageIndex;
+        }
+        int importIndex = content.indexOf("import ");
+        if (importIndex >= 0) {
+            return importIndex;
+        }
+        int annotationIndex = content.indexOf("@");
+        String publicClass = "public class " + expectedClassName;
+        int classIndex = content.indexOf(publicClass);
+        if (classIndex >= 0) {
+            if (annotationIndex >= 0 && annotationIndex < classIndex) {
+                return annotationIndex;
+            }
+            return classIndex;
+        }
+        int genericClassIndex = content.indexOf("class ");
+        if (genericClassIndex >= 0 && annotationIndex >= 0 && annotationIndex < genericClassIndex) {
+            return annotationIndex;
+        }
+        return genericClassIndex;
     }
 
     private MethodDeclaration locateTestMethod(ClassOrInterfaceDeclaration declaration) {
