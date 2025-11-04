@@ -25,6 +25,16 @@ To limit the pipeline to a single class (e.g., `com.example.app.service.UserServ
 
 This command parses only the requested class, prepares its test DTOs, and executes the pipeline stages.
 
+### Scan Multiple Classes at Once
+
+Pass a comma-separated list to `--class` to scan several classes in one run:
+
+```bash
+./gradlew :entrypoint:run --args="--mode scan --path ./example-project --class com.example.app.service.UserService,com.example.app.service.NotificationService"
+```
+
+The entrypoint filters discovered classes to the provided set and generates DTOs only for those targets.
+
 ## Running Tests
 
 ```bash
