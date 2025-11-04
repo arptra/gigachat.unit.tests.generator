@@ -115,6 +115,25 @@ public class AgentConfigBuilder {
         return this;
     }
 
+    public AgentConfigBuilder promptIncludeInstructionHeader(boolean includeHeader) {
+        this.moduleOptions.put("prompt.includeInstructionHeader", includeHeader);
+        return this;
+    }
+
+    public AgentConfigBuilder promptInstructionTemplate(String template) {
+        if (template != null) {
+            this.moduleOptions.put("prompt.instructionTemplate", template);
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder promptResponseFormat(String responseFormat) {
+        if (responseFormat != null) {
+            this.moduleOptions.put("prompt.responseFormat", responseFormat);
+        }
+        return this;
+    }
+
     public AgentConfigBuilder analysisIncludeStatic(boolean includeStatic) {
         this.moduleOptions.put("analysis.includeStatic", includeStatic);
         return this;

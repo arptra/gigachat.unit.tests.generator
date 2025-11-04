@@ -13,12 +13,15 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.InstructionComp
 import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.InstructionContext;
 import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.PromptJsonRenderer;
 
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Locale;
 
 /**
  * Combines different sources of information into a final prompt for LLM invocation.
@@ -64,7 +67,7 @@ public class PromptBuilder {
             root.put("instructions", instructions);
         }
         if (skeletonJson != null && !skeletonJson.isBlank()) {
-            root.put("skeleton", PromptJsonRenderer.raw(skeletonJson));
+            root.put("methodContext", PromptJsonRenderer.raw(skeletonJson));
         }
         String analysisJson = summary.jsonContext();
         if (analysisJson != null && !analysisJson.isBlank()) {
@@ -81,6 +84,55 @@ public class PromptBuilder {
             root.put("hints", hints);
         }
         return jsonRenderer.render(root);
+    }
+
+    public String buildPromptForLLM(JSONObject contextJson) {
+        return buildPromptForLLM(contextJson, PromptConfig.defaults());
+    }
+
+    public String buildPromptForLLM(JSONObject contextJson, PromptConfig promptConfig) {
+        if (contextJson == null || contextJson.isEmpty()) {
+            return fallbackPrompt();
+        }
+        PromptConfig effectiveConfig = promptConfig == null ? PromptConfig.defaults() : promptConfig;
+        if (!effectiveConfig.includeInstructionHeader()) {
+            return contextJson.toString(2);
+        }
+        String header = effectiveConfig.resolvedInstructionTemplate();
+        String responseDirective = responseDirective(effectiveConfig.resolvedResponseFormat());
+        String lineSeparator = System.lineSeparator();
+        StringBuilder builder = new StringBuilder();
+        builder.append(header).append(lineSeparator).append(lineSeparator);
+        builder.append("Your task:").append(lineSeparator);
+        builder.append("- Generate a JUnit 5 test class using Mockito based on the following structured JSON context.").append(lineSeparator);
+        builder.append("- Follow the \"goal\" and \"instructions\" fields to guide the behavior and structure.").append(lineSeparator);
+        builder.append("- Mock dependencies listed in \"shouldMock\".").append(lineSeparator);
+        builder.append("- Keep real objects listed in \"shouldNotMock\".").append(lineSeparator);
+        builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);
+        builder.append("- Add assertions for return values or behavior mentioned in \"methodContext\".").append(lineSeparator);
+        builder.append("- Respect the naming convention from \"instructions.namingConvention\".").append(lineSeparator);
+        builder.append("- ").append(responseDirective).append(lineSeparator).append(lineSeparator);
+        builder.append("JSON CONTEXT:").append(lineSeparator);
+        builder.append(contextJson.toString(2));
+        return builder.toString();
+    }
+
+    private String responseDirective(String responseFormat) {
+        if (responseFormat == null || responseFormat.isBlank()) {
+            return "Return only valid Java code of the test class. Do not include explanations, markdown, or JSON.";
+        }
+        String normalised = responseFormat.trim().toUpperCase(Locale.ROOT);
+        return switch (normalised) {
+            case "JAVA_CODE_ONLY" -> "Return only valid Java code of the test class. Do not include explanations, markdown, or JSON.";
+            case "JAVA_CODE_WITH_COMMENTS" -> "Return Java test code and inline comments only, without additional prose or formatting.";
+            default -> "Return output adhering strictly to the " + normalised + " format.";
+        };
+    }
+
+    private String fallbackPrompt() {
+        return "You are an AI agent that generates Java JUnit 5 unit tests using Mockito." + System.lineSeparator()
+                + "The context is missing or incomplete — generate a generic unit test skeleton with mocks." + System.lineSeparator()
+                + "Return only valid Java code of the test class.";
     }
 
     private Map<String, Object> buildMockPlan(MockPlan plan) {

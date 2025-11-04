@@ -134,7 +134,10 @@ public class AgentConfig {
         }
         builder.append(",\n  \"prompt\": {")
                 .append("\n    \"mode\": \"").append(promptConfig.mode()).append("\",")
-                .append("\n    \"verbosity\": \"").append(promptConfig.verbosity()).append("\"\n  },\n")
+                .append("\n    \"verbosity\": \"").append(promptConfig.verbosity()).append("\",")
+                .append("\n    \"includeInstructionHeader\": ").append(promptConfig.includeInstructionHeader()).append(',')
+                .append("\n    \"instructionTemplate\": ").append(renderNullable(promptConfig.instructionTemplate())).append(',')
+                .append("\n    \"responseFormat\": ").append(renderNullable(promptConfig.responseFormat())).append("\n  },\n")
                 .append("  \"analysis\": {")
                 .append("\n    \"includeStatic\": ").append(analysisConfig.includeStatic()).append(',')
                 .append("\n    \"includeVerificationPolicy\": ").append(analysisConfig.includeVerificationPolicy()).append(',')
@@ -172,6 +175,9 @@ public class AgentConfig {
         builder.append("prompt:\n");
         builder.append("  mode: ").append(promptConfig.mode()).append('\n');
         builder.append("  verbosity: ").append(promptConfig.verbosity()).append('\n');
+        builder.append("  includeInstructionHeader: ").append(promptConfig.includeInstructionHeader()).append('\n');
+        builder.append("  instructionTemplate: ").append(renderYamlNullable(promptConfig.instructionTemplate())).append('\n');
+        builder.append("  responseFormat: ").append(renderYamlNullable(promptConfig.responseFormat())).append('\n');
         builder.append("analysis:\n");
         builder.append("  includeStatic: ").append(analysisConfig.includeStatic()).append('\n');
         builder.append("  includeVerificationPolicy: ").append(analysisConfig.includeVerificationPolicy()).append('\n');

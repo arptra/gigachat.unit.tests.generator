@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     implementation libs.javaparser
+    implementation libs.json
 
     testImplementation libs.junit
     testRuntimeOnly libs.junit.platform.launcher

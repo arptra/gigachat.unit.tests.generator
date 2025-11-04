@@ -29,6 +29,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 /**
  * Executes the first seven stages of the generation pipeline for each discovered method.
  */
@@ -113,8 +116,11 @@ public class InitialGenerationStep {
         String skeletonPrompt = skeletonPromptBuilder.build(classInfo, methodInfo);
         Analyze.AnalysisSummary analysisSummary = analyze.analyze(config, classInfo, methodInfo);
         MockPlan plan = analysisSummary.mockPlan();
-        String prompt = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
-        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, plan);
+        String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
+        JSONObject contextJson = toJsonObject(promptJson, methodInfo);
+        String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
+        logger.info("Prepared LLM prompt for method " + methodInfo.getSignature());
+        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
         DiffEngine.MergeResult mergeResult = diffEngine.merge(classInfo, snippet);
         if (!mergeResult.changed()) {
             logger.warn("Merge step did not change target class for method " + snippet.methodName());
@@ -151,6 +157,19 @@ public class InitialGenerationStep {
             logger.info("Execution disabled via configuration; skipping execution step.");
         }
         logger.info("Generation pipeline completed successfully for method " + snippet.methodName());
+    }
+
+    private JSONObject toJsonObject(String promptJson, TestMethodInfo methodInfo) {
+        if (promptJson == null || promptJson.isBlank()) {
+            logger.warn("Prompt JSON was empty for method " + methodInfo.getSignature());
+            return new JSONObject();
+        }
+        try {
+            return new JSONObject(promptJson);
+        } catch (JSONException exception) {
+            logger.warn("Failed to parse prompt JSON for method " + methodInfo.getSignature() + ": " + exception.getMessage());
+            return new JSONObject();
+        }
     }
 
     private void handleFailure(TestClassInfo classInfo,
