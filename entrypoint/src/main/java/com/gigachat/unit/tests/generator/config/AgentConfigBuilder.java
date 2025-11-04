@@ -15,7 +15,7 @@ public class AgentConfigBuilder {
     private boolean parallelExecution;
     private boolean scanWholeProject;
     private final List<String> targetClasses = new ArrayList<>();
-    private GigaChatClientConfig gigaChat = new GigaChatClientConfig(null, null);
+    private GigaChatClientConfig gigaChat = GigaChatClientConfig.empty();
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
 
     public AgentConfigBuilder mode(AgentMode mode) {
@@ -81,8 +81,8 @@ public class AgentConfigBuilder {
         return this;
     }
 
-    public AgentConfigBuilder gigaChat(String token, URI endpoint) {
-        this.gigaChat = new GigaChatClientConfig(token, endpoint);
+    public AgentConfigBuilder gigaChat(String token, URI endpoint, Path certificate, Path rootCertificate, Path privateKey) {
+        this.gigaChat = new GigaChatClientConfig(token, endpoint, certificate, rootCertificate, privateKey);
         return this;
     }
 

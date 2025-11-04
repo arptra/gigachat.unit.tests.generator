@@ -5,6 +5,7 @@ plugins {
 dependencies {
     implementation libs.javaparser
     implementation libs.json
+    implementation libs.gigachat
 
     testImplementation libs.junit
     testRuntimeOnly libs.junit.platform.launcher

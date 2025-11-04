@@ -7,6 +7,8 @@ import com.gigachat.unit.tests.generator.dto.ErrorsReport;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.execute.JUnitExecutionInvoker;
+import com.gigachat.unit.tests.generator.llm.GigaChatMtlsClient;
+import com.gigachat.unit.tests.generator.llm.GigaChatTokenClient;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
 import com.gigachat.unit.tests.generator.llm.LlmClientStub;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
@@ -37,7 +39,7 @@ public class TestPipeline {
     public List<TestClassInfo> execute(AgentConfig config) throws IOException {
         List<TestClassInfo> classes = scanner.scan(config);
         System.out.printf("Scan completed: %d classes detected.%n", classes.size());
-        InitialGenerationStep generationStep = createGenerationStep(config.getProjectPath());
+        InitialGenerationStep generationStep = createGenerationStep(config);
         ErrorsReport report = generationStep.run(config, classes);
         if (report.hasErrors()) {
             System.out.printf("Generation completed with %d compilation errors and %d execution errors.%n",
@@ -49,13 +51,14 @@ public class TestPipeline {
         return classes;
     }
 
-    private InitialGenerationStep createGenerationStep(Path projectRoot) {
+    private InitialGenerationStep createGenerationStep(AgentConfig config) {
+        Path projectRoot = config.getProjectPath();
         PipelineLogger logger = new PipelineLogger(projectRoot);
         TestClassWriter testClassWriter = new TestClassWriter(logger);
         SkeletonPromptBuilder skeletonPromptBuilder = new SkeletonPromptBuilder();
         Analyze analyze = new Analyze(logger);
         PromptBuilder promptBuilder = new PromptBuilder();
-        LlmClient llmClient = new LlmClientStub();
+        LlmClient llmClient = createLlmClient(config, logger);
         DiffEngine diffEngine = new DiffEngine(testClassWriter, logger);
         CompilerInvoker compilerInvoker = new GradleCompilerInvoker(logger);
         ExecutionInvoker executionInvoker = new JUnitExecutionInvoker(logger);
@@ -70,5 +73,22 @@ public class TestPipeline {
                 compilerInvoker,
                 executionInvoker,
                 snapshotStorage);
+    }
+
+    private LlmClient createLlmClient(AgentConfig config, PipelineLogger logger) {
+        try {
+            if (config.getGigaChat().isTokenAuthConfigured()) {
+                logger.info("Initialising GigaChat client using bearer token authentication.");
+                return new GigaChatTokenClient(config.getGigaChat(), logger);
+            }
+            if (config.getGigaChat().isMtlsConfigured()) {
+                logger.info("Initialising GigaChat client using mTLS authentication.");
+                return new GigaChatMtlsClient(config.getGigaChat(), logger);
+            }
+        } catch (IllegalStateException exception) {
+            logger.error("Failed to initialise GigaChat client; falling back to stub.", exception);
+        }
+        logger.warn("GigaChat credentials not provided; using stub LLM client.");
+        return new LlmClientStub();
     }
 }

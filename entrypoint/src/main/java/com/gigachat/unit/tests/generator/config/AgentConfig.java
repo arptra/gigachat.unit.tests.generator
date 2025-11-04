@@ -37,7 +37,7 @@ public class AgentConfig {
         this.parallelExecution = parallelExecution;
         this.scanWholeProject = scanWholeProject;
         this.targetClasses = sanitise(targetClasses);
-        this.gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
+        this.gigaChat = gigaChat == null ? GigaChatClientConfig.empty() : gigaChat;
         this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
         this.promptConfig = PromptConfig.from(this.moduleOptions);
         this.analysisConfig = AnalysisConfig.from(this.moduleOptions);
@@ -116,8 +116,12 @@ public class AgentConfig {
         builder.append("  \"scanWholeProject\": ").append(scanWholeProject).append(",\n");
         builder.append("  \"targetClasses\": ").append(renderArray(targetClasses)).append(",\n");
         builder.append("  \"gigaChat\": {");
+        builder.append("\n    \"authMode\": \"").append(gigaChat.authMode()).append("\",");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
-        builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append("\n  },\n");
+        builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"certificate\": ").append(renderNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"rootCertificate\": ").append(renderNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"privateKey\": ").append(renderNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append("\n  },\n");
         builder.append("  \"moduleOptions\": {");
         if (moduleOptions.isEmpty()) {
             builder.append("}\n");
@@ -161,8 +165,12 @@ public class AgentConfig {
         builder.append("targetClasses:").append(targetClasses.isEmpty() ? " []\n" : '\n');
         targetClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
         builder.append("gigaChat:\n");
+        builder.append("  authMode: ").append(gigaChat.authMode()).append('\n');
         builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
         builder.append("  endpoint: ").append(renderYamlNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  certificate: ").append(renderYamlNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  rootCertificate: ").append(renderYamlNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  privateKey: ").append(renderYamlNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append('\n');
         builder.append("moduleOptions:");
         if (moduleOptions.isEmpty()) {
             builder.append(" {}\n");
