@@ -8,6 +8,7 @@ import chat.giga.model.completion.ChatMessageRole;
 import chat.giga.model.completion.Choice;
 import chat.giga.model.completion.CompletionRequest;
 import chat.giga.model.completion.CompletionResponse;
+import com.gigachat.unit.tests.generator.config.GigaChatClientConfig;
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
@@ -20,6 +21,7 @@ import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -32,10 +34,12 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
     private static final String SYSTEM_PROMPT = "You are an AI agent that generates Java JUnit 5 unit tests using Mockito.";
 
     private final PipelineLogger logger;
+    private final GigaChatClientConfig config;
     private final LlmClient fallback;
     private volatile GigaChatClient client;
 
-    protected BaseGigaChatLlmClient(PipelineLogger logger) {
+    protected BaseGigaChatLlmClient(GigaChatClientConfig config, PipelineLogger logger) {
+        this.config = Objects.requireNonNull(config, "config");
         this.logger = Objects.requireNonNull(logger, "logger");
         this.fallback = new LlmClientStub();
     }
@@ -75,7 +79,7 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
         }
         try {
             CompletionRequest request = CompletionRequest.builder()
-                    .model(ModelName.GIGA_CHAT_PRO)
+                    .model(resolveModel())
                     .message(ChatMessage.builder()
                             .role(ChatMessageRole.SYSTEM)
                             .content(SYSTEM_PROMPT)
@@ -98,6 +102,53 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
             logger.error("Unexpected error while invoking GigaChat", exception);
         }
         return fallback.generateTestSnippet(prompt, classInfo, methodInfo, plan);
+    }
+
+    protected GigaChatClientConfig clientConfig() {
+        return config;
+    }
+
+    private String resolveModel() {
+        String configured = config.resolvedModelName();
+        if (configured == null || configured.isBlank()) {
+            return ModelName.GIGA_CHAT_MAX_2;
+        }
+        String candidate = findModelConstant(configured);
+        if (candidate != null) {
+            return candidate;
+        }
+        logger.warn("Unknown GigaChat model '" + configured + "', falling back to GIGA_CHAT_MAX_2.");
+        return ModelName.GIGA_CHAT_MAX_2;
+    }
+
+    private String findModelConstant(String configured) {
+        try {
+            Field field = ModelName.class.getField(configured);
+            Object value = field.get(null);
+            if (value instanceof String string && !string.isBlank()) {
+                return string;
+            }
+        } catch (NoSuchFieldException ignored) {
+            // fall through to search by value
+        } catch (IllegalAccessException exception) {
+            logger.error("Unable to access GigaChat model constant '" + configured + "'", exception);
+        }
+        try {
+            for (Field field : ModelName.class.getFields()) {
+                if (field.getType() != String.class) {
+                    continue;
+                }
+                Object value = field.get(null);
+                if (value instanceof String string && !string.isBlank()) {
+                    if (string.equalsIgnoreCase(configured) || field.getName().equalsIgnoreCase(configured)) {
+                        return string;
+                    }
+                }
+            }
+        } catch (IllegalAccessException exception) {
+            logger.error("Failed to inspect available GigaChat model constants", exception);
+        }
+        return null;
     }
 
     private String extractContent(CompletionResponse response) {

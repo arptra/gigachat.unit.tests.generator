@@ -20,6 +20,8 @@ public class ArgsParser {
         Path certificatePath = null;
         Path rootCertificatePath = null;
         Path privateKeyPath = null;
+        boolean verifySslCerts = false;
+        String modelName = null;
 
         for (int i = 0; i < (args == null ? 0 : args.length); i++) {
             String argument = args[i];
@@ -52,6 +54,14 @@ public class ArgsParser {
                 case "cert" -> certificatePath = toPath(readValue(args, ++i, key));
                 case "rootCert" -> rootCertificatePath = toPath(readValue(args, ++i, key));
                 case "key" -> privateKeyPath = toPath(readValue(args, ++i, key));
+                case "ssl" -> {
+                    boolean value = true;
+                    if (hasValue(args, i)) {
+                        value = Boolean.parseBoolean(args[++i]);
+                    }
+                    verifySslCerts = value;
+                }
+                case "model" -> modelName = readValue(args, ++i, key);
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);
             }
         }
@@ -61,7 +71,9 @@ public class ArgsParser {
                 gigaChatEndpoint,
                 certificatePath,
                 rootCertificatePath,
-                privateKeyPath);
+                privateKeyPath,
+                verifySslCerts,
+                modelName);
         try {
             return builder.build();
         } catch (IllegalStateException ex) {

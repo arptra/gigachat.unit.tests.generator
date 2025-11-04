@@ -21,17 +21,23 @@ public class GigaChatClientConfig {
     private final Path certificatePath;
     private final Path rootCertificatePath;
     private final Path privateKeyPath;
+    private final boolean verifySslCerts;
+    private final String modelName;
 
     public GigaChatClientConfig(String token,
                                 URI endpoint,
                                 Path certificatePath,
                                 Path rootCertificatePath,
-                                Path privateKeyPath) {
+                                Path privateKeyPath,
+                                boolean verifySslCerts,
+                                String modelName) {
         this.token = normaliseToken(token);
         this.endpoint = endpoint;
         this.certificatePath = normalisePath(certificatePath);
         this.rootCertificatePath = normalisePath(rootCertificatePath);
         this.privateKeyPath = normalisePath(privateKeyPath);
+        this.verifySslCerts = verifySslCerts;
+        this.modelName = normaliseModelName(modelName);
     }
 
     private String normaliseToken(String value) {
@@ -49,19 +55,27 @@ public class GigaChatClientConfig {
         return value.toAbsolutePath().normalize();
     }
 
+    private String normaliseModelName(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed.toUpperCase();
+    }
+
     public static GigaChatClientConfig empty() {
-        return new GigaChatClientConfig(null, null, null, null, null);
+        return new GigaChatClientConfig(null, null, null, null, null, false, null);
     }
 
     public static GigaChatClientConfig forToken(String token, URI endpoint) {
-        return new GigaChatClientConfig(token, endpoint, null, null, null);
+        return new GigaChatClientConfig(token, endpoint, null, null, null, false, null);
     }
 
     public static GigaChatClientConfig forMtls(Path certificate,
                                                Path rootCertificate,
                                                Path privateKey,
                                                URI endpoint) {
-        return new GigaChatClientConfig(null, endpoint, certificate, rootCertificate, privateKey);
+        return new GigaChatClientConfig(null, endpoint, certificate, rootCertificate, privateKey, false, null);
     }
 
     public Optional<String> tokenOptional() {
@@ -82,6 +96,18 @@ public class GigaChatClientConfig {
 
     public Optional<Path> privateKeyPathOptional() {
         return Optional.ofNullable(privateKeyPath);
+    }
+
+    public boolean verifySslCerts() {
+        return verifySslCerts;
+    }
+
+    public Optional<String> modelNameOptional() {
+        return Optional.ofNullable(modelName);
+    }
+
+    public String resolvedModelName() {
+        return modelName != null ? modelName : "GIGA_CHAT_MAX_2";
     }
 
     public AuthMode authMode() {
@@ -115,7 +141,15 @@ public class GigaChatClientConfig {
         Path mergedCert = other.certificatePathOptional().orElse(certificatePath);
         Path mergedRoot = other.rootCertificatePathOptional().orElse(rootCertificatePath);
         Path mergedKey = other.privateKeyPathOptional().orElse(privateKeyPath);
-        return new GigaChatClientConfig(mergedToken, mergedEndpoint, mergedCert, mergedRoot, mergedKey);
+        boolean mergedVerifySsl = other.verifySslCerts() || (!other.isConfigured() && this.verifySslCerts);
+        String mergedModel = other.modelNameOptional().orElse(modelName);
+        return new GigaChatClientConfig(mergedToken,
+                mergedEndpoint,
+                mergedCert,
+                mergedRoot,
+                mergedKey,
+                mergedVerifySsl,
+                mergedModel);
     }
 
     @Override
@@ -130,12 +164,14 @@ public class GigaChatClientConfig {
                 && Objects.equals(endpoint, that.endpoint)
                 && Objects.equals(certificatePath, that.certificatePath)
                 && Objects.equals(rootCertificatePath, that.rootCertificatePath)
-                && Objects.equals(privateKeyPath, that.privateKeyPath);
+                && Objects.equals(privateKeyPath, that.privateKeyPath)
+                && verifySslCerts == that.verifySslCerts
+                && Objects.equals(modelName, that.modelName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(token, endpoint, certificatePath, rootCertificatePath, privateKeyPath);
+        return Objects.hash(token, endpoint, certificatePath, rootCertificatePath, privateKeyPath, verifySslCerts, modelName);
     }
 
     @Override
@@ -146,6 +182,8 @@ public class GigaChatClientConfig {
                 + ", certificatePath=" + certificatePath
                 + ", rootCertificatePath=" + rootCertificatePath
                 + ", privateKeyPath=" + privateKeyPath
+                + ", verifySslCerts=" + verifySslCerts
+                + ", modelName='" + modelName + '\''
                 + '}';
     }
 }

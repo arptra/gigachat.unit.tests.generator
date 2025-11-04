@@ -41,7 +41,7 @@ public class GigaChatMtlsClient extends BaseGigaChatLlmClient {
     private final GigaChatClientConfig config;
 
     public GigaChatMtlsClient(GigaChatClientConfig config, PipelineLogger logger) {
-        super(logger);
+        super(config, logger);
         this.config = Objects.requireNonNull(config, "config");
         if (!config.isMtlsConfigured()) {
             throw new IllegalStateException("mTLS authentication requires certificate, root certificate and private key");
@@ -60,6 +60,7 @@ public class GigaChatMtlsClient extends BaseGigaChatLlmClient {
         return GigaChatClient.builder()
                 .apiUrl(config.endpointOptional().map(Object::toString).orElse(null))
                 .authClient(authClient)
+                .verifySslCerts(config.verifySslCerts())
                 .build();
     }
 

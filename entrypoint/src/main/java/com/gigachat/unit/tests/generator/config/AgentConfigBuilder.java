@@ -17,6 +17,8 @@ public class AgentConfigBuilder {
     private final List<String> targetClasses = new ArrayList<>();
     private GigaChatClientConfig gigaChat = GigaChatClientConfig.empty();
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
+    private boolean verifySslCerts;
+    private String modelName;
 
     public AgentConfigBuilder mode(AgentMode mode) {
         if (mode != null) {
@@ -77,12 +79,32 @@ public class AgentConfigBuilder {
     public AgentConfigBuilder gigaChat(GigaChatClientConfig config) {
         if (config != null) {
             this.gigaChat = config;
+            this.verifySslCerts = config.verifySslCerts();
+            this.modelName = config.modelNameOptional().orElse(null);
         }
         return this;
     }
 
     public AgentConfigBuilder gigaChat(String token, URI endpoint, Path certificate, Path rootCertificate, Path privateKey) {
-        this.gigaChat = new GigaChatClientConfig(token, endpoint, certificate, rootCertificate, privateKey);
+        return gigaChat(token, endpoint, certificate, rootCertificate, privateKey, this.verifySslCerts, this.modelName);
+    }
+
+    public AgentConfigBuilder gigaChat(String token,
+                                       URI endpoint,
+                                       Path certificate,
+                                       Path rootCertificate,
+                                       Path privateKey,
+                                       boolean verifySslCerts,
+                                       String modelName) {
+        this.verifySslCerts = verifySslCerts;
+        this.modelName = modelName;
+        this.gigaChat = new GigaChatClientConfig(token,
+                endpoint,
+                certificate,
+                rootCertificate,
+                privateKey,
+                verifySslCerts,
+                modelName);
         return this;
     }
 

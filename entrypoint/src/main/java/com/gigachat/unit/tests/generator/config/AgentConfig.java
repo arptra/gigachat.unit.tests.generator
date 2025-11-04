@@ -121,7 +121,9 @@ public class AgentConfig {
         builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append(",");
         builder.append("\n    \"certificate\": ").append(renderNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append(",");
         builder.append("\n    \"rootCertificate\": ").append(renderNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append(",");
-        builder.append("\n    \"privateKey\": ").append(renderNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append("\n  },\n");
+        builder.append("\n    \"privateKey\": ").append(renderNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"verifySslCerts\": ").append(gigaChat.verifySslCerts()).append(",");
+        builder.append("\n    \"model\": ").append(renderNullable(gigaChat.modelNameOptional().orElse(null))).append("\n  },\n");
         builder.append("  \"moduleOptions\": {");
         if (moduleOptions.isEmpty()) {
             builder.append("}\n");
@@ -171,6 +173,8 @@ public class AgentConfig {
         builder.append("  certificate: ").append(renderYamlNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append('\n');
         builder.append("  rootCertificate: ").append(renderYamlNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append('\n');
         builder.append("  privateKey: ").append(renderYamlNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  verifySslCerts: ").append(gigaChat.verifySslCerts()).append('\n');
+        builder.append("  model: ").append(renderYamlNullable(gigaChat.modelNameOptional().orElse(null))).append('\n');
         builder.append("moduleOptions:");
         if (moduleOptions.isEmpty()) {
             builder.append(" {}\n");
