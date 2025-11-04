@@ -52,7 +52,7 @@ public class MainAgentEntry {
         String expectedTestName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
 
         List<TestClassInfo> filtered = scannedClasses.stream()
-                .filter(info -> matchesTarget(info.getClassName(), expectedTestName))
+                .filter(info -> matchesTarget(info, simpleName, expectedTestName))
                 .toList();
 
         if (filtered.isEmpty()) {
@@ -62,18 +62,25 @@ public class MainAgentEntry {
         return filtered;
     }
 
-    private boolean matchesTarget(String className, String expectedTestName) {
-        if (className.equals(expectedTestName)) {
+    private boolean matchesTarget(TestClassInfo info, String expectedClassName, String expectedTestName) {
+        if (info.getClassName().equals(expectedClassName)) {
             return true;
         }
-        return className.equalsIgnoreCase(expectedTestName);
+        if (info.getClassName().equalsIgnoreCase(expectedClassName)) {
+            return true;
+        }
+        if (info.getTestClassName().equals(expectedTestName)) {
+            return true;
+        }
+        return info.getTestClassName().equalsIgnoreCase(expectedTestName);
     }
 
     private void report(List<TestClassInfo> classes) {
         System.out.printf("Pipeline discovered %d candidate classes.%n", classes.size());
         for (TestClassInfo info : classes) {
-            System.out.printf(" - %s -> %s (%d methods)%n",
+            System.out.printf(" - %s (test: %s) -> %s (%d methods)%n",
                     info.getClassName(),
+                    info.getTestClassName(),
                     info.resolveTestFile(),
                     info.getMethods().size());
         }

@@ -4,6 +4,7 @@ import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
 import com.gigachat.unit.tests.generator.config.AgentMode;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -51,13 +52,17 @@ class JavaProjectScannerTest {
 
         assertEquals(1, result.size());
         TestClassInfo info = result.get(0);
-        assertEquals("SampleServiceTest", info.getClassName());
-        Path expectedTarget = workingDirectory.resolve(Path.of("src", "test", "java", "com", "example", "demo"))
+        assertEquals("SampleService", info.getClassName());
+        assertEquals("SampleServiceTest", info.getTestClassName());
+        Path expectedTarget = workingDirectory.resolve(Path.of("src", "test", "java", "com", "example", "demo", "SampleServiceTest.java"))
                 .toAbsolutePath().normalize();
         assertEquals(expectedTarget, info.getTargetPath());
-        assertTrue(info.getImports().contains("org.junit.jupiter.api.Test"));
+        assertTrue(info.getImports().isEmpty());
         assertFalse(info.getMethods().isEmpty());
-        assertEquals("public void findAllTest()", info.getMethods().get(0).getSignature());
+        TestMethodInfo method = info.getMethods().get(0);
+        assertEquals("public String findAll()", method.getSignature());
+        assertEquals("String", method.getReturnType());
+        assertTrue(method.getBody().contains("return \"ok\";"));
     }
 
     @Test
@@ -76,19 +81,19 @@ class JavaProjectScannerTest {
         List<TestClassInfo> result = scanner.scan(config);
 
         assertFalse(result.isEmpty(), "Scanner did not find classes in example project");
-        result.forEach(info -> assertTrue(info.getImports().contains("org.junit.jupiter.api.Test")));
-
         Map<String, TestClassInfo> index = result.stream()
-                .collect(Collectors.toMap(TestClassInfo::getClassName, info -> info));
+                .collect(Collectors.toMap(TestClassInfo::getTestClassName, info -> info));
 
         TestClassInfo application = index.get("ApplicationTest");
         assertNotNull(application, "Expected ApplicationTest info");
-        assertEquals(Path.of("src", "test", "java", "com", "example", "app").toString(),
+        assertTrue(application.getImports().contains("import com.example.app.service.UserService;"));
+        assertEquals(Path.of("src", "test", "java", "com", "example", "app", "ApplicationTest.java").toString(),
                 relativize(projectRoot, application.getTargetPath()));
 
         TestClassInfo library = index.get("LibraryComponentTest");
         assertNotNull(library, "Expected LibraryComponentTest info");
-        assertEquals(Path.of("src", "test", "java", "com", "example", "lib").toString(),
+        assertTrue(library.getImports().contains("import java.util.HashMap;"));
+        assertEquals(Path.of("src", "test", "java", "com", "example", "lib", "LibraryComponentTest.java").toString(),
                 relativize(projectRoot, library.getTargetPath()));
 
         Map<String, Integer> methodCounts = result.stream()
@@ -97,7 +102,7 @@ class JavaProjectScannerTest {
         methodCounts.forEach((className, count) -> assertTrue(count > 0, "Expected methods for " + className));
 
         List<String> orderedClasses = result.stream()
-                .map(TestClassInfo::getClassName)
+                .map(TestClassInfo::getTestClassName)
                 .sorted(Comparator.naturalOrder())
                 .toList();
         assertFalse(orderedClasses.isEmpty());

@@ -15,24 +15,18 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class JavaProjectScanner {
     private final JavaParser javaParser;
-    private final List<String> defaultImports;
 
     public JavaProjectScanner() {
-        this(new JavaParser(), List.of(
-                "org.junit.jupiter.api.Test",
-                "org.junit.jupiter.api.Assertions"
-        ));
+        this(new JavaParser());
     }
 
-    public JavaProjectScanner(JavaParser javaParser, List<String> defaultImports) {
+    public JavaProjectScanner(JavaParser javaParser) {
         this.javaParser = Objects.requireNonNull(javaParser, "javaParser");
-        this.defaultImports = defaultImports == null ? List.of() : List.copyOf(defaultImports);
     }
 
     public List<TestClassInfo> scan(AgentConfig config) throws IOException {
@@ -79,41 +73,46 @@ public class JavaProjectScanner {
         compilationUnit.findAll(ClassOrInterfaceDeclaration.class).stream()
                 .filter(declaration -> !declaration.isInterface())
                 .filter(declaration -> shouldInclude(declaration, packageName, config))
-                .map(declaration -> createTestClassInfo(moduleRoot, packageName, declaration))
+                .map(declaration -> createTestClassInfo(compilationUnit, moduleRoot, packageName, declaration))
                 .forEach(collector::add);
     }
 
-    private TestClassInfo createTestClassInfo(Path moduleRoot,
+    private TestClassInfo createTestClassInfo(CompilationUnit compilationUnit,
+                                              Path moduleRoot,
                                               String packageName,
                                               ClassOrInterfaceDeclaration declaration) {
         Path targetRoot = moduleRoot.resolve(Path.of("src", "test", "java"));
         Path packagePath = packageName.isBlank()
                 ? targetRoot
                 : targetRoot.resolve(Path.of(packageName.replace('.', '/')));
+        String testClassName = declaration.getNameAsString() + "Test";
+        Path targetFile = packagePath.resolve(testClassName + ".java");
 
         List<TestMethodInfo> methods = declaration.getMethods().stream()
                 .filter(method -> !method.isPrivate())
-                .map(method -> createTestMethodInfo(declaration.getNameAsString(), method))
+                .map(this::createTestMethodInfo)
                 .collect(Collectors.toCollection(ArrayList::new));
 
-        Set<String> imports = new LinkedHashSet<>(defaultImports);
+        List<String> imports = new ArrayList<>(compilationUnit.getImports().stream()
+                .map(importDeclaration -> importDeclaration.toString().trim())
+                .collect(Collectors.toCollection(LinkedHashSet::new)));
 
         return new TestClassInfo(
-                declaration.getNameAsString() + "Test",
-                packagePath,
+                declaration.getNameAsString(),
+                testClassName,
+                targetFile,
                 List.copyOf(imports),
                 List.copyOf(methods)
         );
     }
 
-    private TestMethodInfo createTestMethodInfo(String className, MethodDeclaration methodDeclaration) {
-        String testMethodName = methodDeclaration.getNameAsString() + "Test";
-        String signature = "public void " + testMethodName + "()";
-        String body = """
-                // TODO: implement test scenario for %s#%s
-                throw new UnsupportedOperationException("Not implemented yet");
-                """.formatted(className, methodDeclaration.getNameAsString());
-        return new TestMethodInfo(signature, "void", body);
+    private TestMethodInfo createTestMethodInfo(MethodDeclaration methodDeclaration) {
+        String signature = methodDeclaration.getDeclarationAsString(true, true, true);
+        String returnType = methodDeclaration.getType().asString();
+        String body = methodDeclaration.getBody()
+                .map(Object::toString)
+                .orElse("");
+        return new TestMethodInfo(signature, returnType, body);
     }
 
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,

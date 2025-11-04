@@ -8,15 +8,18 @@ import java.util.Objects;
 
 public class TestClassInfo {
     private final String className;
+    private final String testClassName;
     private final Path targetPath;
     private final List<String> imports;
     private final List<TestMethodInfo> methods;
 
     public TestClassInfo(String className,
+                         String testClassName,
                          Path targetPath,
                          List<String> imports,
                          List<TestMethodInfo> methods) {
         this.className = Objects.requireNonNull(className, "className").trim();
+        this.testClassName = Objects.requireNonNull(testClassName, "testClassName").trim();
         this.targetPath = Objects.requireNonNull(targetPath, "targetPath").toAbsolutePath().normalize();
         this.imports = normaliseImports(imports);
         this.methods = normaliseMethods(methods);
@@ -24,6 +27,10 @@ public class TestClassInfo {
 
     public String getClassName() {
         return className;
+    }
+
+    public String getTestClassName() {
+        return testClassName;
     }
 
     public Path getTargetPath() {
@@ -43,7 +50,7 @@ public class TestClassInfo {
     }
 
     public Path resolveTestFile() {
-        return targetPath.resolve(className + ".java");
+        return targetPath;
     }
 
     private List<String> normaliseImports(List<String> rawImports) {
