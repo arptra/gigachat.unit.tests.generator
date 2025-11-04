@@ -1,14 +1,16 @@
 package com.testagent.entrypoint.pipeline.helpers.analyze;
 
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.config.AnalysisConfig;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.github.javaparser.ParseProblemException;
-import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ast.stmt.BlockStmt;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -28,7 +30,7 @@ public class MethodAnalyzer {
     }
 
     public MethodAnalysisResult analyze(TestMethodInfo methodInfo, AgentConfig config) {
-        AnalysisOptions options = AnalysisOptions.from(config);
+        AnalysisConfig options = config == null ? AnalysisConfig.from(Map.of()) : config.getAnalysisConfig();
         BlockStmt body = parseBody(methodInfo.getBody());
         MethodMetadata metadata = new MethodMetadata(extractMethodName(methodInfo.getSignature()),
                 methodInfo.getSignature(),

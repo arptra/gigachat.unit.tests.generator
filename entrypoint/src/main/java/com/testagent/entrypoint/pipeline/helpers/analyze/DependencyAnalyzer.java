@@ -1,5 +1,6 @@
 package com.testagent.entrypoint.pipeline.helpers.analyze;
 
+import com.gigachat.unit.tests.generator.config.AnalysisConfig;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.Expression;
@@ -25,7 +26,7 @@ public class DependencyAnalyzer {
         this.strategyResolver = strategyResolver;
     }
 
-    public List<DependencyInfo> analyze(BlockStmt body, AnalysisOptions options) {
+    public List<DependencyInfo> analyze(BlockStmt body, AnalysisConfig options) {
         if (body == null) {
             return List.of();
         }
@@ -38,7 +39,7 @@ public class DependencyAnalyzer {
 
     private void handleObjectCreation(ObjectCreationExpr expression,
                                       Map<String, DependencyInfo> dependencies,
-                                      AnalysisOptions options) {
+                                      AnalysisConfig options) {
         String type = expression.getType().asString();
         if (options.isExcluded(type)) {
             return;
@@ -50,7 +51,7 @@ public class DependencyAnalyzer {
 
     private void handleFieldAccess(FieldAccessExpr expression,
                                    Map<String, DependencyInfo> dependencies,
-                                   AnalysisOptions options) {
+                                   AnalysisConfig options) {
         String target = expression.getScope().toString();
         if (options.isExcluded(target)) {
             return;
@@ -61,7 +62,7 @@ public class DependencyAnalyzer {
 
     private void handleMethodCall(MethodCallExpr expression,
                                   Map<String, DependencyInfo> dependencies,
-                                  AnalysisOptions options) {
+                                  AnalysisConfig options) {
         Optional<Expression> scope = expression.getScope();
         if (scope.isEmpty()) {
             return;
@@ -73,7 +74,7 @@ public class DependencyAnalyzer {
                 return;
             }
             MockType mockType = strategyResolver.resolve(expression);
-            if (mockType == MockType.STATIC) {
+            if (mockType == MockType.STATIC && options.includeStatic()) {
                 addDependency(dependencies, new DependencyInfo(identifier, expression.getNameAsString(), mockType, expression.toString()));
             }
         }

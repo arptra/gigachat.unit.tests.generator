@@ -18,6 +18,8 @@ public class AgentConfig {
     private final List<String> targetClasses;
     private final GigaChatClientConfig gigaChat;
     private final Map<String, Object> moduleOptions;
+    private final PromptConfig promptConfig;
+    private final AnalysisConfig analysisConfig;
 
     AgentConfig(AgentMode mode,
                 Path projectPath,
@@ -37,6 +39,8 @@ public class AgentConfig {
         this.targetClasses = sanitise(targetClasses);
         this.gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
         this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
+        this.promptConfig = PromptConfig.from(this.moduleOptions);
+        this.analysisConfig = AnalysisConfig.from(this.moduleOptions);
     }
 
     public AgentMode getMode() {
@@ -77,6 +81,14 @@ public class AgentConfig {
 
     public PipelineModuleConfig getPipelineModuleConfig() {
         return PipelineModuleConfig.from(moduleOptions);
+    }
+
+    public PromptConfig getPromptConfig() {
+        return promptConfig;
+    }
+
+    public AnalysisConfig getAnalysisConfig() {
+        return analysisConfig;
     }
 
     public AgentConfigBuilder toBuilder() {
@@ -120,6 +132,15 @@ public class AgentConfig {
             }
             builder.append("  }\n");
         }
+        builder.append(",\n  \"prompt\": {")
+                .append("\n    \"mode\": \"").append(promptConfig.mode()).append("\",")
+                .append("\n    \"verbosity\": \"").append(promptConfig.verbosity()).append("\"\n  },\n")
+                .append("  \"analysis\": {")
+                .append("\n    \"includeStatic\": ").append(analysisConfig.includeStatic()).append(',')
+                .append("\n    \"includeVerificationPolicy\": ").append(analysisConfig.includeVerificationPolicy()).append(',')
+                .append("\n    \"maxChainDepth\": ").append(analysisConfig.maxChainDepth()).append(',')
+                .append("\n    \"excludePackages\": ").append(renderArray(analysisConfig.excludePackages()))
+                .append("\n  }\n");
         builder.append('}');
         return builder.toString();
     }
@@ -146,6 +167,22 @@ public class AgentConfig {
             builder.append('\n');
             moduleOptions.forEach((key, value) -> builder.append("  ").append(key).append(": ")
                     .append(renderYamlNullable(value))
+                    .append('\n'));
+        }
+        builder.append("prompt:\n");
+        builder.append("  mode: ").append(promptConfig.mode()).append('\n');
+        builder.append("  verbosity: ").append(promptConfig.verbosity()).append('\n');
+        builder.append("analysis:\n");
+        builder.append("  includeStatic: ").append(analysisConfig.includeStatic()).append('\n');
+        builder.append("  includeVerificationPolicy: ").append(analysisConfig.includeVerificationPolicy()).append('\n');
+        builder.append("  maxChainDepth: ").append(analysisConfig.maxChainDepth()).append('\n');
+        builder.append("  excludePackages:");
+        if (analysisConfig.excludePackages().isEmpty()) {
+            builder.append(" []\n");
+        } else {
+            builder.append('\n');
+            analysisConfig.excludePackages().forEach(packageName -> builder.append("    - ")
+                    .append(packageName)
                     .append('\n'));
         }
         return builder.toString();

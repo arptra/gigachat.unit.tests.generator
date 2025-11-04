@@ -7,5 +7,8 @@ public enum MockStrategy {
     NONE,
     MOCKITO,
     SPY,
-    STATIC
+    STATIC,
+    STATIC_SKIP,
+    CHAIN_PARTIAL,
+    LLM_ASSISTED
 }

@@ -101,6 +101,43 @@ public class AgentConfigBuilder {
         return this;
     }
 
+    public AgentConfigBuilder promptMode(PromptMode mode) {
+        if (mode != null) {
+            this.moduleOptions.put("prompt.mode", mode.name());
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder promptVerbosity(PromptVerbosity verbosity) {
+        if (verbosity != null) {
+            this.moduleOptions.put("prompt.verbosity", verbosity.name());
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder analysisIncludeStatic(boolean includeStatic) {
+        this.moduleOptions.put("analysis.includeStatic", includeStatic);
+        return this;
+    }
+
+    public AgentConfigBuilder analysisIncludeVerificationPolicy(boolean include) {
+        this.moduleOptions.put("analysis.includeVerificationPolicy", include);
+        return this;
+    }
+
+    public AgentConfigBuilder analysisMaxChainDepth(int depth) {
+        this.moduleOptions.put("analysis.maxChainDepth", depth);
+        return this;
+    }
+
+    public AgentConfigBuilder analysisExcludePackages(List<String> packages) {
+        if (packages == null) {
+            return this;
+        }
+        this.moduleOptions.put("analysis.excludePackages", new ArrayList<>(packages));
+        return this;
+    }
+
     public AgentConfig build() {
         return new AgentConfig(
                 mode,

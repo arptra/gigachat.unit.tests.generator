@@ -1,5 +1,6 @@
 package com.testagent.entrypoint.pipeline.helpers.analyze;
 
+import com.gigachat.unit.tests.generator.config.AnalysisConfig;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
@@ -22,7 +23,7 @@ public class InvocationAnalyzer {
         this.strategyResolver = strategyResolver;
     }
 
-    public InvocationAnalysis analyze(BlockStmt body, AnalysisOptions options) {
+    public InvocationAnalysis analyze(BlockStmt body, AnalysisConfig options) {
         if (body == null) {
             return InvocationAnalysis.empty();
         }
@@ -34,7 +35,7 @@ public class InvocationAnalyzer {
     }
 
     private void handleMethodCall(MethodCallExpr expression,
-                                  AnalysisOptions options,
+                                  AnalysisConfig options,
                                   List<InvocationInfo> invocations,
                                   Set<String> staticUsages,
                                   Set<String> unresolved) {

@@ -1,6 +1,4 @@
-package com.testagent.entrypoint.pipeline.helpers.analyze;
-
-import com.gigachat.unit.tests.generator.config.AgentConfig;
+package com.gigachat.unit.tests.generator.config;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -10,21 +8,26 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Normalised configuration extracted from {@link AgentConfig} that controls analysis behaviour.
+ * Normalised configuration used by the method analysis pipeline.
  */
-public record AnalysisOptions(boolean includeStatic,
-                              int maxChainDepth,
-                              List<String> excludePackages) {
+public record AnalysisConfig(boolean includeStatic,
+                             boolean includeVerificationPolicy,
+                             int maxChainDepth,
+                             List<String> excludePackages) {
 
     private static final String KEY_INCLUDE_STATIC = "analysis.includeStatic";
+    private static final String KEY_INCLUDE_VERIFICATION = "analysis.includeVerificationPolicy";
     private static final String KEY_MAX_CHAIN_DEPTH = "analysis.maxChainDepth";
     private static final String KEY_EXCLUDE_PACKAGES = "analysis.excludePackages";
 
     private static final List<String> DEFAULT_EXCLUDE = List.of("java.lang", "java.util", "org.slf4j");
 
-    public static AnalysisOptions from(AgentConfig config) {
-        Map<String, Object> options = config == null ? Map.of() : config.getModuleOptions();
+    public static AnalysisConfig from(Map<String, Object> options) {
+        if (options == null || options.isEmpty()) {
+            return defaults();
+        }
         boolean includeStatic = parseBoolean(options.get(KEY_INCLUDE_STATIC), true);
+        boolean includeVerificationPolicy = parseBoolean(options.get(KEY_INCLUDE_VERIFICATION), true);
         int maxChainDepth = parseInt(options.get(KEY_MAX_CHAIN_DEPTH), 3);
         List<String> exclude = new ArrayList<>(DEFAULT_EXCLUDE);
         exclude.addAll(parsePackages(options.get(KEY_EXCLUDE_PACKAGES)));
@@ -33,7 +36,7 @@ public record AnalysisOptions(boolean includeStatic,
                 .map(entry -> entry.trim().replaceAll("\\*$", ""))
                 .distinct()
                 .toList();
-        return new AnalysisOptions(includeStatic, maxChainDepth, normalised);
+        return new AnalysisConfig(includeStatic, includeVerificationPolicy, maxChainDepth, normalised);
     }
 
     public boolean isExcluded(String qualifiedName) {
@@ -104,5 +107,9 @@ public record AnalysisOptions(boolean includeStatic,
             return result;
         }
         return List.of(value);
+    }
+
+    private static AnalysisConfig defaults() {
+        return new AnalysisConfig(true, true, 3, DEFAULT_EXCLUDE);
     }
 }

@@ -113,7 +113,7 @@ public class InitialGenerationStep {
         String skeletonPrompt = skeletonPromptBuilder.build(classInfo, methodInfo);
         Analyze.AnalysisSummary analysisSummary = analyze.analyze(config, classInfo, methodInfo);
         MockPlan plan = analysisSummary.mockPlan();
-        String prompt = promptBuilder.build(skeletonPrompt, plan, moduleConfig, analysisSummary.jsonContext());
+        String prompt = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, plan);
         DiffEngine.MergeResult mergeResult = diffEngine.merge(classInfo, snippet);
         if (!mergeResult.changed()) {
