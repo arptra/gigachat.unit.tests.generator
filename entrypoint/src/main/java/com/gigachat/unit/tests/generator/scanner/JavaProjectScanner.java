@@ -14,22 +14,30 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public final class JavaProjectScanner {
+public class JavaProjectScanner {
+    private final JavaParser javaParser;
+    private final List<String> defaultImports;
 
-    private static final List<String> DEFAULT_IMPORTS = List.of(
-            "org.junit.jupiter.api.Test",
-            "org.junit.jupiter.api.Assertions"
-    );
+    public JavaProjectScanner() {
+        this(new JavaParser(), List.of(
+                "org.junit.jupiter.api.Test",
+                "org.junit.jupiter.api.Assertions"
+        ));
+    }
 
-    private final JavaParser javaParser = new JavaParser();
+    public JavaProjectScanner(JavaParser javaParser, List<String> defaultImports) {
+        this.javaParser = Objects.requireNonNull(javaParser, "javaParser");
+        this.defaultImports = defaultImports == null ? List.of() : List.copyOf(defaultImports);
+    }
 
     public List<TestClassInfo> scan(AgentConfig config) throws IOException {
-        Path projectPath = config.projectPath();
-        List<Path> moduleRoots = determineModuleRoots(projectPath, config.includeModules());
+        Path projectPath = config.getProjectPath();
+        List<Path> moduleRoots = determineModuleRoots(projectPath, config.getIncludeModules());
         List<TestClassInfo> discoveredClasses = new ArrayList<>();
         for (Path moduleRoot : moduleRoots) {
             Path sourceRoot = resolveSourceRoot(moduleRoot);
@@ -39,13 +47,7 @@ public final class JavaProjectScanner {
             try (Stream<Path> files = Files.walk(sourceRoot)) {
                 files.filter(Files::isRegularFile)
                         .filter(path -> path.toString().endsWith(".java"))
-                        .forEach(path -> {
-                            try {
-                                parseJavaFile(path, moduleRoot, config, discoveredClasses);
-                            } catch (IOException ex) {
-                                throw new java.io.UncheckedIOException(ex);
-                            }
-                        });
+                        .forEach(path -> parseJavaFile(path, moduleRoot, config, discoveredClasses));
             } catch (java.io.UncheckedIOException ex) {
                 throw (IOException) ex.getCause();
             }
@@ -56,11 +58,15 @@ public final class JavaProjectScanner {
     private void parseJavaFile(Path javaFile,
                                Path moduleRoot,
                                AgentConfig config,
-                               List<TestClassInfo> collector) throws IOException {
-        javaParser.parse(javaFile).getResult().ifPresentOrElse(
-                compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector),
-                () -> System.err.println("Unable to parse file: " + javaFile)
-        );
+                               List<TestClassInfo> collector) {
+        try {
+            javaParser.parse(javaFile).getResult().ifPresentOrElse(
+                    compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector),
+                    () -> System.err.println("Unable to parse file: " + javaFile)
+            );
+        } catch (IOException ex) {
+            throw new java.io.UncheckedIOException(ex);
+        }
     }
 
     private void handleCompilationUnit(CompilationUnit compilationUnit,
@@ -90,7 +96,7 @@ public final class JavaProjectScanner {
                 .map(method -> createTestMethodInfo(declaration.getNameAsString(), method))
                 .collect(Collectors.toCollection(ArrayList::new));
 
-        Set<String> imports = new LinkedHashSet<>(DEFAULT_IMPORTS);
+        Set<String> imports = new LinkedHashSet<>(defaultImports);
 
         return new TestClassInfo(
                 declaration.getNameAsString() + "Test",
@@ -113,10 +119,10 @@ public final class JavaProjectScanner {
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,
                                   String packageName,
                                   AgentConfig config) {
-        if (config.scanWholeProject()) {
+        if (config.isScanWholeProject()) {
             return true;
         }
-        List<String> includeClasses = config.includeClasses();
+        List<String> includeClasses = config.getIncludeClasses();
         if (includeClasses == null || includeClasses.isEmpty()) {
             return true;
         }

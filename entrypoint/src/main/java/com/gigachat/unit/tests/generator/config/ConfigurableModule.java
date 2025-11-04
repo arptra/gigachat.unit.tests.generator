@@ -4,5 +4,5 @@ public interface ConfigurableModule {
 
     String name();
 
-    void configure(AgentConfig.Builder builder);
+    void configure(AgentConfigBuilder builder);
 }

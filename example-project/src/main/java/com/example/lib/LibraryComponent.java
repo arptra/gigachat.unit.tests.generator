@@ -1,20 +1,38 @@
 package com.example.lib;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class LibraryComponent {
+    private final Map<String, String> configuration = new HashMap<>();
+    private boolean connected;
+
+    public LibraryComponent() {
+        configuration.put("mode", "default");
+    }
 
     public void load() {
-        System.out.println("Library component loaded");
+        configuration.put("loaded", Boolean.TRUE.toString());
     }
 
     public void reload() {
-        System.out.println("Library component reloaded");
+        configuration.put("reloaded", Boolean.TRUE.toString());
     }
 
     public void close() {
-        System.out.println("Library component closed");
+        configuration.put("closed", Boolean.TRUE.toString());
+        connected = false;
     }
 
     public boolean status() {
-        return true;
+        return connected;
+    }
+
+    public void connect() {
+        connected = true;
+    }
+
+    public Map<String, String> configuration() {
+        return Map.copyOf(configuration);
     }
 }

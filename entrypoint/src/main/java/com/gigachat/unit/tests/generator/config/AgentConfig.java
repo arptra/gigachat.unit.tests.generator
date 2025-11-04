@@ -8,57 +8,85 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-public record AgentConfig(
-        Mode mode,
-        Path projectPath,
-        List<String> includeModules,
-        List<String> includeClasses,
-        boolean parallelExecution,
-        boolean scanWholeProject,
-        String targetClass,
-        GigaChatClientConfig gigaChat,
-        Map<String, Object> moduleOptions
-) {
+public class AgentConfig {
+    private final AgentMode mode;
+    private final Path projectPath;
+    private final List<String> includeModules;
+    private final List<String> includeClasses;
+    private final boolean parallelExecution;
+    private final boolean scanWholeProject;
+    private final String targetClass;
+    private final GigaChatClientConfig gigaChat;
+    private final Map<String, Object> moduleOptions;
 
-    public AgentConfig {
-        Objects.requireNonNull(mode, "mode");
-        Objects.requireNonNull(projectPath, "projectPath");
-        includeModules = sanitise(includeModules);
-        includeClasses = sanitise(includeClasses);
-        projectPath = projectPath.toAbsolutePath().normalize();
-        scanWholeProject = scanWholeProject;
-        targetClass = sanitise(targetClass);
-        gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
-        moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
+    AgentConfig(AgentMode mode,
+                Path projectPath,
+                List<String> includeModules,
+                List<String> includeClasses,
+                boolean parallelExecution,
+                boolean scanWholeProject,
+                String targetClass,
+                GigaChatClientConfig gigaChat,
+                Map<String, Object> moduleOptions) {
+        this.mode = Objects.requireNonNull(mode, "mode");
+        this.projectPath = Objects.requireNonNull(projectPath, "projectPath").toAbsolutePath().normalize();
+        this.includeModules = sanitise(includeModules);
+        this.includeClasses = sanitise(includeClasses);
+        this.parallelExecution = parallelExecution;
+        this.scanWholeProject = scanWholeProject;
+        this.targetClass = sanitiseValue(targetClass);
+        this.gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
+        this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
     }
 
-    private static List<String> sanitise(List<String> value) {
-        if (value == null || value.isEmpty()) {
-            return List.of();
-        }
-        return List.copyOf(
-                value.stream()
-                        .filter(Objects::nonNull)
-                        .map(String::trim)
-                        .filter(s -> !s.isEmpty())
-                        .collect(Collectors.toCollection(ArrayList::new))
-        );
+    public AgentMode getMode() {
+        return mode;
     }
 
-    private static String sanitise(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
+    public Path getProjectPath() {
+        return projectPath;
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public List<String> getIncludeModules() {
+        return includeModules;
     }
 
-    public Builder toBuilder() {
-        return new Builder(this);
+    public List<String> getIncludeClasses() {
+        return includeClasses;
+    }
+
+    public boolean isParallelExecution() {
+        return parallelExecution;
+    }
+
+    public boolean isScanWholeProject() {
+        return scanWholeProject;
+    }
+
+    public String getTargetClass() {
+        return targetClass;
+    }
+
+    public GigaChatClientConfig getGigaChat() {
+        return gigaChat;
+    }
+
+    public Map<String, Object> getModuleOptions() {
+        return moduleOptions;
+    }
+
+    public AgentConfigBuilder toBuilder() {
+        AgentConfigBuilder builder = new AgentConfigBuilder();
+        builder.mode(mode);
+        builder.projectPath(projectPath);
+        builder.includeModules(new ArrayList<>(includeModules));
+        builder.includeClasses(new ArrayList<>(includeClasses));
+        builder.parallelExecution(parallelExecution);
+        builder.scanWholeProject(scanWholeProject);
+        builder.targetClass(targetClass);
+        builder.gigaChat(gigaChat);
+        builder.moduleOptions(new LinkedHashMap<>(moduleOptions));
+        return builder;
     }
 
     public String toJson() {
@@ -75,7 +103,9 @@ public record AgentConfig(
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
         builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append("\n  },\n");
         builder.append("  \"moduleOptions\": {");
-        if (!moduleOptions.isEmpty()) {
+        if (moduleOptions.isEmpty()) {
+            builder.append("}\n");
+        } else {
             builder.append('\n');
             int index = 0;
             for (Map.Entry<String, Object> entry : moduleOptions.entrySet()) {
@@ -84,11 +114,9 @@ public record AgentConfig(
                         .append(index + 1 < moduleOptions.size() ? ",\n" : "\n");
                 index++;
             }
-            builder.append("  }");
-        } else {
-            builder.append('}');
+            builder.append("  }\n");
         }
-        builder.append("\n}");
+        builder.append('}');
         return builder.toString();
     }
 
@@ -118,6 +146,25 @@ public record AgentConfig(
         return builder.toString();
     }
 
+    private List<String> sanitise(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return values.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(entry -> !entry.isEmpty())
+                .collect(Collectors.toUnmodifiableList());
+    }
+
+    private String sanitiseValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private String renderArray(List<String> values) {
         if (values.isEmpty()) {
             return "[]";
@@ -133,139 +180,5 @@ public record AgentConfig(
 
     private String renderYamlNullable(Object value) {
         return value == null ? "null" : '"' + value.toString() + '"';
-    }
-
-    public enum Mode {
-        SCAN,
-        TEST,
-        REPAIR,
-        MONITOR;
-
-        public static Mode from(String raw) {
-            if (raw == null || raw.isBlank()) {
-                throw new IllegalArgumentException("Mode is required");
-            }
-            return switch (raw.toLowerCase()) {
-                case "scan" -> SCAN;
-                case "test" -> TEST;
-                case "repair" -> REPAIR;
-                case "monitor" -> MONITOR;
-                default -> throw new IllegalArgumentException("Unknown mode: " + raw);
-            };
-        }
-    }
-
-    public static final class Builder {
-        private Mode mode;
-        private Path projectPath;
-        private final List<String> includeModules = new ArrayList<>();
-        private final List<String> includeClasses = new ArrayList<>();
-        private boolean parallelExecution;
-        private boolean scanWholeProject;
-        private String targetClass;
-        private GigaChatClientConfig gigaChat = new GigaChatClientConfig(null, null);
-        private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
-
-        public Builder() {
-        }
-
-        private Builder(AgentConfig config) {
-            this.mode = config.mode;
-            this.projectPath = config.projectPath;
-            this.includeModules.addAll(config.includeModules);
-            this.includeClasses.addAll(config.includeClasses);
-            this.parallelExecution = config.parallelExecution;
-            this.scanWholeProject = config.scanWholeProject;
-            this.targetClass = config.targetClass;
-            this.gigaChat = config.gigaChat;
-            this.moduleOptions.putAll(config.moduleOptions);
-        }
-
-        public Builder mode(Mode mode) {
-            this.mode = mode;
-            return this;
-        }
-
-        public Builder mode(String mode) {
-            this.mode = Mode.from(mode);
-            return this;
-        }
-
-        public Builder projectPath(Path projectPath) {
-            this.projectPath = projectPath;
-            return this;
-        }
-
-        public Builder includeModules(List<String> modules) {
-            this.includeModules.clear();
-            if (modules != null) {
-                modules.stream().filter(Objects::nonNull).map(String::trim).filter(s -> !s.isEmpty())
-                        .forEach(this.includeModules::add);
-            }
-            return this;
-        }
-
-        public Builder includeClasses(List<String> classes) {
-            this.includeClasses.clear();
-            if (classes != null) {
-                classes.stream().filter(Objects::nonNull).map(String::trim).filter(s -> !s.isEmpty())
-                        .forEach(this.includeClasses::add);
-            }
-            return this;
-        }
-
-        public Builder addModuleOption(String key, Object value) {
-            if (key != null) {
-                moduleOptions.put(key, value);
-            }
-            return this;
-        }
-
-        public Builder parallelExecution(boolean parallelExecution) {
-            this.parallelExecution = parallelExecution;
-            return this;
-        }
-
-        public Builder scanWholeProject(boolean scanWholeProject) {
-            this.scanWholeProject = scanWholeProject;
-            return this;
-        }
-
-        public Builder targetClass(String targetClass) {
-            this.targetClass = targetClass == null ? null : targetClass.trim();
-            return this;
-        }
-
-        public Builder gigaChat(GigaChatClientConfig gigaChat) {
-            if (gigaChat != null) {
-                this.gigaChat = gigaChat;
-            }
-            return this;
-        }
-
-        public Builder apply(ConfigurableModule module) {
-            Objects.requireNonNull(module, "module").configure(this);
-            return this;
-        }
-
-        public AgentConfig build() {
-            if (mode == null) {
-                throw new IllegalStateException("Mode is not specified");
-            }
-            if (projectPath == null) {
-                throw new IllegalStateException("Project path is not specified");
-            }
-            return new AgentConfig(
-                    mode,
-                    projectPath,
-                    List.copyOf(includeModules),
-                    List.copyOf(includeClasses),
-                    parallelExecution,
-                    scanWholeProject,
-                    targetClass == null || targetClass.isBlank() ? null : targetClass,
-                    gigaChat,
-                    Map.copyOf(moduleOptions)
-            );
-        }
     }
 }

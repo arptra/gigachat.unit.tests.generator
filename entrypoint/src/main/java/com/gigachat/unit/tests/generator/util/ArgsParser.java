@@ -1,7 +1,8 @@
 package com.gigachat.unit.tests.generator.util;
 
 import com.gigachat.unit.tests.generator.config.AgentConfig;
-import com.gigachat.unit.tests.generator.config.GigaChatClientConfig;
+import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
+import com.gigachat.unit.tests.generator.config.AgentMode;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -10,13 +11,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
-public final class ArgsParser {
-
-    private ArgsParser() {
-    }
-
-    public static AgentConfig parse(String[] args) {
-        AgentConfig.Builder builder = AgentConfig.builder();
+public class ArgsParser {
+    public AgentConfig parse(String[] args) {
+        AgentConfigBuilder builder = new AgentConfigBuilder();
         String gigaChatToken = null;
         URI gigaChatEndpoint = null;
 
@@ -34,7 +31,7 @@ public final class ArgsParser {
                     }
                     builder.parallelExecution(value);
                 }
-                case "mode" -> builder.mode(readValue(args, ++i, key));
+                case "mode" -> builder.mode(parseMode(readValue(args, ++i, key)));
                 case "path" -> builder.projectPath(Path.of(readValue(args, ++i, key)));
                 case "include-modules" -> builder.includeModules(splitValues(readValue(args, ++i, key)));
                 case "include-classes" -> builder.includeClasses(splitValues(readValue(args, ++i, key)));
@@ -52,7 +49,7 @@ public final class ArgsParser {
             }
         }
 
-        builder.gigaChat(new GigaChatClientConfig(gigaChatToken, gigaChatEndpoint));
+        builder.gigaChat(gigaChatToken, gigaChatEndpoint);
         try {
             return builder.build();
         } catch (IllegalStateException ex) {
@@ -60,11 +57,24 @@ public final class ArgsParser {
         }
     }
 
-    private static boolean hasValue(String[] args, int index) {
+    private AgentMode parseMode(String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Mode is required");
+        }
+        return switch (value.toLowerCase()) {
+            case "scan" -> AgentMode.SCAN;
+            case "test" -> AgentMode.TEST;
+            case "repair" -> AgentMode.REPAIR;
+            case "monitor" -> AgentMode.MONITOR;
+            default -> throw new IllegalArgumentException("Unknown mode: " + value);
+        };
+    }
+
+    private boolean hasValue(String[] args, int index) {
         return index + 1 < args.length && !args[index + 1].startsWith("--");
     }
 
-    private static String readValue(String[] args, int index, String key) {
+    private String readValue(String[] args, int index, String key) {
         if (args == null || index >= args.length) {
             throw new IllegalArgumentException("Missing value for --" + key);
         }
@@ -75,7 +85,7 @@ public final class ArgsParser {
         return value;
     }
 
-    private static List<String> splitValues(String raw) {
+    private List<String> splitValues(String raw) {
         if (raw == null || raw.isBlank()) {
             return List.of();
         }
@@ -85,7 +95,7 @@ public final class ArgsParser {
                 .collect(Collectors.toList());
     }
 
-    private static URI toUri(String value) {
+    private URI toUri(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }

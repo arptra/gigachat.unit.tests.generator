@@ -3,31 +3,34 @@ package com.gigachat.unit.tests.generator;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.pipeline.TestPipeline;
-import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
 import com.gigachat.unit.tests.generator.util.ArgsParser;
 
 import java.io.IOException;
 import java.util.List;
 
-public final class MainAgentEntry {
+public class MainAgentEntry {
+    private final ArgsParser argsParser;
+    private final TestPipeline pipeline;
 
-    private MainAgentEntry() {
+    public MainAgentEntry(ArgsParser argsParser, TestPipeline pipeline) {
+        this.argsParser = argsParser;
+        this.pipeline = pipeline;
     }
 
     public static void main(String[] args) {
+        ArgsParser parser = new ArgsParser();
+        TestPipeline pipeline = new TestPipeline();
+        MainAgentEntry entry = new MainAgentEntry(parser, pipeline);
+        entry.launch(args);
+    }
+
+    public void launch(String[] args) {
         try {
-            AgentConfig config = ArgsParser.parse(args);
+            AgentConfig config = argsParser.parse(args);
             System.out.println("Launching TestRepairAgent with configuration:\n" + config.toYaml());
-
-            JavaProjectScanner scanner = new JavaProjectScanner();
-            List<TestClassInfo> scannedClasses = switch (config.mode()) {
-                case SCAN, TEST, REPAIR -> scanner.scan(config);
-                case MONITOR -> List.of();
-            };
-
-            List<TestClassInfo> pipelineClasses = filterTargetClass(config, scannedClasses);
-            TestPipeline pipeline = new TestPipeline(config, pipelineClasses);
-            pipeline.execute();
+            List<TestClassInfo> classes = pipeline.execute(config);
+            List<TestClassInfo> filtered = filterTargetClass(config, classes);
+            report(filtered);
         } catch (IllegalArgumentException exception) {
             System.err.println("Invalid arguments: " + exception.getMessage());
             System.exit(1);
@@ -37,8 +40,8 @@ public final class MainAgentEntry {
         }
     }
 
-    private static List<TestClassInfo> filterTargetClass(AgentConfig config, List<TestClassInfo> scannedClasses) {
-        String target = config.targetClass();
+    private List<TestClassInfo> filterTargetClass(AgentConfig config, List<TestClassInfo> scannedClasses) {
+        String target = config.getTargetClass();
         if (target == null || target.isBlank()) {
             return scannedClasses;
         }
@@ -50,7 +53,7 @@ public final class MainAgentEntry {
         String expectedTestName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
 
         List<TestClassInfo> filtered = scannedClasses.stream()
-                .filter(info -> matchesTarget(info.className(), expectedTestName))
+                .filter(info -> matchesTarget(info.getClassName(), expectedTestName))
                 .toList();
 
         if (filtered.isEmpty()) {
@@ -60,10 +63,20 @@ public final class MainAgentEntry {
         return filtered;
     }
 
-    private static boolean matchesTarget(String className, String expectedTestName) {
+    private boolean matchesTarget(String className, String expectedTestName) {
         if (className.equals(expectedTestName)) {
             return true;
         }
         return className.equalsIgnoreCase(expectedTestName);
+    }
+
+    private void report(List<TestClassInfo> classes) {
+        System.out.printf("Pipeline discovered %d candidate classes.%n", classes.size());
+        for (TestClassInfo info : classes) {
+            System.out.printf(" - %s -> %s (%d methods)%n",
+                    info.getClassName(),
+                    info.resolveTestFile(),
+                    info.getMethods().size());
+        }
     }
 }
