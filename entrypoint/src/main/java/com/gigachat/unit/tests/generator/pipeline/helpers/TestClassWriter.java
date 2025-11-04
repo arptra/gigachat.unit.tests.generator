@@ -33,6 +33,18 @@ public class TestClassWriter {
     private final PipelineLogger logger;
     private final Map<Path, Object> locks = new ConcurrentHashMap<>();
 
+    private static final List<String> REQUIRED_TEST_DEPENDENCIES = List.of(
+            "implementation 'org.mockito:mockito-core:5.12.0'",
+            "testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'",
+            "testImplementation 'org.junit.jupiter:junit-jupiter-params:5.10.2'",
+            "testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'",
+            "testImplementation 'org.mockito:mockito-core:5.12.0'",
+            "testImplementation 'org.mockito:mockito-junit-jupiter:5.12.0'",
+            "testImplementation platform('org.junit:junit-bom:5.10.2')",
+            "testImplementation 'org.junit.jupiter:junit-jupiter'",
+            "testRuntimeOnly 'org.junit.platform:junit-platform-launcher'",
+            "testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'");
+
     public TestClassWriter(PipelineLogger logger) {
         this.logger = Objects.requireNonNull(logger, "logger");
     }
@@ -45,6 +57,7 @@ public class TestClassWriter {
             }
             try {
                 Files.createDirectories(targetFile.getParent());
+                ensureTestDependencies(targetFile);
                 List<String> lines = new ArrayList<>();
                 String packageName = determinePackage(targetFile);
                 if (!packageName.isBlank()) {
@@ -65,6 +78,145 @@ public class TestClassWriter {
                 throw new IllegalStateException("Failed to create test class at " + targetFile, exception);
             }
         }
+    }
+
+    private void ensureTestDependencies(Path targetFile) {
+        Path buildFile = locateBuildScript(targetFile);
+        if (buildFile == null) {
+            logger.warn("Unable to locate build.gradle for " + targetFile + "; skipping dependency verification.");
+            return;
+        }
+        String content;
+        try {
+            content = Files.readString(buildFile);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to read build script " + buildFile, exception);
+        }
+        List<String> missing = determineMissingDependencies(content);
+        if (missing.isEmpty()) {
+            logger.info("Required test dependencies already present in " + buildFile);
+            return;
+        }
+        try {
+            List<String> lines = Files.readAllLines(buildFile);
+            int dependenciesStart = findDependenciesBlockStart(lines);
+            if (dependenciesStart < 0) {
+                logger.warn("No dependencies block found in " + buildFile + "; unable to append required test dependencies.");
+                return;
+            }
+            int insertIndex = findDependenciesBlockEnd(lines, dependenciesStart);
+            if (insertIndex < 0) {
+                logger.warn("Failed to determine end of dependencies block in " + buildFile + "; skipping dependency insertion.");
+                return;
+            }
+            String indent = determineIndentation(lines, dependenciesStart, insertIndex);
+            List<String> additions = new ArrayList<>();
+            for (String dependency : missing) {
+                additions.add(indent + dependency);
+            }
+            if (insertIndex > dependenciesStart + 1 && !lines.get(insertIndex - 1).isBlank()) {
+                additions.add(0, "");
+            }
+            lines.addAll(insertIndex, additions);
+            String updated = String.join(System.lineSeparator(), lines);
+            Files.writeString(buildFile, updated, StandardCharsets.UTF_8);
+            logger.info("Added missing test dependencies to " + buildFile + ": " + missing);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to update build script " + buildFile, exception);
+        }
+    }
+
+    private Path locateBuildScript(Path targetFile) {
+        Path current = targetFile.toAbsolutePath().getParent();
+        while (current != null) {
+            Path buildGradle = current.resolve("build.gradle");
+            if (Files.exists(buildGradle)) {
+                return buildGradle;
+            }
+            Path buildGradleKts = current.resolve("build.gradle.kts");
+            if (Files.exists(buildGradleKts)) {
+                logger.warn("Detected build.gradle.kts near " + targetFile + "; automatic dependency injection currently supports Groovy DSL only.");
+                return null;
+            }
+            current = current.getParent();
+        }
+        return null;
+    }
+
+    private List<String> determineMissingDependencies(String content) {
+        LinkedHashSet<String> missing = new LinkedHashSet<>();
+        for (String dependency : REQUIRED_TEST_DEPENDENCIES) {
+            if (!containsDependency(content, dependency)) {
+                missing.add(dependency);
+            }
+        }
+        return new ArrayList<>(missing);
+    }
+
+    private boolean containsDependency(String content, String dependency) {
+        String trimmed = dependency.trim();
+        if (trimmed.isEmpty()) {
+            return true;
+        }
+        if (content.contains(trimmed)) {
+            return true;
+        }
+        String alternative = swapQuotes(trimmed);
+        return !alternative.equals(trimmed) && content.contains(alternative);
+    }
+
+    private String swapQuotes(String value) {
+        if (value.indexOf('\'') >= 0) {
+            return value.replace('\'', '"');
+        }
+        if (value.indexOf('"') >= 0) {
+            return value.replace('"', '\'');
+        }
+        return value;
+    }
+
+    private int findDependenciesBlockStart(List<String> lines) {
+        for (int index = 0; index < lines.size(); index++) {
+            String line = lines.get(index).trim();
+            if (line.startsWith("dependencies")) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private int findDependenciesBlockEnd(List<String> lines, int startIndex) {
+        int balance = 0;
+        boolean started = false;
+        for (int index = startIndex; index < lines.size(); index++) {
+            String line = lines.get(index);
+            for (char character : line.toCharArray()) {
+                if (character == '{') {
+                    balance++;
+                    started = true;
+                } else if (character == '}') {
+                    balance--;
+                    if (started && balance == 0) {
+                        return index;
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+    private String determineIndentation(List<String> lines, int startIndex, int endIndex) {
+        for (int index = startIndex + 1; index < endIndex; index++) {
+            String line = lines.get(index);
+            if (!line.isBlank()) {
+                int nonWhitespace = 0;
+                while (nonWhitespace < line.length() && Character.isWhitespace(line.charAt(nonWhitespace))) {
+                    nonWhitespace++;
+                }
+                return line.substring(0, nonWhitespace);
+            }
+        }
+        return "    ";
     }
 
     public String readSource(Path file) {
