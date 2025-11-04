@@ -15,7 +15,7 @@ public class AgentConfig {
     private final List<String> includeClasses;
     private final boolean parallelExecution;
     private final boolean scanWholeProject;
-    private final String targetClass;
+    private final List<String> targetClasses;
     private final GigaChatClientConfig gigaChat;
     private final Map<String, Object> moduleOptions;
 
@@ -25,7 +25,7 @@ public class AgentConfig {
                 List<String> includeClasses,
                 boolean parallelExecution,
                 boolean scanWholeProject,
-                String targetClass,
+                List<String> targetClasses,
                 GigaChatClientConfig gigaChat,
                 Map<String, Object> moduleOptions) {
         this.mode = Objects.requireNonNull(mode, "mode");
@@ -34,7 +34,7 @@ public class AgentConfig {
         this.includeClasses = sanitise(includeClasses);
         this.parallelExecution = parallelExecution;
         this.scanWholeProject = scanWholeProject;
-        this.targetClass = sanitiseValue(targetClass);
+        this.targetClasses = sanitise(targetClasses);
         this.gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
         this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
     }
@@ -63,8 +63,8 @@ public class AgentConfig {
         return scanWholeProject;
     }
 
-    public String getTargetClass() {
-        return targetClass;
+    public List<String> getTargetClasses() {
+        return targetClasses;
     }
 
     public GigaChatClientConfig getGigaChat() {
@@ -83,7 +83,7 @@ public class AgentConfig {
         builder.includeClasses(new ArrayList<>(includeClasses));
         builder.parallelExecution(parallelExecution);
         builder.scanWholeProject(scanWholeProject);
-        builder.targetClass(targetClass);
+        builder.targetClasses(new ArrayList<>(targetClasses));
         builder.gigaChat(gigaChat);
         builder.moduleOptions(new LinkedHashMap<>(moduleOptions));
         return builder;
@@ -98,7 +98,7 @@ public class AgentConfig {
         builder.append("  \"includeClasses\": ").append(renderArray(includeClasses)).append(",\n");
         builder.append("  \"parallelExecution\": ").append(parallelExecution).append(",\n");
         builder.append("  \"scanWholeProject\": ").append(scanWholeProject).append(",\n");
-        builder.append("  \"targetClass\": ").append(renderNullable(targetClass)).append(",\n");
+        builder.append("  \"targetClasses\": ").append(renderArray(targetClasses)).append(",\n");
         builder.append("  \"gigaChat\": {");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
         builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append("\n  },\n");
@@ -130,7 +130,8 @@ public class AgentConfig {
         includeClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
         builder.append("parallelExecution: ").append(parallelExecution).append('\n');
         builder.append("scanWholeProject: ").append(scanWholeProject).append('\n');
-        builder.append("targetClass: ").append(renderYamlNullable(targetClass)).append('\n');
+        builder.append("targetClasses:").append(targetClasses.isEmpty() ? " []\n" : '\n');
+        targetClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
         builder.append("gigaChat:\n");
         builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
         builder.append("  endpoint: ").append(renderYamlNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append('\n');
@@ -155,14 +156,6 @@ public class AgentConfig {
                 .map(String::trim)
                 .filter(entry -> !entry.isEmpty())
                 .collect(Collectors.toUnmodifiableList());
-    }
-
-    private String sanitiseValue(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private String renderArray(List<String> values) {

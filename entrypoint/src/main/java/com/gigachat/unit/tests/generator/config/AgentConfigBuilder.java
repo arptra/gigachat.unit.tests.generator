@@ -14,7 +14,7 @@ public class AgentConfigBuilder {
     private final List<String> includeClasses = new ArrayList<>();
     private boolean parallelExecution;
     private boolean scanWholeProject;
-    private String targetClass;
+    private final List<String> targetClasses = new ArrayList<>();
     private GigaChatClientConfig gigaChat = new GigaChatClientConfig(null, null);
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
 
@@ -59,7 +59,18 @@ public class AgentConfigBuilder {
     }
 
     public AgentConfigBuilder targetClass(String targetClass) {
-        this.targetClass = targetClass;
+        this.targetClasses.clear();
+        if (targetClass != null) {
+            this.targetClasses.add(targetClass);
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder targetClasses(List<String> targetClasses) {
+        this.targetClasses.clear();
+        if (targetClasses != null) {
+            this.targetClasses.addAll(targetClasses);
+        }
         return this;
     }
 
@@ -98,7 +109,7 @@ public class AgentConfigBuilder {
                 includeClasses,
                 parallelExecution,
                 scanWholeProject,
-                targetClass,
+                targetClasses,
                 gigaChat,
                 moduleOptions
         );

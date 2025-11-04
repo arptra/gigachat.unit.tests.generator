@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -106,6 +107,32 @@ class JavaProjectScannerTest {
                 .sorted(Comparator.naturalOrder())
                 .toList();
         assertFalse(orderedClasses.isEmpty());
+    }
+
+    @Test
+    void respectsTargetClassesFilter() throws IOException {
+        Path projectRoot = Path.of("..", "example-project").toAbsolutePath().normalize();
+        assertTrue(Files.exists(projectRoot), "example project directory is missing");
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(projectRoot)
+                .scanWholeProject(true)
+                .targetClasses(List.of(
+                        "com.example.app.service.UserService",
+                        "com.example.lib.LibraryComponent"
+                ))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(2, result.size());
+        Set<String> discovered = result.stream()
+                .map(TestClassInfo::getClassName)
+                .collect(Collectors.toSet());
+        assertTrue(discovered.contains("UserService"));
+        assertTrue(discovered.contains("LibraryComponent"));
     }
 
     private String relativize(Path projectRoot, Path targetPath) {

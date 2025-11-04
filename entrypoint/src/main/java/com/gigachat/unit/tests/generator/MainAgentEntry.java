@@ -40,39 +40,58 @@ public class MainAgentEntry {
     }
 
     private List<TestClassInfo> filterTargetClass(AgentConfig config, List<TestClassInfo> scannedClasses) {
-        String target = config.getTargetClass();
-        if (target == null || target.isBlank()) {
+        List<String> targets = config.getTargetClasses();
+        if (targets == null || targets.isEmpty()) {
             return scannedClasses;
         }
 
-        String trimmed = target.trim();
-        String simpleName = trimmed.contains(".")
-                ? trimmed.substring(trimmed.lastIndexOf('.') + 1)
-                : trimmed;
-        String expectedTestName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
-
         List<TestClassInfo> filtered = scannedClasses.stream()
-                .filter(info -> matchesTarget(info, simpleName, expectedTestName))
+                .filter(info -> matchesTargets(info, targets))
                 .toList();
 
         if (filtered.isEmpty()) {
-            System.out.printf("Target class '%s' was not discovered during scanning.%n", trimmed);
+            System.out.printf("Target classes %s were not discovered during scanning.%n", targets);
         }
 
         return filtered;
     }
 
-    private boolean matchesTarget(TestClassInfo info, String expectedClassName, String expectedTestName) {
-        if (info.getClassName().equals(expectedClassName)) {
-            return true;
+    private boolean matchesTargets(TestClassInfo info, List<String> targets) {
+        for (String target : targets) {
+            if (target == null) {
+                continue;
+            }
+            String candidate = normaliseCandidate(target);
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            String simpleName = candidate.contains(".")
+                    ? candidate.substring(candidate.lastIndexOf('.') + 1)
+                    : candidate;
+            String expectedTestName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
+            if (matchesName(info.getClassName(), simpleName) || matchesName(info.getTestClassName(), expectedTestName)) {
+                return true;
+            }
+            if (matchesName(info.getTestClassName(), candidate)) {
+                return true;
+            }
+            if (matchesName(info.getClassName(), candidate) || matchesName(info.getTestClassName(), candidate)) {
+                return true;
+            }
         }
-        if (info.getClassName().equalsIgnoreCase(expectedClassName)) {
-            return true;
+        return false;
+    }
+
+    private boolean matchesName(String actual, String expected) {
+        return actual.equals(expected) || actual.equalsIgnoreCase(expected);
+    }
+
+    private String normaliseCandidate(String target) {
+        String candidate = target.trim().replace('/', '.');
+        if (candidate.endsWith(".java")) {
+            candidate = candidate.substring(0, candidate.length() - 5);
         }
-        if (info.getTestClassName().equals(expectedTestName)) {
-            return true;
-        }
-        return info.getTestClassName().equalsIgnoreCase(expectedTestName);
+        return candidate;
     }
 
     private void report(List<TestClassInfo> classes) {

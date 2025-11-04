@@ -35,7 +35,7 @@ public class ArgsParser {
                 case "path" -> builder.projectPath(Path.of(readValue(args, ++i, key)));
                 case "include-modules" -> builder.includeModules(splitValues(readValue(args, ++i, key)));
                 case "include-classes" -> builder.includeClasses(splitValues(readValue(args, ++i, key)));
-                case "class" -> builder.targetClass(readValue(args, ++i, key));
+                case "class" -> builder.targetClasses(splitValues(readValue(args, ++i, key)));
                 case "project" -> {
                     boolean value = true;
                     if (hasValue(args, i)) {

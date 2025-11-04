@@ -118,6 +118,10 @@ public class JavaProjectScanner {
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,
                                   String packageName,
                                   AgentConfig config) {
+        List<String> targetClasses = config.getTargetClasses();
+        if (targetClasses != null && !targetClasses.isEmpty()) {
+            return matchesCandidates(targetClasses, packageName, declaration.getNameAsString());
+        }
         if (config.isScanWholeProject()) {
             return true;
         }
@@ -125,13 +129,51 @@ public class JavaProjectScanner {
         if (includeClasses == null || includeClasses.isEmpty()) {
             return true;
         }
-        String simpleName = declaration.getNameAsString();
+        return matchesCandidates(includeClasses, packageName, declaration.getNameAsString());
+    }
+
+    private boolean matchesCandidates(List<String> candidates, String packageName, String simpleName) {
+        if (candidates == null || candidates.isEmpty()) {
+            return false;
+        }
         String qualifiedName = packageName.isBlank() ? simpleName : packageName + '.' + simpleName;
-        return includeClasses.stream()
-                .map(candidate -> candidate.replace('/', '.'))
-                .map(candidate -> candidate.endsWith(".java") ? candidate.substring(0, candidate.length() - 5) : candidate)
-                .anyMatch(candidate -> candidate.equals(simpleName) || candidate.equalsIgnoreCase(simpleName)
-                        || candidate.equals(qualifiedName) || candidate.equalsIgnoreCase(qualifiedName));
+        String testName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
+        String qualifiedTestName = packageName.isBlank() ? testName : packageName + '.' + testName;
+        for (String rawCandidate : candidates) {
+            String candidate = normaliseCandidate(rawCandidate);
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            String candidateSimple = candidate.contains(".")
+                    ? candidate.substring(candidate.lastIndexOf('.') + 1)
+                    : candidate;
+            if (equalsName(candidate, qualifiedName) || equalsName(candidateSimple, simpleName)) {
+                return true;
+            }
+            if (equalsName(candidate, qualifiedTestName) || equalsName(candidateSimple, testName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String normaliseCandidate(String candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        String trimmed = candidate.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        String normalised = trimmed.replace('/', '.');
+        if (normalised.endsWith(".java")) {
+            normalised = normalised.substring(0, normalised.length() - 5);
+        }
+        return normalised;
+    }
+
+    private boolean equalsName(String left, String right) {
+        return left.equals(right) || left.equalsIgnoreCase(right);
     }
 
     private List<Path> determineModuleRoots(Path projectPath, List<String> includeModules) {
