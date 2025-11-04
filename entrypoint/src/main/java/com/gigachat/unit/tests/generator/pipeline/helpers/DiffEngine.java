@@ -23,6 +23,14 @@ public class DiffEngine {
         Objects.requireNonNull(snippet, "snippet");
         Path file = classInfo.getTargetPath();
         String originalSource = writer.readSource(file);
+        if (shouldReplaceWithFullClass(originalSource, snippet)) {
+            String replacement = normaliseLineEndings(snippet.fullClassSource());
+            writer.writeSource(file, replacement);
+            logger.info("Replaced skeleton test class " + file + " with full snippet for " + snippet.methodName());
+            String diff = diff(originalSource, replacement);
+            boolean changed = !Objects.equals(originalSource, replacement);
+            return new MergeResult(changed, originalSource, replacement, snippet.methodBody(), diff);
+        }
         String withStructure = writer.applyClassStructure(originalSource, snippet);
         String withImports = writer.ensureImports(withStructure, snippet.imports());
         String mergedSource = writer.appendMethod(withImports, snippet);
@@ -35,6 +43,12 @@ public class DiffEngine {
         }
         String diff = diff(originalSource, mergedSource);
         return new MergeResult(changed, originalSource, mergedSource, snippet.methodBody(), diff);
+    }
+
+    private boolean shouldReplaceWithFullClass(String originalSource, GeneratedTestSnippet snippet) {
+        return snippet.fullClassSource() != null
+                && !snippet.fullClassSource().isBlank()
+                && writer.isEffectivelyEmptyTestClass(originalSource);
     }
 
     public String diff(String original, String updated) {
@@ -54,6 +68,17 @@ public class DiffEngine {
             }
         }
         return builder.toString();
+    }
+
+    private String normaliseLineEndings(String source) {
+        if (source == null) {
+            return "";
+        }
+        String unix = source.replace("\r\n", "\n").replace('\r', '\n');
+        if ("\n".equals(System.lineSeparator())) {
+            return unix;
+        }
+        return unix.replace("\n", System.lineSeparator());
     }
 
     public record MergeResult(boolean changed,

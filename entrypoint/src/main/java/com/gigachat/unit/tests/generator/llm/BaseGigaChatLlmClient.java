@@ -209,13 +209,15 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
         List<String> classAnnotations = collectClassAnnotations(classDeclaration);
         List<String> fields = collectFieldDeclarations(classDeclaration);
         List<String> helperMethods = collectHelperMethods(classDeclaration, method);
+        String fullSource = normaliseLineEndings(unit.toString());
         return Optional.of(new GeneratedTestSnippet(classInfo.getTestClassName(),
                 copy.getNameAsString(),
                 methodSource,
                 imports,
                 classAnnotations,
                 fields,
-                helperMethods));
+                helperMethods,
+                fullSource));
     }
 
     private List<String> collectClassAnnotations(ClassOrInterfaceDeclaration declaration) {

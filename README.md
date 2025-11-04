@@ -35,6 +35,30 @@ Pass a comma-separated list to `--class` to scan several classes in one run:
 
 The entrypoint filters discovered classes to the provided set and generates DTOs only for those targets.
 
+### Using the Real GigaChat LLM
+
+By default the pipeline relies on a stubbed LLM implementation. Supply credentials to enable the official
+GigaChat client:
+
+* **Token-based authentication**
+
+  ```bash
+  ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --token <your_token>"
+  ```
+
+* **mTLS authentication**
+
+  ```bash
+  ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --cert path/to/cert.pem --rootCert path/to/root.pem --key path/to/key.pem"
+  ```
+
+Optional switches:
+
+* `--ssl` &mdash; enable strict certificate verification when talking to the GigaChat API (defaults to `false`).
+* `--model` &mdash; override the model name (defaults to `GIGA_CHAT_MAX_2`).
+
+When credentials are missing the generator continues to operate with the deterministic stub so pipeline runs remain reproducible.
+
 ## Running Tests
 
 ```bash

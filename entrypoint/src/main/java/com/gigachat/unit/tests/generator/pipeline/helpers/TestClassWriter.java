@@ -89,6 +89,31 @@ public class TestClassWriter {
         }
     }
 
+    public boolean isEffectivelyEmptyTestClass(String source) {
+        if (source == null || source.isBlank()) {
+            return true;
+        }
+        try {
+            CompilationUnit unit = StaticJavaParser.parse(source);
+            ClassOrInterfaceDeclaration declaration = unit.getPrimaryType()
+                    .flatMap(type -> type.toClassOrInterfaceDeclaration())
+                    .orElse(null);
+            if (declaration == null) {
+                return false;
+            }
+            return declaration.getMembers().stream().noneMatch(member ->
+                    member.isFieldDeclaration()
+                            || member.isConstructorDeclaration()
+                            || member.isMethodDeclaration()
+                            || member.isClassOrInterfaceDeclaration()
+                            || member.isEnumDeclaration()
+                            || member.isInitializerDeclaration());
+        } catch (ParseProblemException exception) {
+            logger.warn("Unable to parse test class to determine if it is empty: " + exception.getMessage());
+            return false;
+        }
+    }
+
     public String applyClassStructure(String source, GeneratedTestSnippet snippet) {
         boolean hasAnnotations = snippet.classAnnotations() != null && !snippet.classAnnotations().isEmpty();
         boolean hasFields = snippet.fieldDeclarations() != null && !snippet.fieldDeclarations().isEmpty();
