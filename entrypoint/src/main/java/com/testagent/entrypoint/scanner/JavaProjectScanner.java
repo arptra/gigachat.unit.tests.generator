@@ -41,7 +41,7 @@ public final class JavaProjectScanner {
                         .filter(path -> path.toString().endsWith(".java"))
                         .forEach(path -> {
                             try {
-                                parseJavaFile(path, moduleRoot, config.includeClasses(), discoveredClasses);
+                                parseJavaFile(path, moduleRoot, config, discoveredClasses);
                             } catch (IOException ex) {
                                 throw new java.io.UncheckedIOException(ex);
                             }
@@ -55,24 +55,24 @@ public final class JavaProjectScanner {
 
     private void parseJavaFile(Path javaFile,
                                Path moduleRoot,
-                               List<String> includeClasses,
+                               AgentConfig config,
                                List<TestClassInfo> collector) throws IOException {
         javaParser.parse(javaFile).getResult().ifPresentOrElse(
-                compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, includeClasses, collector),
+                compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector),
                 () -> System.err.println("Unable to parse file: " + javaFile)
         );
     }
 
     private void handleCompilationUnit(CompilationUnit compilationUnit,
                                        Path moduleRoot,
-                                       List<String> includeClasses,
+                                       AgentConfig config,
                                        List<TestClassInfo> collector) {
         String packageName = compilationUnit.getPackageDeclaration()
                 .map(declaration -> declaration.getName().asString())
                 .orElse("");
         compilationUnit.findAll(ClassOrInterfaceDeclaration.class).stream()
                 .filter(declaration -> !declaration.isInterface())
-                .filter(declaration -> shouldInclude(declaration, packageName, includeClasses))
+                .filter(declaration -> shouldInclude(declaration, packageName, config))
                 .map(declaration -> createTestClassInfo(moduleRoot, packageName, declaration))
                 .forEach(collector::add);
     }
@@ -112,7 +112,11 @@ public final class JavaProjectScanner {
 
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,
                                   String packageName,
-                                  List<String> includeClasses) {
+                                  AgentConfig config) {
+        if (config.scanWholeProject()) {
+            return true;
+        }
+        List<String> includeClasses = config.includeClasses();
         if (includeClasses == null || includeClasses.isEmpty()) {
             return true;
         }

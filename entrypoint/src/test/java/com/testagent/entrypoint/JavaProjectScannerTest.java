@@ -7,13 +7,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -61,15 +59,15 @@ class JavaProjectScannerTest {
     }
 
     @Test
-    void scansExampleProject() throws IOException, URISyntaxException {
-        Path projectRoot = Path.of(Objects.requireNonNull(
-                getClass().getClassLoader().getResource("example"),
-                "example project resource is missing"
-        ).toURI());
+    void scansExampleProject() throws IOException {
+        Path projectRoot = Path.of("..", "example-project").toAbsolutePath().normalize();
+        assertTrue(Files.exists(projectRoot), "example project directory is missing");
 
         AgentConfig config = AgentConfig.builder()
                 .mode(AgentConfig.Mode.SCAN)
                 .projectPath(projectRoot)
+                .includeClasses(List.of("com.example.DoesNotExist"))
+                .scanWholeProject(true)
                 .build();
 
         JavaProjectScanner scanner = new JavaProjectScanner();

@@ -38,6 +38,14 @@ public final class ArgsParser {
                 case "path" -> builder.projectPath(Path.of(readValue(args, ++i, key)));
                 case "include-modules" -> builder.includeModules(splitValues(readValue(args, ++i, key)));
                 case "include-classes" -> builder.includeClasses(splitValues(readValue(args, ++i, key)));
+                case "class" -> builder.targetClass(readValue(args, ++i, key));
+                case "project" -> {
+                    boolean value = true;
+                    if (hasValue(args, i)) {
+                        value = Boolean.parseBoolean(args[++i]);
+                    }
+                    builder.scanWholeProject(value);
+                }
                 case "gigachat-token" -> gigaChatToken = readValue(args, ++i, key);
                 case "gigachat-endpoint" -> gigaChatEndpoint = toUri(readValue(args, ++i, key));
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);

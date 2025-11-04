@@ -14,6 +14,8 @@ public record AgentConfig(
         List<String> includeModules,
         List<String> includeClasses,
         boolean parallelExecution,
+        boolean scanWholeProject,
+        String targetClass,
         GigaChatClientConfig gigaChat,
         Map<String, Object> moduleOptions
 ) {
@@ -24,6 +26,8 @@ public record AgentConfig(
         includeModules = sanitise(includeModules);
         includeClasses = sanitise(includeClasses);
         projectPath = projectPath.toAbsolutePath().normalize();
+        scanWholeProject = scanWholeProject;
+        targetClass = sanitise(targetClass);
         gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
         moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
     }
@@ -39,6 +43,14 @@ public record AgentConfig(
                         .filter(s -> !s.isEmpty())
                         .collect(Collectors.toCollection(ArrayList::new))
         );
+    }
+
+    private static String sanitise(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     public static Builder builder() {
@@ -57,6 +69,8 @@ public record AgentConfig(
         builder.append("  \"includeModules\": ").append(renderArray(includeModules)).append(",\n");
         builder.append("  \"includeClasses\": ").append(renderArray(includeClasses)).append(",\n");
         builder.append("  \"parallelExecution\": ").append(parallelExecution).append(",\n");
+        builder.append("  \"scanWholeProject\": ").append(scanWholeProject).append(",\n");
+        builder.append("  \"targetClass\": ").append(renderNullable(targetClass)).append(",\n");
         builder.append("  \"gigaChat\": {");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
         builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append("\n  },\n");
@@ -87,6 +101,8 @@ public record AgentConfig(
         builder.append("includeClasses:").append(includeClasses.isEmpty() ? " []\n" : '\n');
         includeClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
         builder.append("parallelExecution: ").append(parallelExecution).append('\n');
+        builder.append("scanWholeProject: ").append(scanWholeProject).append('\n');
+        builder.append("targetClass: ").append(renderYamlNullable(targetClass)).append('\n');
         builder.append("gigaChat:\n");
         builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
         builder.append("  endpoint: ").append(renderYamlNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append('\n');
@@ -145,6 +161,8 @@ public record AgentConfig(
         private final List<String> includeModules = new ArrayList<>();
         private final List<String> includeClasses = new ArrayList<>();
         private boolean parallelExecution;
+        private boolean scanWholeProject;
+        private String targetClass;
         private GigaChatClientConfig gigaChat = new GigaChatClientConfig(null, null);
         private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
 
@@ -157,6 +175,8 @@ public record AgentConfig(
             this.includeModules.addAll(config.includeModules);
             this.includeClasses.addAll(config.includeClasses);
             this.parallelExecution = config.parallelExecution;
+            this.scanWholeProject = config.scanWholeProject;
+            this.targetClass = config.targetClass;
             this.gigaChat = config.gigaChat;
             this.moduleOptions.putAll(config.moduleOptions);
         }
@@ -206,6 +226,16 @@ public record AgentConfig(
             return this;
         }
 
+        public Builder scanWholeProject(boolean scanWholeProject) {
+            this.scanWholeProject = scanWholeProject;
+            return this;
+        }
+
+        public Builder targetClass(String targetClass) {
+            this.targetClass = targetClass == null ? null : targetClass.trim();
+            return this;
+        }
+
         public Builder gigaChat(GigaChatClientConfig gigaChat) {
             if (gigaChat != null) {
                 this.gigaChat = gigaChat;
@@ -231,6 +261,8 @@ public record AgentConfig(
                     List.copyOf(includeModules),
                     List.copyOf(includeClasses),
                     parallelExecution,
+                    scanWholeProject,
+                    targetClass == null || targetClass.isBlank() ? null : targetClass,
                     gigaChat,
                     Map.copyOf(moduleOptions)
             );
