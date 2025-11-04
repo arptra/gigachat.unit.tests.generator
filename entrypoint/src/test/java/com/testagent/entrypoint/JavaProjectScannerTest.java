@@ -7,12 +7,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JavaProjectScannerTest {
@@ -52,5 +58,65 @@ class JavaProjectScannerTest {
         assertTrue(info.imports().contains("org.junit.jupiter.api.Test"));
         assertFalse(info.methods().isEmpty());
         assertEquals("public void findAllTest()", info.methods().getFirst().signature());
+    }
+
+    @Test
+    void scansExampleProject() throws IOException, URISyntaxException {
+        Path projectRoot = Path.of(Objects.requireNonNull(
+                getClass().getClassLoader().getResource("example"),
+                "example project resource is missing"
+        ).toURI());
+
+        AgentConfig config = AgentConfig.builder()
+                .mode(AgentConfig.Mode.SCAN)
+                .projectPath(projectRoot)
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(6, result.size());
+        result.forEach(info -> assertTrue(info.imports().contains("org.junit.jupiter.api.Test")));
+
+        Map<String, TestClassInfo> index = result.stream()
+                .collect(Collectors.toMap(TestClassInfo::className, info -> info));
+
+        TestClassInfo application = index.get("ApplicationTest");
+        assertNotNull(application, "Expected ApplicationTest info");
+        assertEquals(Path.of("src", "test", "java", "com", "example", "app").toString(),
+                relativize(projectRoot, application.targetPath()));
+
+        TestClassInfo library = index.get("LibraryComponentTest");
+        assertNotNull(library, "Expected LibraryComponentTest info");
+        assertEquals(Path.of("src", "test", "java", "com", "example", "lib").toString(),
+                relativize(projectRoot, library.targetPath()));
+
+        Map<String, Integer> expectedMethodCounts = Map.of(
+                "ApplicationTest", 3,
+                "UserServiceTest", 3,
+                "AuditTrailServiceTest", 3,
+                "HiddenFeatureTest", 2,
+                "MathUtilTest", 2,
+                "LibraryComponentTest", 4
+        );
+
+        expectedMethodCounts.forEach((className, methodCount) -> {
+            TestClassInfo info = index.get(className);
+            assertNotNull(info, "Expected class not found: " + className);
+            assertEquals(methodCount, info.methods().size(), "Method count mismatch for " + className);
+        });
+
+        List<String> expectedClassNames = expectedMethodCounts.keySet().stream()
+                .sorted(Comparator.naturalOrder())
+                .toList();
+        List<String> orderedClasses = result.stream()
+                .map(TestClassInfo::className)
+                .sorted(Comparator.naturalOrder())
+                .toList();
+        assertEquals(expectedClassNames, orderedClasses);
+    }
+
+    private String relativize(Path projectRoot, Path targetPath) {
+        return projectRoot.relativize(targetPath).toString();
     }
 }
