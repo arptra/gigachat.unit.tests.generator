@@ -75,6 +75,10 @@ public class AgentConfig {
         return moduleOptions;
     }
 
+    public PipelineModuleConfig getPipelineModuleConfig() {
+        return PipelineModuleConfig.from(moduleOptions);
+    }
+
     public AgentConfigBuilder toBuilder() {
         AgentConfigBuilder builder = new AgentConfigBuilder();
         builder.mode(mode);
