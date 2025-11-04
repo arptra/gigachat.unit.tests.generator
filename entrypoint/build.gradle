@@ -13,6 +13,10 @@ application {
     mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
 }
 
+tasks.named('run').configure {
+    workingDir = project.rootProject.projectDir
+}
+
 java {
     withJavadocJar()
     withSourcesJar()
@@ -20,4 +24,12 @@ java {
 
 tasks.withType(Javadoc).configureEach {
     options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+tasks.register('MainAgentEntry.main', JavaExec) {
+    group = 'application'
+    description = 'Runs com.gigachat.unit.tests.generator.MainAgentEntry directly.'
+    mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
+    classpath = sourceSets.main.runtimeClasspath
+    workingDir = project.rootProject.projectDir
 }
