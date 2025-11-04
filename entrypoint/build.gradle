@@ -1,8 +1,16 @@
+import org.gradle.api.Project
+import org.gradle.api.plugins.JavaPluginExtension
+
+def legacyJavaConvention(Project project) {
+    new LegacyJavaPluginConvention(project)
+}
+
 plugins {
     id 'application'
 }
 
 ext.convention = new LegacyConventionAdapter(project)
+ext.JavaPluginConvention = legacyJavaConvention(project)
 
 dependencies {
     implementation libs.javaparser
@@ -37,7 +45,7 @@ tasks.register('MainAgentEntry.main', JavaExec) {
 }
 
 class LegacyConventionAdapter {
-    private final Project project
+    private Project project
 
     LegacyConventionAdapter(Project project) {
         this.project = project
@@ -57,5 +65,26 @@ class LegacyConventionAdapter {
 
     def propertyMissing(String name) {
         project.extensions.findByName(name)
+    }
+}
+
+class LegacyJavaPluginConvention {
+    private JavaPluginExtension javaExtension
+
+    LegacyJavaPluginConvention(Project project) {
+        this.javaExtension = project.extensions.getByType(JavaPluginExtension)
+    }
+
+    def getSourceSets() {
+        javaExtension.sourceSets
+    }
+
+    def propertyMissing(String name) {
+        if (javaExtension.metaClass.hasProperty(javaExtension, name)) {
+            javaExtension."$name"
+        } else {
+            def getter = javaExtension.metaClass.getMetaMethod("get${name.capitalize()}")
+            getter ? getter.invoke(javaExtension) : null
+        }
     }
 }
