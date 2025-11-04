@@ -53,7 +53,7 @@ public class TestPipeline {
         PipelineLogger logger = new PipelineLogger(projectRoot);
         TestClassWriter testClassWriter = new TestClassWriter(logger);
         SkeletonPromptBuilder skeletonPromptBuilder = new SkeletonPromptBuilder();
-        Analyze analyze = new Analyze();
+        Analyze analyze = new Analyze(logger);
         PromptBuilder promptBuilder = new PromptBuilder();
         LlmClient llmClient = new LlmClientStub();
         DiffEngine diffEngine = new DiffEngine(testClassWriter, logger);

@@ -13,12 +13,16 @@ public class PromptBuilder {
 
     public String build(String skeletonPrompt,
                         MockPlan plan,
-                        PipelineModuleConfig config) {
+                        PipelineModuleConfig config,
+                        String analysisJson) {
         String planSection = buildPlanSection(plan);
         String configSection = buildConfigSection(config);
+        String analysisSection = normaliseJsonBlock(analysisJson);
+        String skeletonSection = normaliseJsonBlock(skeletonPrompt);
         return "{\n"
-                + "  \"skeleton\": " + skeletonPrompt.replace("\n", "\n  ") + ",\n"
-                + "  \"analysis\": " + planSection + ",\n"
+                + "  \"skeleton\": " + skeletonSection + ",\n"
+                + "  \"analysis\": " + analysisSection + ",\n"
+                + "  \"mockPlan\": " + planSection + ",\n"
                 + "  \"configuration\": " + configSection + "\n"
                 + "}";
     }
@@ -39,6 +43,13 @@ public class PromptBuilder {
         }
         return "{\"type\": \"" + escape(target.qualifiedType()) + "\", "
                 + "\"identifier\": \"" + escape(target.identifier()) + "\"}";
+    }
+
+    private String normaliseJsonBlock(String json) {
+        if (json == null || json.isBlank()) {
+            return "{}";
+        }
+        return json.replace("\n", "\n  ");
     }
 
     private String buildConfigSection(PipelineModuleConfig config) {
