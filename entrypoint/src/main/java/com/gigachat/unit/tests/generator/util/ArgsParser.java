@@ -7,6 +7,7 @@ import com.gigachat.unit.tests.generator.config.AgentMode;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -16,6 +17,12 @@ public class ArgsParser {
         AgentConfigBuilder builder = new AgentConfigBuilder();
         String gigaChatToken = null;
         URI gigaChatEndpoint = null;
+        URI gigaAuthUrl = null;
+        Path certificatePath = null;
+        Path rootCertificatePath = null;
+        Path privateKeyPath = null;
+        boolean verifySslCerts = false;
+        String modelName = null;
 
         for (int i = 0; i < (args == null ? 0 : args.length); i++) {
             String argument = args[i];
@@ -43,17 +50,53 @@ public class ArgsParser {
                     }
                     builder.scanWholeProject(value);
                 }
-                case "gigachat-token" -> gigaChatToken = readValue(args, ++i, key);
-                case "gigachat-endpoint" -> gigaChatEndpoint = toUri(readValue(args, ++i, key));
+                case "gigachat-token", "token" -> gigaChatToken = readValue(args, ++i, key);
+                case "gigachat-endpoint", "endpoint" -> gigaChatEndpoint = toUri(readValue(args, ++i, key));
+                case "auth-url" -> gigaAuthUrl = toUri(readValue(args, ++i, key));
+                case "cert" -> certificatePath = toPath(readValue(args, ++i, key));
+                case "rootCert" -> rootCertificatePath = toPath(readValue(args, ++i, key));
+                case "key" -> privateKeyPath = toPath(readValue(args, ++i, key));
+                case "ssl" -> {
+                    boolean value = true;
+                    if (hasValue(args, i)) {
+                        value = Boolean.parseBoolean(args[++i]);
+                    }
+                    verifySslCerts = value;
+                }
+                case "model" -> modelName = readValue(args, ++i, key);
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);
             }
         }
 
-        builder.gigaChat(gigaChatToken, gigaChatEndpoint);
+        validateGigachatOptions(gigaChatToken, certificatePath, rootCertificatePath, privateKeyPath);
+        builder.gigaChat(gigaChatToken,
+                gigaChatEndpoint,
+                gigaAuthUrl,
+                certificatePath,
+                rootCertificatePath,
+                privateKeyPath,
+                verifySslCerts,
+                modelName);
         try {
             return builder.build();
         } catch (IllegalStateException ex) {
             throw new IllegalArgumentException(ex.getMessage(), ex);
+        }
+    }
+
+    private void validateGigachatOptions(String token,
+                                         Path certificate,
+                                         Path rootCertificate,
+                                         Path privateKey) {
+        boolean hasToken = token != null && !token.isBlank();
+        boolean hasAnyCertificate = certificate != null || rootCertificate != null || privateKey != null;
+        if (hasToken && hasAnyCertificate) {
+            throw new IllegalArgumentException("Specify either --token or the certificate options, not both.");
+        }
+        if (!hasToken && hasAnyCertificate) {
+            if (certificate == null || rootCertificate == null || privateKey == null) {
+                throw new IllegalArgumentException("Certificate authentication requires --cert, --rootCert and --key options.");
+            }
         }
     }
 
@@ -103,6 +146,17 @@ public class ArgsParser {
             return new URI(value);
         } catch (URISyntaxException ex) {
             throw new IllegalArgumentException("Invalid URI for --gigachat-endpoint: " + value, ex);
+        }
+    }
+
+    private Path toPath(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Paths.get(value).toAbsolutePath().normalize();
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException("Invalid path: " + value, ex);
         }
     }
 }

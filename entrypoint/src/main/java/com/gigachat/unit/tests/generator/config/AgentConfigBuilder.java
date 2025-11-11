@@ -15,8 +15,10 @@ public class AgentConfigBuilder {
     private boolean parallelExecution;
     private boolean scanWholeProject;
     private final List<String> targetClasses = new ArrayList<>();
-    private GigaChatClientConfig gigaChat = new GigaChatClientConfig(null, null);
+    private GigaChatClientConfig gigaChat = GigaChatClientConfig.empty();
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
+    private boolean verifySslCerts;
+    private String modelName;
 
     public AgentConfigBuilder mode(AgentMode mode) {
         if (mode != null) {
@@ -77,12 +79,33 @@ public class AgentConfigBuilder {
     public AgentConfigBuilder gigaChat(GigaChatClientConfig config) {
         if (config != null) {
             this.gigaChat = config;
+            this.verifySslCerts = config.verifySslCerts();
+            this.modelName = config.modelNameOptional().orElse(null);
         }
         return this;
     }
 
-    public AgentConfigBuilder gigaChat(String token, URI endpoint) {
-        this.gigaChat = new GigaChatClientConfig(token, endpoint);
+    public AgentConfigBuilder gigaChat(String token, URI endpoint,URI authUrl, Path certificate, Path rootCertificate, Path privateKey) {
+        return gigaChat(token, endpoint, authUrl, certificate, rootCertificate, privateKey, this.verifySslCerts, this.modelName);
+    }
+
+    public AgentConfigBuilder gigaChat(String token,
+                                       URI endpoint,
+                                       URI authUrl,
+                                       Path certificate,
+                                       Path rootCertificate,
+                                       Path privateKey,
+                                       boolean verifySslCerts,
+                                       String modelName) {
+        this.verifySslCerts = verifySslCerts;
+        this.modelName = modelName;
+        this.gigaChat = new GigaChatClientConfig(token,
+                endpoint,
+                authUrl,
+                certificate,
+                rootCertificate,
+                privateKey,
+                verifySslCerts, modelName);
         return this;
     }
 
@@ -98,6 +121,62 @@ public class AgentConfigBuilder {
         if (options != null) {
             this.moduleOptions.putAll(options);
         }
+        return this;
+    }
+
+    public AgentConfigBuilder promptMode(PromptMode mode) {
+        if (mode != null) {
+            this.moduleOptions.put("prompt.mode", mode.name());
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder promptVerbosity(PromptVerbosity verbosity) {
+        if (verbosity != null) {
+            this.moduleOptions.put("prompt.verbosity", verbosity.name());
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder promptIncludeInstructionHeader(boolean includeHeader) {
+        this.moduleOptions.put("prompt.includeInstructionHeader", includeHeader);
+        return this;
+    }
+
+    public AgentConfigBuilder promptInstructionTemplate(String template) {
+        if (template != null) {
+            this.moduleOptions.put("prompt.instructionTemplate", template);
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder promptResponseFormat(String responseFormat) {
+        if (responseFormat != null) {
+            this.moduleOptions.put("prompt.responseFormat", responseFormat);
+        }
+        return this;
+    }
+
+    public AgentConfigBuilder analysisIncludeStatic(boolean includeStatic) {
+        this.moduleOptions.put("analysis.includeStatic", includeStatic);
+        return this;
+    }
+
+    public AgentConfigBuilder analysisIncludeVerificationPolicy(boolean include) {
+        this.moduleOptions.put("analysis.includeVerificationPolicy", include);
+        return this;
+    }
+
+    public AgentConfigBuilder analysisMaxChainDepth(int depth) {
+        this.moduleOptions.put("analysis.maxChainDepth", depth);
+        return this;
+    }
+
+    public AgentConfigBuilder analysisExcludePackages(List<String> packages) {
+        if (packages == null) {
+            return this;
+        }
+        this.moduleOptions.put("analysis.excludePackages", new ArrayList<>(packages));
         return this;
     }
 

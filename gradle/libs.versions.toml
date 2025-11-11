@@ -3,9 +3,13 @@ guava = "33.4.6-jre"
 junit = "5.11.3"
 javaparser = "3.25.3"
 junitPlatformLauncher = "1.11.3"
+orgjson = "20240303"
+gigachat = "0.1.10"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 junit = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junitPlatformLauncher" }
 javaparser = { module = "com.github.javaparser:javaparser-core", version.ref = "javaparser" }
+json = { module = "org.json:json", version.ref = "orgjson" }
+gigachat = { module = "chat.giga:gigachat-java", version.ref = "gigachat" }

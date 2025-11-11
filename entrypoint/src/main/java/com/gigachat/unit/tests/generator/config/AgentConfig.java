@@ -18,6 +18,8 @@ public class AgentConfig {
     private final List<String> targetClasses;
     private final GigaChatClientConfig gigaChat;
     private final Map<String, Object> moduleOptions;
+    private final PromptConfig promptConfig;
+    private final AnalysisConfig analysisConfig;
 
     AgentConfig(AgentMode mode,
                 Path projectPath,
@@ -35,8 +37,10 @@ public class AgentConfig {
         this.parallelExecution = parallelExecution;
         this.scanWholeProject = scanWholeProject;
         this.targetClasses = sanitise(targetClasses);
-        this.gigaChat = gigaChat == null ? new GigaChatClientConfig(null, null) : gigaChat;
+        this.gigaChat = gigaChat == null ? GigaChatClientConfig.empty() : gigaChat;
         this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
+        this.promptConfig = PromptConfig.from(this.moduleOptions);
+        this.analysisConfig = AnalysisConfig.from(this.moduleOptions);
     }
 
     public AgentMode getMode() {
@@ -75,6 +79,18 @@ public class AgentConfig {
         return moduleOptions;
     }
 
+    public PipelineModuleConfig getPipelineModuleConfig() {
+        return PipelineModuleConfig.from(moduleOptions);
+    }
+
+    public PromptConfig getPromptConfig() {
+        return promptConfig;
+    }
+
+    public AnalysisConfig getAnalysisConfig() {
+        return analysisConfig;
+    }
+
     public AgentConfigBuilder toBuilder() {
         AgentConfigBuilder builder = new AgentConfigBuilder();
         builder.mode(mode);
@@ -100,8 +116,14 @@ public class AgentConfig {
         builder.append("  \"scanWholeProject\": ").append(scanWholeProject).append(",\n");
         builder.append("  \"targetClasses\": ").append(renderArray(targetClasses)).append(",\n");
         builder.append("  \"gigaChat\": {");
+        builder.append("\n    \"authMode\": \"").append(gigaChat.authMode()).append("\",");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
-        builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append("\n  },\n");
+        builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"certificate\": ").append(renderNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"rootCertificate\": ").append(renderNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"privateKey\": ").append(renderNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"verifySslCerts\": ").append(gigaChat.verifySslCerts()).append(",");
+        builder.append("\n    \"model\": ").append(renderNullable(gigaChat.modelNameOptional().orElse(null))).append("\n  },\n");
         builder.append("  \"moduleOptions\": {");
         if (moduleOptions.isEmpty()) {
             builder.append("}\n");
@@ -116,6 +138,18 @@ public class AgentConfig {
             }
             builder.append("  }\n");
         }
+        builder.append(",\n  \"prompt\": {")
+                .append("\n    \"mode\": \"").append(promptConfig.mode()).append("\",")
+                .append("\n    \"verbosity\": \"").append(promptConfig.verbosity()).append("\",")
+                .append("\n    \"includeInstructionHeader\": ").append(promptConfig.includeInstructionHeader()).append(',')
+                .append("\n    \"instructionTemplate\": ").append(renderNullable(promptConfig.instructionTemplate())).append(',')
+                .append("\n    \"responseFormat\": ").append(renderNullable(promptConfig.responseFormat())).append("\n  },\n")
+                .append("  \"analysis\": {")
+                .append("\n    \"includeStatic\": ").append(analysisConfig.includeStatic()).append(',')
+                .append("\n    \"includeVerificationPolicy\": ").append(analysisConfig.includeVerificationPolicy()).append(',')
+                .append("\n    \"maxChainDepth\": ").append(analysisConfig.maxChainDepth()).append(',')
+                .append("\n    \"excludePackages\": ").append(renderArray(analysisConfig.excludePackages()))
+                .append("\n  }\n");
         builder.append('}');
         return builder.toString();
     }
@@ -133,8 +167,14 @@ public class AgentConfig {
         builder.append("targetClasses:").append(targetClasses.isEmpty() ? " []\n" : '\n');
         targetClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
         builder.append("gigaChat:\n");
+        builder.append("  authMode: ").append(gigaChat.authMode()).append('\n');
         builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
         builder.append("  endpoint: ").append(renderYamlNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  certificate: ").append(renderYamlNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  rootCertificate: ").append(renderYamlNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  privateKey: ").append(renderYamlNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  verifySslCerts: ").append(gigaChat.verifySslCerts()).append('\n');
+        builder.append("  model: ").append(renderYamlNullable(gigaChat.modelNameOptional().orElse(null))).append('\n');
         builder.append("moduleOptions:");
         if (moduleOptions.isEmpty()) {
             builder.append(" {}\n");
@@ -142,6 +182,25 @@ public class AgentConfig {
             builder.append('\n');
             moduleOptions.forEach((key, value) -> builder.append("  ").append(key).append(": ")
                     .append(renderYamlNullable(value))
+                    .append('\n'));
+        }
+        builder.append("prompt:\n");
+        builder.append("  mode: ").append(promptConfig.mode()).append('\n');
+        builder.append("  verbosity: ").append(promptConfig.verbosity()).append('\n');
+        builder.append("  includeInstructionHeader: ").append(promptConfig.includeInstructionHeader()).append('\n');
+        builder.append("  instructionTemplate: ").append(renderYamlNullable(promptConfig.instructionTemplate())).append('\n');
+        builder.append("  responseFormat: ").append(renderYamlNullable(promptConfig.responseFormat())).append('\n');
+        builder.append("analysis:\n");
+        builder.append("  includeStatic: ").append(analysisConfig.includeStatic()).append('\n');
+        builder.append("  includeVerificationPolicy: ").append(analysisConfig.includeVerificationPolicy()).append('\n');
+        builder.append("  maxChainDepth: ").append(analysisConfig.maxChainDepth()).append('\n');
+        builder.append("  excludePackages:");
+        if (analysisConfig.excludePackages().isEmpty()) {
+            builder.append(" []\n");
+        } else {
+            builder.append('\n');
+            analysisConfig.excludePackages().forEach(packageName -> builder.append("    - ")
+                    .append(packageName)
                     .append('\n'));
         }
         return builder.toString();
