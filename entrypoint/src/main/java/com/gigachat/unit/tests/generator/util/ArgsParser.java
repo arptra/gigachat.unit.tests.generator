@@ -17,6 +17,7 @@ public class ArgsParser {
         AgentConfigBuilder builder = new AgentConfigBuilder();
         String gigaChatToken = null;
         URI gigaChatEndpoint = null;
+        URI gigaAuthUrl = null;
         Path certificatePath = null;
         Path rootCertificatePath = null;
         Path privateKeyPath = null;
@@ -51,6 +52,7 @@ public class ArgsParser {
                 }
                 case "gigachat-token", "token" -> gigaChatToken = readValue(args, ++i, key);
                 case "gigachat-endpoint", "endpoint" -> gigaChatEndpoint = toUri(readValue(args, ++i, key));
+                case "auth-url" -> gigaAuthUrl = toUri(readValue(args, ++i, key));
                 case "cert" -> certificatePath = toPath(readValue(args, ++i, key));
                 case "rootCert" -> rootCertificatePath = toPath(readValue(args, ++i, key));
                 case "key" -> privateKeyPath = toPath(readValue(args, ++i, key));
@@ -69,6 +71,7 @@ public class ArgsParser {
         validateGigachatOptions(gigaChatToken, certificatePath, rootCertificatePath, privateKeyPath);
         builder.gigaChat(gigaChatToken,
                 gigaChatEndpoint,
+                gigaAuthUrl,
                 certificatePath,
                 rootCertificatePath,
                 privateKeyPath,

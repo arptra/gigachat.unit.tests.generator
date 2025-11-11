@@ -28,22 +28,27 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Shared infrastructure for LLM clients that delegate to the official GigaChat SDK.
  */
 abstract class BaseGigaChatLlmClient implements LlmClient {
     private static final String SYSTEM_PROMPT = "You are an AI agent that generates Java JUnit 5 unit tests using Mockito.";
+    static final String DEFAULT_API_URL = "https://gigachat.devices.sberbank.ru/api/v1";
 
     private final PipelineLogger logger;
     private final GigaChatClientConfig config;
     private final LlmClient fallback;
     private volatile GigaChatClient client;
+    private final Supplier<String> sessionSupplier;
+
 
     protected BaseGigaChatLlmClient(GigaChatClientConfig config, PipelineLogger logger) {
         this.config = Objects.requireNonNull(config, "config");
         this.logger = Objects.requireNonNull(logger, "logger");
         this.fallback = new LlmClientStub();
+        this.sessionSupplier = Objects.requireNonNull(() -> null, "sessionSupplier");
     }
 
     protected abstract GigaChatClient createClient() throws Exception;
@@ -83,15 +88,16 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
             CompletionRequest request = CompletionRequest.builder()
                     .model(resolveModel())
                     .message(ChatMessage.builder()
-                            .role(ChatMessageRole.SYSTEM)
-                            .content(SYSTEM_PROMPT)
-                            .build())
-                    .message(ChatMessage.builder()
                             .role(ChatMessageRole.USER)
                             .content(prompt)
                             .build())
                     .build();
-            CompletionResponse response = delegate.completions(request);
+            String sessionId = Optional.ofNullable(sessionSupplier.get())
+                    .map(String::trim)
+                    .filter(value -> !value.isEmpty())
+                    .orElse(null);
+
+            CompletionResponse response = delegate.completions(request, sessionId);
             String content = extractContent(response);
             Optional<GeneratedTestSnippet> snippet = mapContentToSnippet(content, classInfo);
             if (snippet.isPresent()) {

@@ -85,12 +85,13 @@ public class AgentConfigBuilder {
         return this;
     }
 
-    public AgentConfigBuilder gigaChat(String token, URI endpoint, Path certificate, Path rootCertificate, Path privateKey) {
-        return gigaChat(token, endpoint, certificate, rootCertificate, privateKey, this.verifySslCerts, this.modelName);
+    public AgentConfigBuilder gigaChat(String token, URI endpoint,URI authUrl, Path certificate, Path rootCertificate, Path privateKey) {
+        return gigaChat(token, endpoint, authUrl, certificate, rootCertificate, privateKey, this.verifySslCerts, this.modelName);
     }
 
     public AgentConfigBuilder gigaChat(String token,
                                        URI endpoint,
+                                       URI authUrl,
                                        Path certificate,
                                        Path rootCertificate,
                                        Path privateKey,
@@ -100,11 +101,11 @@ public class AgentConfigBuilder {
         this.modelName = modelName;
         this.gigaChat = new GigaChatClientConfig(token,
                 endpoint,
+                authUrl,
                 certificate,
                 rootCertificate,
                 privateKey,
-                verifySslCerts,
-                modelName);
+                verifySslCerts, modelName);
         return this;
     }
 
