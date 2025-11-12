@@ -37,6 +37,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Performs analysis of the target method to understand mocking needs and provide context for the LLM.
@@ -118,7 +119,13 @@ public class Analyze {
         for (String type : methodRelatedTypes) {
             addRelevantType(enrichedRelevantClasses, type);
         }
-        Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(enrichedRelevantClasses);
+        Set<String> methodSignatureSimpleNames = methodRelatedTypes.stream()
+                .map(this::simpleName)
+                .filter(name -> !name.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(
+                enrichedRelevantClasses,
+                methodSignatureSimpleNames);
         Map<String, List<String>> availableMethods = collectAvailableMethods(enrichedRelevantClasses);
         if (logger != null) {
             logger.info("Analysis JSON context prepared for method " + filteredResult.method().name());
@@ -382,10 +389,24 @@ public class Analyze {
         return true;
     }
 
-    private Map<String, List<ConstructorMetadata>> collectAvailableConstructors(Set<String> classNames) {
+    private Map<String, List<ConstructorMetadata>> collectAvailableConstructors(Set<String> classNames,
+                                                                               Set<String> methodSignatureTypes) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        if (classNames != null) {
+            candidates.addAll(classNames);
+        }
+        if (methodSignatureTypes != null) {
+            candidates.addAll(methodSignatureTypes);
+        }
         LinkedHashMap<String, List<ConstructorMetadata>> map = new LinkedHashMap<>();
-        for (String className : classNames) {
-            String simple = simpleName(className);
+        for (String candidate : candidates) {
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            String simple = simpleName(candidate);
+            if (simple.isEmpty()) {
+                continue;
+            }
             List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(simple);
             if (constructors == null || constructors.isEmpty()) {
                 continue;

@@ -133,6 +133,14 @@ public class MethodSignatureRegistry {
         return List.copyOf(constructors);
     }
 
+    public boolean refreshConstructors(String className) {
+        String key = normaliseClassName(className);
+        if (key.isEmpty()) {
+            return false;
+        }
+        return constructorsDetailed.containsKey(key);
+    }
+
     private ConstructorMetadata normaliseMetadata(ConstructorMetadata metadata) {
         if (metadata == null) {
             return new ConstructorMetadata("", List.of());

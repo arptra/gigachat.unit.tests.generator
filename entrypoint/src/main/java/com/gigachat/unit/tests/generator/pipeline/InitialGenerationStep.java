@@ -509,8 +509,16 @@ public class InitialGenerationStep {
         if (config == null || analyze == null) {
             return;
         }
-        logger.warn("Attempting constructor metadata refresh for type " + type
-                + " referenced in method signature before failing validation.");
+        boolean refreshTriggered = signatureRegistry != null && signatureRegistry.refreshConstructors(type);
+        if (logger != null) {
+            String baseMessage = "Attempting constructor metadata refresh for type " + type
+                    + " referenced in method signature before failing validation.";
+            if (!refreshTriggered) {
+                logger.warn(baseMessage + " Registry has no cached constructors yet.");
+            } else {
+                logger.warn(baseMessage);
+            }
+        }
         analyze.analyze(config, classInfo, methodInfo);
     }
 

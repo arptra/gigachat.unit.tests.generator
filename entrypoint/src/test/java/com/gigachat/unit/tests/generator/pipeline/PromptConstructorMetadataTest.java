@@ -71,4 +71,52 @@ class PromptConstructorMetadataTest {
         assertTrue(promptJson.contains("\"constructorPolicy\""));
         assertFalse(promptJson.contains("\"internalFields\""));
     }
+
+    @Test
+    void shouldExposeConstructorsForMethodSignatureTypes() throws Exception {
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(projectRoot)
+                .targetClass("com.example.app.repository.UserRepository")
+                .scanWholeProject(true)
+                .build();
+
+        List<TestClassInfo> classes = scanner.scan(config);
+        TestClassInfo classInfo = classes.stream()
+                .filter(info -> "UserRepository".equals(info.getClassName()))
+                .findFirst()
+                .orElseThrow();
+
+        TestMethodInfo saveMethod = classInfo.getMethods().stream()
+                .filter(method -> method.getSignature().contains("save"))
+                .findFirst()
+                .orElseThrow();
+        String savePrompt = buildPromptJson(config, classInfo, saveMethod);
+        assertTrue(savePrompt.contains("\"availableConstructors\""));
+        assertTrue(savePrompt.contains("\"UserRepository\""));
+        assertTrue(savePrompt.contains("UserRepository()"));
+        assertTrue(savePrompt.contains("User(String username, String email)"));
+
+        TestMethodInfo findByUsername = classInfo.getMethods().stream()
+                .filter(method -> method.getSignature().contains("findByUsername"))
+                .findFirst()
+                .orElseThrow();
+        String optionalPrompt = buildPromptJson(config, classInfo, findByUsername);
+        assertTrue(optionalPrompt.contains("User(String username, String email)"));
+
+        TestMethodInfo findAll = classInfo.getMethods().stream()
+                .filter(method -> method.getSignature().contains("findAll"))
+                .findFirst()
+                .orElseThrow();
+        String collectionPrompt = buildPromptJson(config, classInfo, findAll);
+        assertTrue(collectionPrompt.contains("User(String username, String email)"));
+    }
+
+    private String buildPromptJson(AgentConfig config,
+                                   TestClassInfo classInfo,
+                                   TestMethodInfo methodInfo) {
+        Analyze.AnalysisSummary summary = analyze.analyze(config, classInfo, methodInfo);
+        String skeleton = skeletonPromptBuilder.build(classInfo, methodInfo);
+        return promptBuilder.build(config, classInfo, methodInfo, skeleton, summary);
+    }
 }

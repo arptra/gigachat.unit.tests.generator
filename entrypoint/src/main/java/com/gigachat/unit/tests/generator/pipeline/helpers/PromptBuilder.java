@@ -15,6 +15,14 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.InstructionComp
 import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.InstructionComposerStrategy;
 import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.InstructionContext;
 import com.gigachat.unit.tests.generator.pipeline.helpers.prompt.PromptJsonRenderer;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.type.ArrayType;
+import com.github.javaparser.ast.type.ClassOrInterfaceType;
+import com.github.javaparser.ast.type.IntersectionType;
+import com.github.javaparser.ast.type.Type;
+import com.github.javaparser.ast.type.UnionType;
+import com.github.javaparser.ast.type.WildcardType;
 
 import org.json.JSONObject;
 
@@ -92,8 +100,13 @@ public class PromptBuilder {
                 root.put("testTarget", targetBlock);
             }
         }
-        if (!summary.availableConstructors().isEmpty()) {
-            root.put("availableConstructors", buildAvailableConstructors(summary.availableConstructors()));
+        Map<String, List<ConstructorMetadata>> constructorMetadata =
+                mergeConstructorMetadata(summary, classInfo, methodInfo);
+        if (!constructorMetadata.isEmpty()) {
+            Map<String, Object> constructorsBlock = buildAvailableConstructors(constructorMetadata);
+            if (!constructorsBlock.isEmpty()) {
+                root.put("availableConstructors", constructorsBlock);
+            }
         }
         if (!summary.availableMethods().isEmpty()) {
             root.put("availableMethods", summary.availableMethods());
@@ -216,7 +229,7 @@ public class PromptBuilder {
     private Map<String, Object> buildAvailableConstructors(Map<String, List<ConstructorMetadata>> constructors) {
         LinkedHashMap<String, Object> block = new LinkedHashMap<>();
         constructors.forEach((className, entries) -> {
-            if (entries == null || entries.isEmpty()) {
+            if (entries == null) {
                 return;
             }
             List<Map<String, Object>> constructorArray = new ArrayList<>();
@@ -254,9 +267,264 @@ public class PromptBuilder {
             }
             if (!constructorArray.isEmpty()) {
                 block.put(className, constructorArray);
+            } else if (entries.isEmpty()) {
+                block.put(className, List.of());
             }
         });
         return block;
+    }
+
+    private Map<String, List<ConstructorMetadata>> mergeConstructorMetadata(AnalysisSummary summary,
+                                                                            TestClassInfo classInfo,
+                                                                            TestMethodInfo methodInfo) {
+        LinkedHashMap<String, List<ConstructorMetadata>> merged = new LinkedHashMap<>(summary.availableConstructors());
+        Set<String> preferredTypes = determineModelDtoEntityTypes(classInfo, methodInfo);
+        for (String type : preferredTypes) {
+            merged.putIfAbsent(type, List.of());
+        }
+        return merged;
+    }
+
+    private Set<String> determineModelDtoEntityTypes(TestClassInfo classInfo, TestMethodInfo methodInfo) {
+        LinkedHashSet<String> types = new LinkedHashSet<>();
+        if (classInfo == null || methodInfo == null) {
+            return types;
+        }
+        Map<String, String> importLookup = buildImportLookup(classInfo.getImports());
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration != null) {
+            for (Parameter parameter : declaration.getParameters()) {
+                addModelTypeFromType(parameter.getType(), importLookup, types);
+            }
+            addModelTypeFromType(declaration.getType(), importLookup, types);
+        } else {
+            addModelTypeFromString(methodInfo.getReturnType(), importLookup, types);
+        }
+        return types;
+    }
+
+    private void addModelTypeFromType(Type type,
+                                      Map<String, String> importLookup,
+                                      Set<String> collector) {
+        if (type == null) {
+            return;
+        }
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        collectTypeNames(type, names);
+        for (String name : names) {
+            addModelTypeFromString(name, importLookup, collector);
+        }
+    }
+
+    private void addModelTypeFromString(String rawType,
+                                        Map<String, String> importLookup,
+                                        Set<String> collector) {
+        if (rawType == null || rawType.isBlank()) {
+            return;
+        }
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+        collectTypeNamesFromString(rawType, tokens);
+        for (String token : tokens) {
+            maybeAddModelType(token, importLookup, collector);
+        }
+    }
+
+    private void collectTypeNames(Type type, Set<String> collector) {
+        if (type == null || collector == null) {
+            return;
+        }
+        if (type.isPrimitiveType()) {
+            return;
+        }
+        if (type instanceof ArrayType arrayType) {
+            collectTypeNames(arrayType.getComponentType(), collector);
+            return;
+        }
+        if (type instanceof UnionType unionType) {
+            unionType.getElements().forEach(element -> collectTypeNames(element, collector));
+            return;
+        }
+        if (type instanceof IntersectionType intersectionType) {
+            intersectionType.getElements().forEach(element -> collectTypeNames(element, collector));
+            return;
+        }
+        if (type instanceof WildcardType wildcardType) {
+            wildcardType.getExtendedType().ifPresent(t -> collectTypeNames(t, collector));
+            wildcardType.getSuperType().ifPresent(t -> collectTypeNames(t, collector));
+            return;
+        }
+        if (type instanceof ClassOrInterfaceType classType) {
+            collector.add(classType.getNameWithScope());
+            classType.getTypeArguments()
+                    .ifPresent(arguments -> arguments.forEach(argument -> collectTypeNames(argument, collector)));
+            return;
+        }
+        collector.add(type.asString());
+    }
+
+    private void collectTypeNamesFromString(String type, Set<String> collector) {
+        if (collector == null || type == null || type.isBlank()) {
+            return;
+        }
+        collectTypeNamesFromStringInternal(type.trim(), collector);
+    }
+
+    private void collectTypeNamesFromStringInternal(String type, Set<String> collector) {
+        if (type == null || type.isBlank()) {
+            return;
+        }
+        String trimmed = stripDecorators(type);
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        int genericStart = trimmed.indexOf('<');
+        if (genericStart >= 0 && trimmed.endsWith(">")) {
+            String base = trimmed.substring(0, genericStart).trim();
+            if (!base.isEmpty()) {
+                collector.add(base);
+            }
+            String content = trimmed.substring(genericStart + 1, trimmed.lastIndexOf('>'));
+            int depth = 0;
+            StringBuilder current = new StringBuilder();
+            for (int i = 0; i < content.length(); i++) {
+                char ch = content.charAt(i);
+                if (ch == '<') {
+                    depth++;
+                } else if (ch == '>') {
+                    depth = Math.max(0, depth - 1);
+                } else if (ch == ',' && depth == 0) {
+                    collectTypeNamesFromStringInternal(current.toString(), collector);
+                    current.setLength(0);
+                    continue;
+                }
+                current.append(ch);
+            }
+            if (current.length() > 0) {
+                collectTypeNamesFromStringInternal(current.toString(), collector);
+            }
+            return;
+        }
+        if (trimmed.contains("|")) {
+            for (String part : trimmed.split("\\|")) {
+                collectTypeNamesFromStringInternal(part, collector);
+            }
+            return;
+        }
+        if (trimmed.contains("&")) {
+            for (String part : trimmed.split("&")) {
+                collectTypeNamesFromStringInternal(part, collector);
+            }
+            return;
+        }
+        collector.add(trimmed.trim());
+    }
+
+    private void maybeAddModelType(String candidate,
+                                   Map<String, String> importLookup,
+                                   Set<String> collector) {
+        if (candidate == null) {
+            return;
+        }
+        String base = stripDecorators(candidate);
+        if (base.isEmpty()) {
+            return;
+        }
+        int genericStart = base.indexOf('<');
+        if (genericStart >= 0) {
+            base = base.substring(0, genericStart).trim();
+        }
+        if (base.isEmpty()) {
+            return;
+        }
+        String resolved = resolveQualifiedName(base, importLookup);
+        String lower = resolved.toLowerCase(Locale.ROOT);
+        if (lower.contains(".model.")
+                || lower.contains(".dto.")
+                || lower.contains(".entity.")
+                || lower.startsWith("model.")
+                || lower.startsWith("dto.")
+                || lower.startsWith("entity.")) {
+            collector.add(simpleName(resolved));
+        }
+    }
+
+    private Map<String, String> buildImportLookup(List<String> imports) {
+        LinkedHashMap<String, String> map = new LinkedHashMap<>();
+        if (imports == null) {
+            return map;
+        }
+        for (String entry : imports) {
+            String cleaned = defaultString(entry);
+            if (cleaned.isEmpty()) {
+                continue;
+            }
+            cleaned = cleaned.replace("import", "").replace(";", "").trim();
+            if (cleaned.endsWith(".*")) {
+                continue;
+            }
+            int lastDot = cleaned.lastIndexOf('.');
+            if (lastDot > 0 && lastDot + 1 < cleaned.length()) {
+                String simple = cleaned.substring(lastDot + 1);
+                map.put(simple, cleaned);
+            }
+        }
+        return map;
+    }
+
+    private String resolveQualifiedName(String base, Map<String, String> importLookup) {
+        if (base == null || base.isBlank()) {
+            return "";
+        }
+        String trimmed = base.trim();
+        if (trimmed.contains(".")) {
+            return trimmed;
+        }
+        return importLookup.getOrDefault(trimmed, trimmed);
+    }
+
+    private String stripDecorators(String type) {
+        String text = defaultString(type);
+        if (text.endsWith("...")) {
+            text = text.substring(0, text.length() - 3).trim();
+        }
+        while (text.endsWith("[]")) {
+            text = text.substring(0, text.length() - 2).trim();
+        }
+        if (text.startsWith("? extends ")) {
+            text = text.substring(10).trim();
+        } else if (text.startsWith("? super ")) {
+            text = text.substring(8).trim();
+        } else if (text.startsWith("?")) {
+            text = text.substring(1).trim();
+        }
+        return text.trim();
+    }
+
+    private String simpleName(String type) {
+        String text = defaultString(type);
+        if (text.isEmpty()) {
+            return "";
+        }
+        int genericStart = text.indexOf('<');
+        if (genericStart >= 0) {
+            text = text.substring(0, genericStart);
+        }
+        int arrayIndex = text.indexOf('[');
+        if (arrayIndex >= 0) {
+            text = text.substring(0, arrayIndex);
+        }
+        int lastDot = text.lastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < text.length()) {
+            return text.substring(lastDot + 1);
+        }
+        return text;
+    }
+
+    private String defaultString(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim();
     }
 
     private Map<String, Object> buildMockPlan(MockPlan plan) {
