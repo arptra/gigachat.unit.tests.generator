@@ -136,6 +136,7 @@ public class PromptBuilder {
         builder.append("- Use only constructors listed in \"availableConstructors\".").append(lineSeparator);
         builder.append("- Follow each parameter type and count exactly.").append(lineSeparator);
         builder.append("- Do not invent or simplify constructor arguments.").append(lineSeparator);
+        builder.append("- When mocking or instantiating objects, use only constructors and methods provided in the JSON context.").append(lineSeparator);
         builder.append("- Determine mock usage automatically based on dependencies.").append(lineSeparator);
         builder.append("- Do not mock private or internal data structures of the tested class.").append(lineSeparator);
         builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);

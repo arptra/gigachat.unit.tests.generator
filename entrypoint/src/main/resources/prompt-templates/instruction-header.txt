@@ -9,6 +9,7 @@ Your task:
 - Use only constructors listed in "availableConstructors".
 - Follow each parameter type and count exactly.
 - Do not invent or simplify constructor arguments.
+- When mocking or instantiating, use only constructors and methods from the provided context.
 - Determine mock usage automatically based on dependencies.
 - Do not introduce mocks for private fields or internal collections.
 - Prefer using real instances and assertions for pure business logic methods.

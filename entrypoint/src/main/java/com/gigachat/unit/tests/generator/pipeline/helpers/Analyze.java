@@ -126,10 +126,12 @@ public class Analyze {
                     Set.of());
         }
         Map<String, String> variableTypes = new HashMap<>();
+        LinkedHashSet<String> relevantClasses = new LinkedHashSet<>();
         if (classInfo != null) {
             String owner = defaultString(classInfo.getClassName());
             if (!owner.isBlank()) {
                 variableTypes.put("this", owner);
+                addRelevantType(relevantClasses, owner);
             }
             ClassMetadata metadata = classInfo.getClassMetadata();
             if (metadata != null) {
@@ -138,17 +140,25 @@ public class Analyze {
                     if (!fieldName.isBlank()) {
                         variableTypes.putIfAbsent(fieldName, field.getTypeName());
                     }
+                    addRelevantType(relevantClasses, field.getTypeName());
                 }
             }
         }
         if (methodInfo != null && methodInfo.getDeclaration() != null) {
-            methodInfo.getDeclaration().getParameters().forEach(parameter ->
-                    variableTypes.putIfAbsent(parameter.getNameAsString(), parameter.getType().asString()));
+            methodInfo.getDeclaration().getParameters().forEach(parameter -> {
+                String type = parameter.getType().asString();
+                variableTypes.putIfAbsent(parameter.getNameAsString(), type);
+                addRelevantType(relevantClasses, type);
+            });
+        }
+        if (analysis != null) {
+            analysis.staticUsages().forEach(usage -> addRelevantType(relevantClasses, usage));
         }
         for (DependencyInfo dependency : analysis.dependencies()) {
             if (dependency == null) {
                 continue;
             }
+            addRelevantType(relevantClasses, dependency.className());
             String variableName = defaultString(dependency.variableName());
             if (!variableName.isBlank()) {
                 variableTypes.putIfAbsent(variableName, dependency.className());
@@ -178,7 +188,9 @@ public class Analyze {
             if (invocation == null) {
                 continue;
             }
+            invocation.argTypes().forEach(arg -> addRelevantType(relevantClasses, arg));
             String resolvedType = resolveInvocationType(invocation, variableTypes, classInfo);
+            addRelevantType(relevantClasses, resolvedType);
             String simpleResolved = simpleName(resolvedType);
             if (!simpleResolved.isEmpty() && signatureRegistry.hasClass(simpleResolved)) {
                 int argCount = invocation.argTypes() == null ? 0 : invocation.argTypes().size();
@@ -194,8 +206,41 @@ public class Analyze {
                 filteredInvocations,
                 analysis.staticUsages(),
                 analysis.unresolved());
-        Set<String> relevantClasses = determineRelevantClasses(classInfo, filteredDependencies);
-        return new FilteredAnalysis(filtered, List.copyOf(invalidCalls), relevantClasses);
+        for (String type : variableTypes.values()) {
+            addRelevantType(relevantClasses, type);
+        }
+        return new FilteredAnalysis(filtered, List.copyOf(invalidCalls), Set.copyOf(relevantClasses));
+    }
+
+    private void addRelevantType(Set<String> collector, String type) {
+        if (collector == null) {
+            return;
+        }
+        if (!isMeaningfulType(type)) {
+            return;
+        }
+        collector.add(type.trim());
+    }
+
+    private boolean isMeaningfulType(String type) {
+        if (type == null) {
+            return false;
+        }
+        String trimmed = type.trim();
+        if (trimmed.isEmpty()) {
+            return false;
+        }
+        if ("unknown".equalsIgnoreCase(trimmed) || "unknowndependency".equalsIgnoreCase(trimmed)) {
+            return false;
+        }
+        String simple = simpleName(trimmed);
+        if (simple.isEmpty()) {
+            return false;
+        }
+        if (isPrimitiveType(simple) || "void".equalsIgnoreCase(simple)) {
+            return false;
+        }
+        return true;
     }
 
     private Map<String, List<ConstructorMetadata>> collectAvailableConstructors(Set<String> classNames) {
@@ -280,28 +325,9 @@ public class Analyze {
             if (methods.isEmpty()) {
                 continue;
             }
-            map.put(simple, new ArrayList<>(methods));
+            map.put(simple, List.copyOf(methods));
         }
         return map;
-    }
-
-    private Set<String> determineRelevantClasses(TestClassInfo classInfo, List<DependencyInfo> dependencies) {
-        LinkedHashSet<String> classes = new LinkedHashSet<>();
-        if (classInfo != null && classInfo.getClassName() != null) {
-            classes.add(classInfo.getClassName());
-        }
-        if (classInfo != null && classInfo.getClassMetadata() != null) {
-            for (FieldMetadata field : classInfo.getClassMetadata().getFields()) {
-                classes.add(field.getTypeName());
-            }
-        }
-        for (DependencyInfo dependency : dependencies) {
-            if (dependency != null) {
-                classes.add(dependency.className());
-            }
-        }
-        classes.removeIf(String::isBlank);
-        return classes;
     }
 
     private String resolveInvocationType(InvocationInfo invocation,
