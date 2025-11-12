@@ -162,6 +162,7 @@ public class InitialGenerationStep {
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
         GeneratedTestSnippet snippet;
+        logger.info("-> DEBUG info about tested method \n" + methodInfo);
         try {
             snippet = generateSnippetWithRetry(config,
                     classInfo,
@@ -282,10 +283,12 @@ public class InitialGenerationStep {
                                                 PipelineModuleConfig moduleConfig,
                                                 boolean retryAttempt) {
         String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
+        logger.info("-> DEBUG LOG Request to gigachat \n" + llmPrompt);
         logger.info("Prepared LLM prompt for method " + methodInfo.getSignature()
                 + (retryAttempt ? " [retry]" : ""));
         GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
-        snippet = autoCorrectionStage.apply(snippet);
+        logger.info("Response from gigachat " + snippet);
+                snippet = autoCorrectionStage.apply(snippet);
         validateGeneratedSnippet(config, classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
         return snippet;
     }
