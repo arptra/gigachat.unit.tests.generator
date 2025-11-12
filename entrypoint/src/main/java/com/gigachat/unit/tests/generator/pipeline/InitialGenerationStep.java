@@ -554,6 +554,13 @@ public class InitialGenerationStep {
             if (accessible != null && accessible.contains(field)) {
                 continue;
             }
+            int lookahead = matcher.end();
+            while (lookahead < code.length() && Character.isWhitespace(code.charAt(lookahead))) {
+                lookahead++;
+            }
+            if (lookahead < code.length() && code.charAt(lookahead) == '(') {
+                continue;
+            }
             if (internalFields.contains(field)) {
                 violations.add(instance + '.' + field);
             }
