@@ -136,6 +136,9 @@ public class Analyze {
             if (field == null) {
                 continue;
             }
+            if (shouldOmitFieldFromContext(field)) {
+                continue;
+            }
             String name = defaultString(field.getName());
             if (name.isBlank()) {
                 continue;
@@ -145,6 +148,20 @@ public class Analyze {
             }
         }
         return fields;
+    }
+
+    private boolean shouldOmitFieldFromContext(FieldMetadata field) {
+        String name = defaultString(field.getName()).toLowerCase(Locale.ROOT);
+        String typeName = defaultString(field.getTypeName()).toLowerCase(Locale.ROOT);
+        for (String prefix : List.of("service.", "repository.", "client.", "lib.")) {
+            if (name.startsWith(prefix) || typeName.startsWith(prefix)) {
+                return true;
+            }
+            if (typeName.contains('.' + prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Set<String> extractInternalFields(ClassMetadata metadata) {

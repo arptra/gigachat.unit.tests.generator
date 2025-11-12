@@ -68,7 +68,9 @@ class ValidationIntegrationTest {
         assertTrue(promptJson.contains("\"availableConstructors\""));
         assertTrue(promptJson.contains("\"availableMethods\""));
         assertTrue(promptJson.contains("\"accessibleFields\""));
-        assertTrue(promptJson.contains("\"internalFields\""));
+        assertTrue(promptJson.contains("\"constructorPolicy\""));
+        assertFalse(promptJson.contains("\"internalFields\""));
+        assertTrue(promptJson.contains("\"mustUseAvailableConstructors\""));
     }
 
     @Test
@@ -78,6 +80,13 @@ class ValidationIntegrationTest {
 
         Analyze.AnalysisSummary summary = analyze.analyze(config, context.classInfo(), context.methodInfo());
         assertEquals(MockStrategy.NONE, summary.mockPlan().strategy(), "Pure utility methods must not use Mockito");
+
+        String skeleton = skeletonPromptBuilder.build(context.classInfo(), context.methodInfo());
+        String promptJson = promptBuilder.build(config, context.classInfo(), context.methodInfo(), skeleton, summary);
+
+        assertTrue(promptJson.contains("\"constructorPolicy\""));
+        assertFalse(promptJson.contains("mockFramework"));
+        assertFalse(promptJson.contains("\"internalFields\""));
     }
 
     private AgentConfig baseConfig(String targetClass) {

@@ -22,9 +22,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Locale;
+import java.util.Set;
 
 /**
  * Combines different sources of information into a final prompt for LLM invocation.
@@ -60,6 +61,7 @@ public class PromptBuilder {
                 promptConfig);
         InstructionComposerStrategy strategy = composerFactory.select(promptConfig.mode(), context);
         Map<String, Object> instructions = strategy.compose(context);
+        sanitiseVerificationPolicy(instructions, summary);
 
         MockPlan mockPlan = summary.mockPlan();
         if (mockPlan != null && mockPlan.strategy() == MockStrategy.NONE) {
@@ -96,8 +98,10 @@ public class PromptBuilder {
         if (!summary.availableMethods().isEmpty()) {
             root.put("availableMethods", summary.availableMethods());
         }
-        root.put("accessibleFields", new ArrayList<>(summary.accessibleFields()));
-        root.put("internalFields", new ArrayList<>(summary.internalFields()));
+        root.put("accessibleFields", filterAccessibleFields(summary.accessibleFields()));
+        root.put("constructorPolicy", Map.of(
+                "mustUseAvailableConstructors", Boolean.TRUE,
+                "forbidInventedConstructors", Boolean.TRUE));
         String analysisJson = summary.jsonContext();
         if (analysisJson != null && !analysisJson.isBlank()) {
             root.put("analysis", PromptJsonRenderer.raw(analysisJson));
@@ -143,6 +147,10 @@ public class PromptBuilder {
         boolean hasVerificationPolicy = instructionsBlock != null && instructionsBlock.has("verificationPolicy");
 
         builder.append("Your task:").append(lineSeparator);
+        builder.append("- Never access internal or private fields of the tested class.").append(lineSeparator);
+        builder.append("- Use only constructors and methods provided in availableConstructors and availableMethods.").append(lineSeparator);
+        builder.append("- Assert behavior using public APIs like findAll(), size(), or getters.").append(lineSeparator);
+        builder.append("- Do not reimplement or simplify the tested method.").append(lineSeparator);
         builder.append("- Generate a JUnit 5 test class based on the following structured JSON context.").append(lineSeparator);
         builder.append("- Follow the \"goal\" and \"instructions\" fields to guide the behavior and structure.").append(lineSeparator);
         builder.append("- The \"methodSignature\" field describes the method that must be tested, NOT re-implemented.").append(lineSeparator);
@@ -325,5 +333,71 @@ public class PromptBuilder {
             hints.add("Static method can be invoked directly; minimise setup.");
         }
         return new ArrayList<>(hints);
+    }
+
+    private void sanitiseVerificationPolicy(Map<String, Object> instructions, AnalysisSummary summary) {
+        if (instructions == null || summary == null) {
+            return;
+        }
+        Object block = instructions.get("verificationPolicy");
+        if (!(block instanceof Map<?, ?> rawPolicy)) {
+            return;
+        }
+        Set<String> internal = summary.internalFields();
+        if (internal == null || internal.isEmpty()) {
+            return;
+        }
+        LinkedHashMap<String, String> sanitised = new LinkedHashMap<>();
+        rawPolicy.forEach((key, value) -> {
+            String keyText = key == null ? "" : key.toString();
+            String valueText = value == null ? "" : value.toString();
+            if (referencesInternalField(keyText, internal) || referencesInternalField(valueText, internal)) {
+                return;
+            }
+            sanitised.put(keyText, valueText);
+        });
+        if (sanitised.isEmpty()) {
+            instructions.remove("verificationPolicy");
+        } else {
+            instructions.put("verificationPolicy", sanitised);
+        }
+    }
+
+    private boolean referencesInternalField(String text, Set<String> internalFields) {
+        if (text == null || text.isBlank() || internalFields == null || internalFields.isEmpty()) {
+            return false;
+        }
+        String candidate = text.trim();
+        for (String field : internalFields) {
+            if (field == null || field.isBlank()) {
+                continue;
+            }
+            String token = field.trim();
+            if (token.isEmpty()) {
+                continue;
+            }
+            if (candidate.contains(token)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<String> filterAccessibleFields(Set<String> accessibleFields) {
+        if (accessibleFields == null || accessibleFields.isEmpty()) {
+            return List.of();
+        }
+        List<String> filtered = new ArrayList<>();
+        for (String field : accessibleFields) {
+            if (field == null) {
+                continue;
+            }
+            String trimmed = field.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            filtered.add(trimmed);
+        }
+        return filtered;
     }
 }

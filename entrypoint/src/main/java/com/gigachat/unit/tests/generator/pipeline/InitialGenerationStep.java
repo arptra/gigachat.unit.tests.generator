@@ -43,6 +43,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -159,13 +160,15 @@ public class InitialGenerationStep {
         MockPlan plan = analysisSummary.mockPlan();
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
-        String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
-        logger.info("Prepared LLM prompt for method " + methodInfo.getSignature());
         GeneratedTestSnippet snippet;
         try {
-            snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
-            snippet = autoCorrectionStage.apply(snippet);
-            validateGeneratedSnippet(classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
+            snippet = generateSnippetWithRetry(config,
+                    classInfo,
+                    methodInfo,
+                    plan,
+                    contextJson,
+                    analysisSummary,
+                    moduleConfig);
         } catch (InvalidLLMResponseException exception) {
             logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
             return;
@@ -220,6 +223,86 @@ public class InitialGenerationStep {
             logger.warn("Failed to parse prompt JSON for method " + methodInfo.getSignature() + ": " + exception.getMessage());
             return new JSONObject();
         }
+    }
+
+    private GeneratedTestSnippet generateSnippetWithRetry(AgentConfig config,
+                                                           TestClassInfo classInfo,
+                                                           TestMethodInfo methodInfo,
+                                                           MockPlan plan,
+                                                           JSONObject contextJson,
+                                                           Analyze.AnalysisSummary analysisSummary,
+                                                           PipelineModuleConfig moduleConfig) {
+        try {
+            return requestSnippet(config,
+                    classInfo,
+                    methodInfo,
+                    plan,
+                    contextJson,
+                    analysisSummary,
+                    moduleConfig,
+                    false);
+        } catch (InvalidLLMResponseException first) {
+            if (!shouldRetry(first)) {
+                throw first;
+            }
+            logger.warn("Retrying generation for method " + methodInfo.getSignature()
+                    + " due to invalid response (" + first.getMessage() + ")");
+            appendRetryHint(contextJson);
+            return requestSnippet(config,
+                    classInfo,
+                    methodInfo,
+                    plan,
+                    contextJson,
+                    analysisSummary,
+                    moduleConfig,
+                    true);
+        }
+    }
+
+    private GeneratedTestSnippet requestSnippet(AgentConfig config,
+                                                TestClassInfo classInfo,
+                                                TestMethodInfo methodInfo,
+                                                MockPlan plan,
+                                                JSONObject contextJson,
+                                                Analyze.AnalysisSummary analysisSummary,
+                                                PipelineModuleConfig moduleConfig,
+                                                boolean retryAttempt) {
+        String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
+        logger.info("Prepared LLM prompt for method " + methodInfo.getSignature()
+                + (retryAttempt ? " [retry]" : ""));
+        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
+        snippet = autoCorrectionStage.apply(snippet);
+        validateGeneratedSnippet(classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
+        return snippet;
+    }
+
+    private boolean shouldRetry(InvalidLLMResponseException exception) {
+        if (exception == null) {
+            return false;
+        }
+        String message = exception.getMessage();
+        if (message == null) {
+            return false;
+        }
+        return message.contains("E101") || message.contains("E102") || message.contains("E103");
+    }
+
+    private void appendRetryHint(JSONObject contextJson) {
+        if (contextJson == null) {
+            return;
+        }
+        final String hint = "Skip unreachable or undefined constructors.";
+        JSONArray hints = contextJson.optJSONArray("hints");
+        if (hints == null) {
+            hints = new JSONArray();
+            contextJson.put("hints", hints);
+        }
+        for (int i = 0; i < hints.length(); i++) {
+            if (hint.equalsIgnoreCase(hints.optString(i))) {
+                return;
+            }
+        }
+        hints.put(hint);
     }
 
     private void handleFailure(TestClassInfo classInfo,
@@ -310,7 +393,7 @@ public class InitialGenerationStep {
                 if (signatureRegistry.hasConstructorWithArgCount(type, argumentCount)) {
                     logger.warn("[LLM hint mismatch] " + type + " has constructor with " + argumentCount + " args; updating prompt data.");
                 }
-                issues.add("E101: undefined constructor " + formatConstructorInvocation(type, expr));
+                issues.add("E101: Invented constructor " + formatConstructorInvocation(type, expr));
             }
         });
         compilationUnit.findAll(MethodCallExpr.class).forEach(expr -> {
@@ -324,7 +407,7 @@ public class InitialGenerationStep {
                 return;
             }
             if (!signatureRegistry.methodExists(simple, expr.getNameAsString(), expr.getArguments().size())) {
-                issues.add("E102: undefined method " + formatMethodInvocation(simple, expr));
+                issues.add("E102: Invented method " + formatMethodInvocation(simple, expr));
             }
         });
         if (!issues.isEmpty()) {
@@ -368,7 +451,7 @@ public class InitialGenerationStep {
             }
         }
         if (!violations.isEmpty()) {
-            String message = "E103: internal field access " + String.join(", ", violations);
+            String message = "E103: Internal field access " + String.join(", ", violations);
             logger.warn("⚠️  " + message);
             throw new InvalidLLMResponseException(message);
         }

@@ -307,27 +307,28 @@ public class DependencyAnalyzer {
             if (origin == DependencyOrigin.CONSTRUCTOR) {
                 return false;
             }
-            String trimmedType = simpleName(type);
+            String qualified = defaultString(type);
+            if (matchesExternalPackage(qualified)) {
+                return true;
+            }
+            String trimmedType = simpleName(qualified);
             if (trimmedType.isEmpty()) {
-                return looksExternalByName(variableName);
+                return false;
             }
             if (isOwnerType(trimmedType) || isPrimitiveType(trimmedType) || isJdkType(trimmedType)) {
                 return false;
             }
-            if (looksExternalByName(trimmedType) || looksExternalByName(variableName)) {
+            if (matchesExternalSuffix(trimmedType)) {
                 return true;
             }
             if (parameterTypes.containsKey(variableName)) {
-                String parameterType = simpleName(parameterTypes.get(variableName));
-                if (!parameterType.isEmpty() && !isJdkType(parameterType) && !isOwnerType(parameterType)) {
+                String parameterType = defaultString(parameterTypes.get(variableName));
+                if (matchesExternalPackage(parameterType) || matchesExternalSuffix(simpleName(parameterType))) {
                     return true;
                 }
             }
-            if (type != null && type.contains(".")) {
-                String lower = type.toLowerCase();
-                if (!lower.startsWith("java.") && !lower.startsWith("javax.") && !lower.startsWith("jakarta.")) {
-                    return true;
-                }
+            if (looksExternalByName(variableName) && matchesExternalSuffix(trimmedType)) {
+                return true;
             }
             return false;
         }
@@ -383,6 +384,28 @@ public class DependencyAnalyzer {
                 }
             }
             return false;
+        }
+
+        private boolean matchesExternalSuffix(String value) {
+            if (value == null || value.isBlank()) {
+                return false;
+            }
+            String lower = value.toLowerCase();
+            return lower.endsWith("service")
+                    || lower.endsWith("repository")
+                    || lower.endsWith("client")
+                    || lower.endsWith("gateway");
+        }
+
+        private boolean matchesExternalPackage(String type) {
+            if (type == null || type.isBlank()) {
+                return false;
+            }
+            String lower = type.toLowerCase();
+            return lower.contains(".service.")
+                    || lower.contains(".repository.")
+                    || lower.contains(".gateway.")
+                    || lower.contains(".client.");
         }
 
         private boolean isOwnerType(String type) {

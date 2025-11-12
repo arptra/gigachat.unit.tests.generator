@@ -16,8 +16,6 @@ import java.util.Set;
 public class ExternalCollaboratorDetector {
     private static final String EXTERNAL_TYPE_SUFFIX_PATTERN =
             ".*(Service|Repository|Client|Component|Manager|Controller)$";
-    private static final String PACKAGE_SUFFIX_PATTERN =
-            ".*(\\.service|\\.repository|\\.gateway|\\.client)(\\.|$)";
     private static final String CORE_MODEL_PATTERN =
             ".*(\\.model|\\.util)(\\.|$)";
 
@@ -86,19 +84,40 @@ public class ExternalCollaboratorDetector {
             return false;
         }
         String lower = typeName.toLowerCase(Locale.ROOT);
-        if (lower.contains(".")) {
-            if (lower.startsWith("java.")) {
-                return false;
-            }
-            if (lower.matches(CORE_MODEL_PATTERN)) {
-                return false;
-            }
-            if (lower.matches(PACKAGE_SUFFIX_PATTERN)) {
-                return true;
-            }
+        if (lower.startsWith("java.")) {
+            return false;
+        }
+        if (lower.matches(CORE_MODEL_PATTERN)) {
+            return false;
+        }
+        if (matchesKnownPackage(lower)) {
             return true;
         }
-        return typeName.matches(EXTERNAL_TYPE_SUFFIX_PATTERN);
+        String simple = simpleName(typeName);
+        return simple.matches(EXTERNAL_TYPE_SUFFIX_PATTERN);
+    }
+
+    private boolean matchesKnownPackage(String lowerCaseType) {
+        if (lowerCaseType == null || lowerCaseType.isBlank()) {
+            return false;
+        }
+        for (String hint : new String[]{".service", ".repository", ".gateway", ".client"}) {
+            if (lowerCaseType.contains(hint + '.') || lowerCaseType.endsWith(hint)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String simpleName(String type) {
+        if (type == null || type.isBlank()) {
+            return "";
+        }
+        int lastDot = type.lastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < type.length()) {
+            return type.substring(lastDot + 1);
+        }
+        return type;
     }
 
     private String normaliseInvocationTarget(String target) {

@@ -140,10 +140,6 @@ public class MockStrategyResolver {
             }
         }
 
-        if (!hasExternalDependency && !analysis.staticUsages().isEmpty()) {
-            hasExternalDependency = true;
-        }
-
         MockStrategy strategy = determineStrategy(hasStaticMocks,
                 hasChainMocks,
                 hasFieldMocks,

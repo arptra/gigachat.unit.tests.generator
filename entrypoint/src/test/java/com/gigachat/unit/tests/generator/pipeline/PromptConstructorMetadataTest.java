@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PromptConstructorMetadataTest {
@@ -66,5 +67,7 @@ class PromptConstructorMetadataTest {
         assertTrue(promptJson.contains("\"email\""));
         assertTrue(promptJson.contains("\"availableMethods\""));
         assertTrue(promptJson.contains("\"UserRepository\""));
+        assertTrue(promptJson.contains("\"constructorPolicy\""));
+        assertFalse(promptJson.contains("\"internalFields\""));
     }
 }
