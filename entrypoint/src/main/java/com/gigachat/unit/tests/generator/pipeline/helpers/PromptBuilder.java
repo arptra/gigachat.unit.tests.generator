@@ -239,6 +239,9 @@ public class PromptBuilder {
                         if (parameter.type() != null && !parameter.type().isBlank()) {
                             parameterBlock.put("type", parameter.type());
                         }
+                        if (parameter.modifiers() != null && !parameter.modifiers().isEmpty()) {
+                            parameterBlock.put("modifiers", parameter.modifiers());
+                        }
                         if (!parameterBlock.isEmpty()) {
                             parameters.add(parameterBlock);
                         }

@@ -124,11 +124,37 @@ public class MethodSignatureRegistry {
         return Collections.unmodifiableMap(snapshot);
     }
 
+    public List<ConstructorMetadata> getConstructorsForClass(String className) {
+        String key = normaliseClassName(className);
+        List<ConstructorMetadata> constructors = constructorsDetailed.get(key);
+        if (constructors == null || constructors.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(constructors);
+    }
+
     private ConstructorMetadata normaliseMetadata(ConstructorMetadata metadata) {
         if (metadata == null) {
             return new ConstructorMetadata("", List.of());
         }
-        return new ConstructorMetadata(metadata.signature(), metadata.parameters());
+        return new ConstructorMetadata(metadata.signature(), normaliseParameters(metadata.parameters()));
+    }
+
+    private List<ParameterMetadata> normaliseParameters(List<ParameterMetadata> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return List.of();
+        }
+        List<ParameterMetadata> cleaned = new ArrayList<>(parameters.size());
+        for (ParameterMetadata parameter : parameters) {
+            if (parameter == null) {
+                continue;
+            }
+            cleaned.add(parameter);
+        }
+        if (cleaned.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(cleaned);
     }
 
     private String extractMethodName(String signature) {

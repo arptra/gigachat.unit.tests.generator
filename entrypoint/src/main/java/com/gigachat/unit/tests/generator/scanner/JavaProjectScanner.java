@@ -175,7 +175,10 @@ public class JavaProjectScanner {
             for (Parameter parameter : constructorParameters) {
                 String name = parameter.getNameAsString();
                 String type = parameter.getType().asString();
-                parameters.add(new ParameterMetadata(name, type));
+                List<String> modifiers = parameter.getModifiers().stream()
+                        .map(modifier -> modifier.getKeyword().asString())
+                        .collect(Collectors.toCollection(ArrayList::new));
+                parameters.add(new ParameterMetadata(name, type, modifiers));
             }
             ConstructorMetadata metadata = new ConstructorMetadata(signature, parameters);
             methodRegistry.registerConstructor(className, metadata);

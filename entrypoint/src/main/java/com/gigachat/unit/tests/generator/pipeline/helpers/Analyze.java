@@ -371,10 +371,9 @@ public class Analyze {
 
     private Map<String, List<ConstructorMetadata>> collectAvailableConstructors(Set<String> classNames) {
         LinkedHashMap<String, List<ConstructorMetadata>> map = new LinkedHashMap<>();
-        Map<String, List<ConstructorMetadata>> detailed = signatureRegistry.getConstructorsDetailed();
         for (String className : classNames) {
             String simple = simpleName(className);
-            List<ConstructorMetadata> constructors = detailed.get(simple);
+            List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(simple);
             if (constructors == null || constructors.isEmpty()) {
                 continue;
             }

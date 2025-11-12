@@ -19,8 +19,8 @@ class MethodSignatureRegistryTest {
         ConstructorMetadata constructor = new ConstructorMetadata(
                 "User(String username, String email)",
                 List.of(
-                        new ParameterMetadata("username", "String"),
-                        new ParameterMetadata("email", "String")
+                        new ParameterMetadata("username", "String", List.of("final")),
+                        new ParameterMetadata("email", "String", List.of())
                 )
         );
         registry.registerConstructor("com.example.User", constructor);
@@ -38,5 +38,10 @@ class MethodSignatureRegistryTest {
         assertEquals(2, metadata.parameters().size());
         assertEquals("username", metadata.parameters().get(0).name());
         assertEquals("String", metadata.parameters().get(0).type());
+        assertTrue(metadata.parameters().get(0).modifiers().contains("final"));
+
+        List<ConstructorMetadata> constructorsForClass = registry.getConstructorsForClass("User");
+        assertEquals(1, constructorsForClass.size());
+        assertEquals("User(String username, String email)", constructorsForClass.get(0).signature());
     }
 }

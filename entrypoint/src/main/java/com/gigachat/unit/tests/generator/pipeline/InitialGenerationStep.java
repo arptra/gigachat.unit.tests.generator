@@ -1,5 +1,6 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
+import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
@@ -165,6 +166,7 @@ public class InitialGenerationStep {
             snippet = generateSnippetWithRetry(config,
                     classInfo,
                     methodInfo,
+                    skeletonPrompt,
                     plan,
                     contextJson,
                     analysisSummary,
@@ -226,12 +228,13 @@ public class InitialGenerationStep {
     }
 
     private GeneratedTestSnippet generateSnippetWithRetry(AgentConfig config,
-                                                           TestClassInfo classInfo,
-                                                           TestMethodInfo methodInfo,
-                                                           MockPlan plan,
-                                                           JSONObject contextJson,
-                                                           Analyze.AnalysisSummary analysisSummary,
-                                                           PipelineModuleConfig moduleConfig) {
+                                                          TestClassInfo classInfo,
+                                                          TestMethodInfo methodInfo,
+                                                          String skeletonPrompt,
+                                                          MockPlan plan,
+                                                          JSONObject contextJson,
+                                                          Analyze.AnalysisSummary analysisSummary,
+                                                          PipelineModuleConfig moduleConfig) {
         try {
             return requestSnippet(config,
                     classInfo,
@@ -247,13 +250,24 @@ public class InitialGenerationStep {
             }
             logger.warn("Retrying generation for method " + methodInfo.getSignature()
                     + " due to invalid response (" + first.getMessage() + ")");
-            appendRetryHint(contextJson);
+            Analyze.AnalysisSummary refreshedSummary = analyze.analyze(config, classInfo, methodInfo);
+            MockPlan refreshedPlan = refreshedSummary.mockPlan();
+            String refreshedPromptJson = promptBuilder.build(config,
+                    classInfo,
+                    methodInfo,
+                    skeletonPrompt,
+                    refreshedSummary);
+            JSONObject refreshedContextJson = toJsonObject(refreshedPromptJson, methodInfo);
+            if (first.getMessage() != null && first.getMessage().contains("E104")) {
+                logger.warn("Triggering constructor metadata refresh prior to retry.");
+            }
+            appendRetryHint(refreshedContextJson);
             return requestSnippet(config,
                     classInfo,
                     methodInfo,
-                    plan,
-                    contextJson,
-                    analysisSummary,
+                    refreshedPlan,
+                    refreshedContextJson,
+                    refreshedSummary,
                     moduleConfig,
                     true);
         }
@@ -284,7 +298,7 @@ public class InitialGenerationStep {
         if (message == null) {
             return false;
         }
-        return message.contains("E101") || message.contains("E102") || message.contains("E103");
+        return message.contains("E102") || message.contains("E103") || message.contains("E104");
     }
 
     private void appendRetryHint(JSONObject contextJson) {
@@ -383,17 +397,17 @@ public class InitialGenerationStep {
         }
         Map<String, String> variableTypes = collectVariableTypes(compilationUnit, analysisSummary, classInfo);
         LinkedHashSet<String> issues = new LinkedHashSet<>();
+        LinkedHashSet<String> missingConstructorMetadata = new LinkedHashSet<>();
         compilationUnit.findAll(ObjectCreationExpr.class).forEach(expr -> {
             String type = simpleName(expr.getType().asString());
             if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
                 return;
             }
             int argumentCount = expr.getArguments().size();
-            if (!signatureRegistry.constructorExists(type, argumentCount)) {
-                if (signatureRegistry.hasConstructorWithArgCount(type, argumentCount)) {
-                    logger.warn("[LLM hint mismatch] " + type + " has constructor with " + argumentCount + " args; updating prompt data.");
-                }
-                issues.add("E101: Invented constructor " + formatConstructorInvocation(type, expr));
+            List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(type);
+            if (constructors.isEmpty() || !signatureRegistry.constructorExists(type, argumentCount)) {
+                missingConstructorMetadata.add(type);
+                issues.add("E104: Missing constructor metadata for " + formatConstructorInvocation(type, expr));
             }
         });
         compilationUnit.findAll(MethodCallExpr.class).forEach(expr -> {
@@ -410,6 +424,9 @@ public class InitialGenerationStep {
                 issues.add("E102: Invented method " + formatMethodInvocation(simple, expr));
             }
         });
+        if (!missingConstructorMetadata.isEmpty()) {
+            logger.warn("Constructor metadata missing for: " + String.join(", ", missingConstructorMetadata));
+        }
         if (!issues.isEmpty()) {
             String message = String.join("; ", issues);
             logger.warn("⚠️  " + message);
@@ -575,12 +592,12 @@ public class InitialGenerationStep {
                     .map(field -> field.getTypeName() + " " + field.getName())
                     .orElse(null);
             if (collaboratorField != null) {
-                logger.warn("⚠️  E104: unexpected Mockito usage when mocks are disabled. External collaborator field detected: "
+                logger.warn("⚠️  E105: unexpected Mockito usage when mocks are disabled. External collaborator field detected: "
                         + collaboratorField + '.');
             } else {
-                logger.warn("⚠️  E104: unexpected Mockito usage when mocks are disabled.");
+                logger.warn("⚠️  E105: unexpected Mockito usage when mocks are disabled.");
             }
-            throw new InvalidLLMResponseException("E104: unexpected Mockito usage when mocks are disabled.");
+            throw new InvalidLLMResponseException("E105: unexpected Mockito usage when mocks are disabled.");
         }
     }
 
