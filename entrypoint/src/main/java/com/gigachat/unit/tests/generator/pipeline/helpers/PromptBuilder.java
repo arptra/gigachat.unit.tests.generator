@@ -1,5 +1,7 @@
 package com.gigachat.unit.tests.generator.pipeline.helpers;
 
+import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
+import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.PromptConfig;
 import com.gigachat.unit.tests.generator.config.PromptMode;
@@ -81,7 +83,7 @@ public class PromptBuilder {
             }
         }
         if (!summary.availableConstructors().isEmpty()) {
-            root.put("availableConstructors", summary.availableConstructors());
+            root.put("availableConstructors", buildAvailableConstructors(summary.availableConstructors()));
         }
         if (!summary.availableMethods().isEmpty()) {
             root.put("availableMethods", summary.availableMethods());
@@ -131,6 +133,9 @@ public class PromptBuilder {
         builder.append("- Do NOT include the original method implementation inside the test class.").append(lineSeparator);
         builder.append("- Always invoke the tested method on the instance of the class under test (for example: repository.save(user)).").append(lineSeparator);
         builder.append("- Use the \"testTarget.instanceName\" as the variable name for the tested object.").append(lineSeparator);
+        builder.append("- Use only constructors listed in \"availableConstructors\".").append(lineSeparator);
+        builder.append("- Follow each parameter type and count exactly.").append(lineSeparator);
+        builder.append("- Do not invent or simplify constructor arguments.").append(lineSeparator);
         builder.append("- Determine mock usage automatically based on dependencies.").append(lineSeparator);
         builder.append("- Do not mock private or internal data structures of the tested class.").append(lineSeparator);
         builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);
@@ -169,6 +174,56 @@ public class PromptBuilder {
         return "You are an AI agent that generates Java JUnit 5 unit tests using Mockito." + System.lineSeparator()
                 + "The context is missing or incomplete — generate a generic unit test skeleton with mocks." + System.lineSeparator()
                 + "Return only valid Java code of the test class.";
+    }
+
+
+    private Map<String, Object> buildAvailableConstructors(Map<String, List<ConstructorMetadata>> constructors) {
+        LinkedHashMap<String, Object> block = new LinkedHashMap<>();
+        constructors.forEach((className, entries) -> {
+            if (entries == null || entries.isEmpty()) {
+                return;
+            }
+            List<Map<String, Object>> constructorArray = new ArrayList<>();
+            for (ConstructorMetadata metadata : entries) {
+                if (metadata == null || metadata.signature().isBlank()) {
+                    continue;
+                }
+                LinkedHashMap<String, Object> descriptor = new LinkedHashMap<>();
+                descriptor.put("signature", metadata.signature());
+                if (metadata.parameters() != null && !metadata.parameters().isEmpty()) {
+                    List<Map<String, Object>> parameters = new ArrayList<>();
+                    for (ParameterMetadata parameter : metadata.parameters()) {
+                        if (parameter == null) {
+                            continue;
+                        }
+                        LinkedHashMap<String, Object> parameterBlock = new LinkedHashMap<>();
+                        if (parameter.name() != null && !parameter.name().isBlank()) {
+                            parameterBlock.put("name", parameter.name());
+                        }
+                        if (parameter.type() != null && !parameter.type().isBlank()) {
+                            parameterBlock.put("type", parameter.type());
+                        }
+                        if (parameter.description() != null) {
+                            parameterBlock.put("description", parameter.description());
+                        }
+                        if (!parameterBlock.isEmpty()) {
+                            parameters.add(parameterBlock);
+                        }
+                    }
+                    if (!parameters.isEmpty()) {
+                        descriptor.put("parameters", parameters);
+                    }
+                }
+                if (metadata.hints() != null && !metadata.hints().isEmpty()) {
+                    descriptor.put("hints", metadata.hints());
+                }
+                constructorArray.add(descriptor);
+            }
+            if (!constructorArray.isEmpty()) {
+                block.put(className, constructorArray);
+            }
+        });
+        return block;
     }
 
     private Map<String, Object> buildMockPlan(MockPlan plan) {

@@ -1,9 +1,11 @@
 package com.gigachat.unit.tests.generator.analyzer;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -15,6 +17,7 @@ public class MethodSignatureRegistry {
     private final Map<String, Set<String>> classConstructors = new LinkedHashMap<>();
     private final Map<String, Map<String, Set<Integer>>> methodArityIndex = new HashMap<>();
     private final Map<String, Set<Integer>> constructorArityIndex = new HashMap<>();
+    private final Map<String, List<ConstructorMetadata>> constructorsDetailed = new LinkedHashMap<>();
 
     public void registerMethod(String className, String signature) {
         String key = normaliseClassName(className);
@@ -33,13 +36,31 @@ public class MethodSignatureRegistry {
     }
 
     public void registerConstructor(String className, String signature) {
+        registerConstructor(className, new ConstructorMetadata(signature, List.of(), List.of()));
+    }
+
+    public void registerConstructor(String className, ConstructorMetadata metadata) {
         String key = normaliseClassName(className);
-        if (key.isEmpty() || signature == null || signature.isBlank()) {
+        if (key.isEmpty() || metadata == null || metadata.signature().isBlank()) {
             return;
         }
-        String trimmedSignature = signature.trim();
-        classConstructors.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(trimmedSignature);
-        int arity = extractArity(trimmedSignature);
+        ConstructorMetadata normalised = normaliseMetadata(metadata);
+        classConstructors.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(normalised.signature());
+        constructorsDetailed.computeIfAbsent(key, ignored -> new ArrayList<>());
+        List<ConstructorMetadata> existing = constructorsDetailed.get(key);
+        boolean replaced = false;
+        for (int i = 0; i < existing.size(); i++) {
+            ConstructorMetadata current = existing.get(i);
+            if (current.signature().equals(normalised.signature())) {
+                existing.set(i, normalised);
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            existing.add(normalised);
+        }
+        int arity = extractArity(normalised.signature());
         constructorArityIndex.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(arity);
     }
 
@@ -61,6 +82,10 @@ public class MethodSignatureRegistry {
     }
 
     public boolean constructorExists(String className, int argCount) {
+        return hasConstructorWithArgCount(className, argCount);
+    }
+
+    public boolean hasConstructorWithArgCount(String className, int argCount) {
         int arity = Math.max(argCount, 0);
         String key = normaliseClassName(className);
         Set<Integer> arities = constructorArityIndex.get(key);
@@ -91,6 +116,19 @@ public class MethodSignatureRegistry {
             return Set.of();
         }
         return Collections.unmodifiableSet(constructors);
+    }
+
+    public Map<String, List<ConstructorMetadata>> getConstructorsDetailed() {
+        LinkedHashMap<String, List<ConstructorMetadata>> snapshot = new LinkedHashMap<>();
+        constructorsDetailed.forEach((key, value) -> snapshot.put(key, List.copyOf(value)));
+        return Collections.unmodifiableMap(snapshot);
+    }
+
+    private ConstructorMetadata normaliseMetadata(ConstructorMetadata metadata) {
+        if (metadata == null) {
+            return new ConstructorMetadata("", List.of(), List.of());
+        }
+        return new ConstructorMetadata(metadata.signature(), metadata.parameters(), metadata.hints());
     }
 
     private String extractMethodName(String signature) {

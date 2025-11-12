@@ -1,7 +1,9 @@
 package com.gigachat.unit.tests.generator.pipeline.helpers;
 
+import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
+import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AnalysisConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
@@ -99,7 +101,7 @@ public class Analyze {
                 : Map.of();
         String contextJson = analysisFormatter.format(filteredResult);
         TestTargetContext targetContext = extractTestTargetContext(classInfo, methodInfo);
-        Map<String, List<String>> availableConstructors = collectAvailableConstructors(filteredAnalysis.relevantClasses());
+        Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(filteredAnalysis.relevantClasses());
         Map<String, List<String>> availableMethods = collectAvailableMethods(filteredAnalysis.relevantClasses());
         if (logger != null) {
             logger.info("Analysis JSON context prepared for method " + filteredResult.method().name());
@@ -196,20 +198,75 @@ public class Analyze {
         return new FilteredAnalysis(filtered, List.copyOf(invalidCalls), relevantClasses);
     }
 
-    private Map<String, List<String>> collectAvailableConstructors(Set<String> classNames) {
-        LinkedHashMap<String, List<String>> map = new LinkedHashMap<>();
+    private Map<String, List<ConstructorMetadata>> collectAvailableConstructors(Set<String> classNames) {
+        LinkedHashMap<String, List<ConstructorMetadata>> map = new LinkedHashMap<>();
+        Map<String, List<ConstructorMetadata>> detailed = signatureRegistry.getConstructorsDetailed();
         for (String className : classNames) {
             String simple = simpleName(className);
-            if (!signatureRegistry.hasClass(simple)) {
+            List<ConstructorMetadata> constructors = detailed.get(simple);
+            if (constructors == null || constructors.isEmpty()) {
                 continue;
             }
-            Set<String> constructors = signatureRegistry.constructorsFor(simple);
-            if (constructors.isEmpty()) {
-                continue;
+            List<ConstructorMetadata> enriched = new ArrayList<>(constructors.size());
+            for (ConstructorMetadata metadata : constructors) {
+                if (metadata == null) {
+                    continue;
+                }
+                List<String> hints = deriveConstructorHints(metadata);
+                enriched.add(metadata.withHints(hints));
             }
-            map.put(simple, new ArrayList<>(constructors));
+            if (!enriched.isEmpty()) {
+                map.put(simple, List.copyOf(enriched));
+            }
         }
         return map;
+    }
+
+
+    private List<String> deriveConstructorHints(ConstructorMetadata metadata) {
+        if (metadata == null || metadata.parameters().isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> hints = new LinkedHashSet<>();
+        for (ParameterMetadata parameter : metadata.parameters()) {
+            if (parameter == null) {
+                continue;
+            }
+            String hint = deriveParameterHint(parameter);
+            if (hint != null && !hint.isBlank()) {
+                hints.add(hint);
+            }
+        }
+        return List.copyOf(hints);
+    }
+
+    private String deriveParameterHint(ParameterMetadata parameter) {
+        String description = parameter.description();
+        if (description != null && !description.isBlank()) {
+            return parameter.name() + ": " + description.trim();
+        }
+        String name = defaultString(parameter.name());
+        String lowerName = name.toLowerCase(Locale.ROOT);
+        if (lowerName.contains("email")) {
+            return name + ": email address";
+        }
+        if (lowerName.contains("username") || lowerName.contains("login")) {
+            return name + ": unique user name";
+        }
+        if (isPrimitiveType(parameter.type())) {
+            return name + ": numeric or boolean parameter";
+        }
+        return null;
+    }
+
+    private boolean isPrimitiveType(String type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type.trim().toLowerCase(Locale.ROOT)) {
+            case "byte", "short", "int", "long", "float", "double", "boolean", "char" -> true;
+            default -> false;
+        };
     }
 
     private Map<String, List<String>> collectAvailableMethods(Set<String> classNames) {
@@ -433,7 +490,7 @@ public class Analyze {
                                   TestTargetContext testTargetContext,
                                   boolean hasExternalCollaborators,
                                   List<String> invalidCalls,
-                                  Map<String, List<String>> availableConstructors,
+                                  Map<String, List<ConstructorMetadata>> availableConstructors,
                                   Map<String, List<String>> availableMethods) {
     }
 

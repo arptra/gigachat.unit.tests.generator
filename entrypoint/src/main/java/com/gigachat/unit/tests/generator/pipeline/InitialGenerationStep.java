@@ -289,7 +289,11 @@ public class InitialGenerationStep {
             if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
                 return;
             }
-            if (!signatureRegistry.constructorExists(type, expr.getArguments().size())) {
+            int argumentCount = expr.getArguments().size();
+            if (!signatureRegistry.constructorExists(type, argumentCount)) {
+                if (signatureRegistry.hasConstructorWithArgCount(type, argumentCount)) {
+                    logger.warn("[LLM hint mismatch] " + type + " has constructor with " + argumentCount + " args; updating prompt data.");
+                }
                 inventedApis.add(formatConstructorInvocation(type, expr));
             }
         });

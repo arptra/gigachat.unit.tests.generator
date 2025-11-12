@@ -7,8 +7,12 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.javadoc.Javadoc;
+import com.github.javaparser.javadoc.JavadocBlockTag;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
+import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.dto.ClassMetadata;
 import com.gigachat.unit.tests.generator.dto.FieldMetadata;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
@@ -18,8 +22,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -82,8 +88,11 @@ public class JavaProjectScanner {
         String packageName = compilationUnit.getPackageDeclaration()
                 .map(declaration -> declaration.getName().asString())
                 .orElse("");
-        compilationUnit.findAll(ClassOrInterfaceDeclaration.class).stream()
+        List<ClassOrInterfaceDeclaration> declarations = compilationUnit.findAll(ClassOrInterfaceDeclaration.class).stream()
                 .filter(declaration -> !declaration.isInterface())
+                .toList();
+        declarations.forEach(this::registerSignatures);
+        declarations.stream()
                 .filter(declaration -> shouldInclude(declaration, packageName, config))
                 .map(declaration -> createTestClassInfo(compilationUnit, moduleRoot, packageName, declaration))
                 .forEach(collector::add);
@@ -110,7 +119,6 @@ public class JavaProjectScanner {
                 .collect(Collectors.toCollection(LinkedHashSet::new)));
 
         ClassMetadata metadata = extractClassMetadata(declaration);
-        registerSignatures(declaration);
 
         return new TestClassInfo(
                 declaration.getNameAsString(),
@@ -157,13 +165,68 @@ public class JavaProjectScanner {
 
     private void registerConstructors(String className, List<ConstructorDeclaration> constructors) {
         if (constructors == null || constructors.isEmpty()) {
-            methodRegistry.registerConstructor(className, className + "()");
+            ConstructorMetadata metadata = new ConstructorMetadata(className + "()", List.of(), List.of());
+            methodRegistry.registerConstructor(className, metadata);
             return;
         }
         for (ConstructorDeclaration constructor : constructors) {
-            String signature = className + formatParameters(constructor.getParameters());
-            methodRegistry.registerConstructor(className, signature);
+            String signature = buildConstructorSignature(className, constructor);
+            Map<String, String> parameterDocs = extractParameterDescriptions(constructor);
+            List<ParameterMetadata> parameters = new ArrayList<>();
+            NodeList<Parameter> constructorParameters = constructor.getParameters();
+            for (Parameter parameter : constructorParameters) {
+                String name = parameter.getNameAsString();
+                String type = parameter.getType().asString();
+                String description = parameterDocs.getOrDefault(name, null);
+                parameters.add(new ParameterMetadata(name, type, description));
+            }
+            ConstructorMetadata metadata = new ConstructorMetadata(signature, parameters, List.of());
+            methodRegistry.registerConstructor(className, metadata);
         }
+    }
+
+    private Map<String, String> extractParameterDescriptions(ConstructorDeclaration constructor) {
+        if (constructor == null) {
+            return Map.of();
+        }
+        return constructor.getJavadoc()
+                .map(this::extractParameterDescriptions)
+                .orElseGet(Map::of);
+    }
+
+    private Map<String, String> extractParameterDescriptions(Javadoc javadoc) {
+        Map<String, String> descriptions = new HashMap<>();
+        for (JavadocBlockTag tag : javadoc.getBlockTags()) {
+            if (tag.getType() == JavadocBlockTag.Type.PARAM && tag.getName().isPresent()) {
+                String name = tag.getName().get();
+                String text = tag.getContent().toText().trim();
+                if (!text.isEmpty()) {
+                    descriptions.put(name, text);
+                }
+            }
+        }
+        return descriptions;
+    }
+
+    private String buildConstructorSignature(String className, ConstructorDeclaration constructor) {
+        String modifiers = resolveConstructorModifiers(constructor);
+        return (modifiers + className + formatParameters(constructor.getParameters())).trim();
+    }
+
+    private String resolveConstructorModifiers(ConstructorDeclaration constructor) {
+        if (constructor == null) {
+            return "";
+        }
+        if (constructor.isPublic()) {
+            return "public ";
+        }
+        if (constructor.isProtected()) {
+            return "protected ";
+        }
+        if (constructor.isPrivate()) {
+            return "private ";
+        }
+        return "";
     }
 
     private void registerMethods(String className, List<MethodDeclaration> methods) {
@@ -198,65 +261,20 @@ public class JavaProjectScanner {
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,
                                   String packageName,
                                   AgentConfig config) {
+        if (config == null) {
+            return true;
+        }
+        String fullName = packageName.isBlank()
+                ? declaration.getNameAsString()
+                : packageName + '.' + declaration.getNameAsString();
         List<String> targetClasses = config.getTargetClasses();
         if (targetClasses != null && !targetClasses.isEmpty()) {
-            return matchesCandidates(targetClasses, packageName, declaration.getNameAsString());
+            return targetClasses.contains(fullName);
         }
-        if (config.isScanWholeProject()) {
-            return true;
-        }
-        List<String> includeClasses = config.getIncludeClasses();
-        if (includeClasses == null || includeClasses.isEmpty()) {
-            return true;
-        }
-        return matchesCandidates(includeClasses, packageName, declaration.getNameAsString());
+        return true;
     }
 
-    private boolean matchesCandidates(List<String> candidates, String packageName, String simpleName) {
-        if (candidates == null || candidates.isEmpty()) {
-            return false;
-        }
-        String qualifiedName = packageName.isBlank() ? simpleName : packageName + '.' + simpleName;
-        String testName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
-        String qualifiedTestName = packageName.isBlank() ? testName : packageName + '.' + testName;
-        for (String rawCandidate : candidates) {
-            String candidate = normaliseCandidate(rawCandidate);
-            if (candidate.isEmpty()) {
-                continue;
-            }
-            String candidateSimple = candidate.contains(".")
-                    ? candidate.substring(candidate.lastIndexOf('.') + 1)
-                    : candidate;
-            if (equalsName(candidate, qualifiedName) || equalsName(candidateSimple, simpleName)) {
-                return true;
-            }
-            if (equalsName(candidate, qualifiedTestName) || equalsName(candidateSimple, testName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String normaliseCandidate(String candidate) {
-        if (candidate == null) {
-            return "";
-        }
-        String trimmed = candidate.trim();
-        if (trimmed.isEmpty()) {
-            return "";
-        }
-        String normalised = trimmed.replace('/', '.');
-        if (normalised.endsWith(".java")) {
-            normalised = normalised.substring(0, normalised.length() - 5);
-        }
-        return normalised;
-    }
-
-    private boolean equalsName(String left, String right) {
-        return left.equals(right) || left.equalsIgnoreCase(right);
-    }
-
-    private List<Path> determineModuleRoots(Path projectPath, List<String> includeModules) {
+    private List<Path> determineModuleRoots(Path projectPath, List<String> includeModules) throws IOException {
         if (includeModules == null || includeModules.isEmpty()) {
             return List.of(projectPath);
         }
@@ -267,13 +285,20 @@ public class JavaProjectScanner {
                 modules.add(modulePath);
             }
         }
-        return modules.isEmpty() ? List.of(projectPath) : List.copyOf(modules);
+        if (modules.isEmpty()) {
+            return List.of(projectPath);
+        }
+        return List.copyOf(modules);
     }
 
     private Path resolveSourceRoot(Path moduleRoot) {
-        Path mainSource = moduleRoot.resolve(Path.of("src", "main", "java"));
-        if (Files.exists(mainSource)) {
-            return mainSource;
+        Path mainJava = moduleRoot.resolve(Path.of("src", "main", "java"));
+        if (Files.exists(mainJava)) {
+            return mainJava;
+        }
+        Path src = moduleRoot.resolve("src");
+        if (Files.exists(src)) {
+            return src;
         }
         return moduleRoot;
     }
