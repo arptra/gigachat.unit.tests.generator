@@ -64,6 +64,44 @@ public class MethodSignatureRegistry {
         constructorArityIndex.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(arity);
     }
 
+    public void registerConstructorsIfAbsent(String className) {
+        String key = normaliseClassName(className);
+        if (key.isEmpty()) {
+            return;
+        }
+        List<ConstructorMetadata> existing = constructorsDetailed.get(key);
+        if (existing != null && !existing.isEmpty()) {
+            return;
+        }
+        Set<String> constructors = classConstructors.get(key);
+        if (constructors == null || constructors.isEmpty()) {
+            return;
+        }
+        List<ConstructorMetadata> metadata = new ArrayList<>(constructors.size());
+        for (String signature : constructors) {
+            if (signature == null || signature.isBlank()) {
+                continue;
+            }
+            metadata.add(new ConstructorMetadata(signature.trim(), List.of()));
+        }
+        if (metadata.isEmpty()) {
+            return;
+        }
+        constructorsDetailed.put(key, List.copyOf(metadata));
+    }
+
+    public void registerMethodsIfAbsent(String className) {
+        String key = normaliseClassName(className);
+        if (key.isEmpty()) {
+            return;
+        }
+        if (classMethods.containsKey(key)) {
+            return;
+        }
+        classMethods.put(key, new LinkedHashSet<>());
+        methodArityIndex.computeIfAbsent(key, ignored -> new HashMap<>());
+    }
+
     public boolean methodExists(String className, String methodName, int argCount) {
         if (methodName == null || methodName.isBlank()) {
             return false;
@@ -138,7 +176,9 @@ public class MethodSignatureRegistry {
         if (key.isEmpty()) {
             return false;
         }
-        return constructorsDetailed.containsKey(key);
+        registerConstructorsIfAbsent(key);
+        List<ConstructorMetadata> constructors = constructorsDetailed.get(key);
+        return constructors != null && !constructors.isEmpty();
     }
 
     private ConstructorMetadata normaliseMetadata(ConstructorMetadata metadata) {

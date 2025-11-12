@@ -91,6 +91,9 @@ public class Analyze {
                 ? PipelineModuleConfig.from(Map.of())
                 : config.getPipelineModuleConfig();
         MethodAnalysisResult result = methodAnalyzer.analyze(classInfo, methodInfo, config, pipelineConfig);
+        Set<String> methodParameterTypes = collectMethodParameterTypes(methodInfo);
+        Set<String> methodReturnTypes = collectMethodReturnTypes(methodInfo);
+        registerMethodSignatureTypes(methodParameterTypes, methodReturnTypes);
         ClassMetadata metadata = classInfo == null ? null : classInfo.getClassMetadata();
         boolean hasExternalCollaborators = collaboratorDetector.hasExternalCollaborators(metadata);
         Set<String> accessibleFields = extractAccessibleFields(metadata);
@@ -116,6 +119,8 @@ public class Analyze {
         TestTargetContext targetContext = extractTestTargetContext(classInfo, methodInfo);
         Set<String> enrichedRelevantClasses = new LinkedHashSet<>(filteredAnalysis.relevantClasses());
         Set<String> methodRelatedTypes = collectMethodRelatedTypes(methodInfo);
+        methodRelatedTypes.addAll(methodParameterTypes);
+        methodRelatedTypes.addAll(methodReturnTypes);
         for (String type : methodRelatedTypes) {
             addRelevantType(enrichedRelevantClasses, type);
         }
@@ -142,7 +147,9 @@ public class Analyze {
                 accessibleSnapshot,
                 internalSnapshot,
                 availableConstructors,
-                availableMethods);
+                availableMethods,
+                Set.copyOf(methodParameterTypes),
+                Set.copyOf(methodReturnTypes));
     }
 
     private Set<String> extractAccessibleFields(ClassMetadata metadata) {
@@ -407,6 +414,7 @@ public class Analyze {
             if (simple.isEmpty()) {
                 continue;
             }
+            signatureRegistry.registerConstructorsIfAbsent(simple);
             List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(simple);
             if (constructors == null || constructors.isEmpty()) {
                 continue;
@@ -414,6 +422,132 @@ public class Analyze {
             map.put(simple, List.copyOf(constructors));
         }
         return map;
+    }
+
+    private Set<String> collectMethodParameterTypes(TestMethodInfo methodInfo) {
+        LinkedHashSet<String> rawTypes = new LinkedHashSet<>();
+        if (methodInfo == null) {
+            return rawTypes;
+        }
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration != null) {
+            declaration.getParameters().forEach(parameter ->
+                    extractTypesFromAst(parameter.getType(), rawTypes));
+        } else {
+            extractParameterTypesFromSignature(methodInfo.getSignature(), rawTypes);
+        }
+        return normaliseMethodTypes(rawTypes);
+    }
+
+    private Set<String> collectMethodReturnTypes(TestMethodInfo methodInfo) {
+        LinkedHashSet<String> rawTypes = new LinkedHashSet<>();
+        if (methodInfo == null) {
+            return rawTypes;
+        }
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration != null) {
+            extractTypesFromAst(declaration.getType(), rawTypes);
+        } else {
+            addRawTypeIfPresent(rawTypes, methodInfo.getReturnType());
+        }
+        return normaliseMethodTypes(rawTypes);
+    }
+
+    private void registerMethodSignatureTypes(Set<String> parameterTypes, Set<String> returnTypes) {
+        if (signatureRegistry == null) {
+            return;
+        }
+        LinkedHashSet<String> combined = new LinkedHashSet<>();
+        if (parameterTypes != null) {
+            combined.addAll(parameterTypes);
+        }
+        if (returnTypes != null) {
+            combined.addAll(returnTypes);
+        }
+        if (combined.isEmpty()) {
+            return;
+        }
+        for (String type : combined) {
+            if (type == null || type.isBlank()) {
+                continue;
+            }
+            signatureRegistry.registerConstructorsIfAbsent(type);
+            signatureRegistry.registerMethodsIfAbsent(type);
+        }
+    }
+
+    private Set<String> normaliseMethodTypes(Set<String> rawTypes) {
+        LinkedHashSet<String> normalised = new LinkedHashSet<>();
+        if (rawTypes == null || rawTypes.isEmpty()) {
+            return normalised;
+        }
+        for (String raw : rawTypes) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            for (String candidate : expandTypeCandidates(raw)) {
+                if (!isMeaningfulType(candidate)) {
+                    continue;
+                }
+                String simple = simpleName(candidate);
+                if (!simple.isBlank()) {
+                    normalised.add(simple);
+                }
+            }
+        }
+        return normalised;
+    }
+
+    private void extractParameterTypesFromSignature(String signature, Set<String> collector) {
+        if (collector == null) {
+            return;
+        }
+        String text = defaultString(signature);
+        if (text.isBlank()) {
+            return;
+        }
+        int start = text.indexOf('(');
+        int end = text.lastIndexOf(')');
+        if (start < 0 || end <= start) {
+            return;
+        }
+        String inside = text.substring(start + 1, end).trim();
+        if (inside.isEmpty()) {
+            return;
+        }
+        int depth = 0;
+        StringBuilder token = new StringBuilder();
+        for (int i = 0; i < inside.length(); i++) {
+            char ch = inside.charAt(i);
+            if (ch == '<') {
+                depth++;
+            } else if (ch == '>') {
+                depth = Math.max(0, depth - 1);
+            }
+            if (ch == ',' && depth == 0) {
+                addParameterToken(token.toString(), collector);
+                token.setLength(0);
+            } else {
+                token.append(ch);
+            }
+        }
+        addParameterToken(token.toString(), collector);
+    }
+
+    private void addParameterToken(String token, Set<String> collector) {
+        if (collector == null) {
+            return;
+        }
+        String trimmed = defaultString(token);
+        if (trimmed.isBlank()) {
+            return;
+        }
+        int lastSpace = trimmed.lastIndexOf(' ');
+        String type = lastSpace >= 0 ? trimmed.substring(0, lastSpace).trim() : trimmed;
+        if (type.isEmpty()) {
+            return;
+        }
+        collector.add(type);
     }
 
     private Set<String> collectMethodRelatedTypes(TestMethodInfo methodInfo) {
@@ -802,7 +936,9 @@ public class Analyze {
                                   Set<String> accessibleFields,
                                   Set<String> internalFields,
                                   Map<String, List<ConstructorMetadata>> availableConstructors,
-                                  Map<String, List<String>> availableMethods) {
+                                  Map<String, List<String>> availableMethods,
+                                  Set<String> methodParameterTypes,
+                                  Set<String> methodReturnTypes) {
     }
 
     public record TestTargetContext(String className,

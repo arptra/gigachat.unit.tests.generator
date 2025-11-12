@@ -412,6 +412,7 @@ public class InitialGenerationStep {
                 return;
             }
             int argumentCount = expr.getArguments().size();
+            signatureRegistry.registerConstructorsIfAbsent(type);
             List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(type);
             if (constructors.isEmpty() || !signatureRegistry.constructorExists(type, argumentCount)) {
                 if (signatureTypes.contains(type)) {

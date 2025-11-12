@@ -278,11 +278,29 @@ public class PromptBuilder {
                                                                             TestClassInfo classInfo,
                                                                             TestMethodInfo methodInfo) {
         LinkedHashMap<String, List<ConstructorMetadata>> merged = new LinkedHashMap<>(summary.availableConstructors());
+        addConstructorPlaceholders(merged, summary.methodParameterTypes());
+        addConstructorPlaceholders(merged, summary.methodReturnTypes());
         Set<String> preferredTypes = determineModelDtoEntityTypes(classInfo, methodInfo);
         for (String type : preferredTypes) {
             merged.putIfAbsent(type, List.of());
         }
         return merged;
+    }
+
+    private void addConstructorPlaceholders(Map<String, List<ConstructorMetadata>> merged, Set<String> types) {
+        if (merged == null || types == null || types.isEmpty()) {
+            return;
+        }
+        for (String type : types) {
+            if (type == null || type.isBlank()) {
+                continue;
+            }
+            String simple = simpleName(type);
+            if (simple.isEmpty()) {
+                continue;
+            }
+            merged.putIfAbsent(simple, List.of());
+        }
     }
 
     private Set<String> determineModelDtoEntityTypes(TestClassInfo classInfo, TestMethodInfo methodInfo) {
