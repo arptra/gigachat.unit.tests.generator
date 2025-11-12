@@ -68,7 +68,8 @@ public class DependencyAnalyzer {
                         mockType,
                         expression.toString(),
                         DependencyOrigin.CONSTRUCTOR,
-                        null));
+                        null,
+                        expression.getArguments().size()));
     }
 
     private void handleFieldAccess(FieldAccessExpr expression,
@@ -87,7 +88,8 @@ public class DependencyAnalyzer {
                         mockType,
                         expression.toString(),
                         DependencyOrigin.FIELD_ACCESS,
-                        scope));
+                        scope,
+                        0));
     }
 
     private void handleMethodCall(MethodCallExpr expression,
@@ -112,7 +114,8 @@ public class DependencyAnalyzer {
                                 mockType,
                                 expression.toString(),
                                 DependencyOrigin.STATIC_CALL,
-                                scopeExpression));
+                                scopeExpression,
+                                expression.getArguments().size()));
             }
         }
     }
@@ -236,7 +239,8 @@ public class DependencyAnalyzer {
                                                 MockType mockType,
                                                 String context,
                                                 DependencyOrigin origin,
-                                                Expression scope) {
+                                                Expression scope,
+                                                int argumentCount) {
             String resolvedType = resolveType(rawType, variableName, scope, origin);
             boolean external = isExternalDependency(resolvedType, variableName, origin);
             boolean internal = isInternalStructure(resolvedType, variableName, origin, scope, external);
@@ -248,7 +252,8 @@ public class DependencyAnalyzer {
                     mockType,
                     context,
                     external,
-                    internal);
+                    internal,
+                    argumentCount);
         }
 
         private String resolveType(String rawType,

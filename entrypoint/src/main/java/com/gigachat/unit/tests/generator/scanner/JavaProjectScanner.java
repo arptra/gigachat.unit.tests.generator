@@ -2,9 +2,13 @@ package com.gigachat.unit.tests.generator.scanner;
 
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.dto.ClassMetadata;
 import com.gigachat.unit.tests.generator.dto.FieldMetadata;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
@@ -22,13 +26,19 @@ import java.util.stream.Stream;
 
 public class JavaProjectScanner {
     private final JavaParser javaParser;
+    private final MethodSignatureRegistry methodRegistry;
 
     public JavaProjectScanner() {
-        this(new JavaParser());
+        this(new JavaParser(), new MethodSignatureRegistry());
     }
 
-    public JavaProjectScanner(JavaParser javaParser) {
+    public JavaProjectScanner(MethodSignatureRegistry registry) {
+        this(new JavaParser(), registry);
+    }
+
+    public JavaProjectScanner(JavaParser javaParser, MethodSignatureRegistry registry) {
         this.javaParser = Objects.requireNonNull(javaParser, "javaParser");
+        this.methodRegistry = Objects.requireNonNull(registry, "methodRegistry");
     }
 
     public List<TestClassInfo> scan(AgentConfig config) throws IOException {
@@ -100,6 +110,8 @@ public class JavaProjectScanner {
                 .collect(Collectors.toCollection(LinkedHashSet::new)));
 
         ClassMetadata metadata = extractClassMetadata(declaration);
+        registerSignatures(declaration);
+
         return new TestClassInfo(
                 declaration.getNameAsString(),
                 testClassName,
@@ -108,6 +120,10 @@ public class JavaProjectScanner {
                 List.copyOf(methods),
                 metadata
         );
+    }
+
+    public MethodSignatureRegistry getMethodRegistry() {
+        return methodRegistry;
     }
 
     private TestMethodInfo createTestMethodInfo(MethodDeclaration methodDeclaration) {
@@ -131,6 +147,52 @@ public class JavaProjectScanner {
                     fields.add(new FieldMetadata(variable.getNameAsString(), typeName, isPrivate)));
         });
         return new ClassMetadata(declaration.getNameAsString(), fields);
+    }
+
+    private void registerSignatures(ClassOrInterfaceDeclaration declaration) {
+        String className = declaration.getNameAsString();
+        registerConstructors(className, declaration.getConstructors());
+        registerMethods(className, declaration.getMethods());
+    }
+
+    private void registerConstructors(String className, List<ConstructorDeclaration> constructors) {
+        if (constructors == null || constructors.isEmpty()) {
+            methodRegistry.registerConstructor(className, className + "()");
+            return;
+        }
+        for (ConstructorDeclaration constructor : constructors) {
+            String signature = className + formatParameters(constructor.getParameters());
+            methodRegistry.registerConstructor(className, signature);
+        }
+    }
+
+    private void registerMethods(String className, List<MethodDeclaration> methods) {
+        if (methods == null || methods.isEmpty()) {
+            return;
+        }
+        for (MethodDeclaration method : methods) {
+            if (method.isPrivate()) {
+                continue;
+            }
+            String signature = method.getNameAsString() + formatParameters(method.getParameters());
+            methodRegistry.registerMethod(className, signature);
+        }
+    }
+
+    private String formatParameters(NodeList<Parameter> parameters) {
+        StringBuilder builder = new StringBuilder();
+        builder.append('(');
+        if (parameters != null && !parameters.isEmpty()) {
+            for (int i = 0; i < parameters.size(); i++) {
+                Parameter parameter = parameters.get(i);
+                builder.append(parameter.getType().asString()).append(' ').append(parameter.getNameAsString());
+                if (i + 1 < parameters.size()) {
+                    builder.append(", ");
+                }
+            }
+        }
+        builder.append(')');
+        return builder.toString();
     }
 
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,

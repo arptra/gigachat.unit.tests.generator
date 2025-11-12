@@ -80,11 +80,20 @@ public class PromptBuilder {
                 root.put("testTarget", targetBlock);
             }
         }
+        if (!summary.availableConstructors().isEmpty()) {
+            root.put("availableConstructors", summary.availableConstructors());
+        }
+        if (!summary.availableMethods().isEmpty()) {
+            root.put("availableMethods", summary.availableMethods());
+        }
         String analysisJson = summary.jsonContext();
         if (analysisJson != null && !analysisJson.isBlank()) {
             root.put("analysis", PromptJsonRenderer.raw(analysisJson));
         }
         root.put("hasExternalCollaborators", summary.hasExternalCollaborators());
+        if (!summary.invalidCalls().isEmpty()) {
+            root.put("invalidCalls", summary.invalidCalls());
+        }
         if (summary.mockPlan() != null) {
             Map<String, Object> planBlock = buildMockPlan(summary.mockPlan());
             if (!planBlock.isEmpty()) {

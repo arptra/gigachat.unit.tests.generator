@@ -1,0 +1,166 @@
+package com.gigachat.unit.tests.generator.analyzer;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Registry that keeps track of discovered method and constructor signatures for classes scanned from the project.
+ */
+public class MethodSignatureRegistry {
+    private final Map<String, Set<String>> classMethods = new LinkedHashMap<>();
+    private final Map<String, Set<String>> classConstructors = new LinkedHashMap<>();
+    private final Map<String, Map<String, Set<Integer>>> methodArityIndex = new HashMap<>();
+    private final Map<String, Set<Integer>> constructorArityIndex = new HashMap<>();
+
+    public void registerMethod(String className, String signature) {
+        String key = normaliseClassName(className);
+        if (key.isEmpty() || signature == null || signature.isBlank()) {
+            return;
+        }
+        String trimmedSignature = signature.trim();
+        classMethods.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(trimmedSignature);
+        String methodName = extractMethodName(trimmedSignature);
+        if (!methodName.isEmpty()) {
+            int arity = extractArity(trimmedSignature);
+            methodArityIndex.computeIfAbsent(key, ignored -> new HashMap<>())
+                    .computeIfAbsent(methodName, ignored -> new LinkedHashSet<>())
+                    .add(arity);
+        }
+    }
+
+    public void registerConstructor(String className, String signature) {
+        String key = normaliseClassName(className);
+        if (key.isEmpty() || signature == null || signature.isBlank()) {
+            return;
+        }
+        String trimmedSignature = signature.trim();
+        classConstructors.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(trimmedSignature);
+        int arity = extractArity(trimmedSignature);
+        constructorArityIndex.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(arity);
+    }
+
+    public boolean methodExists(String className, String methodName, int argCount) {
+        if (methodName == null || methodName.isBlank()) {
+            return false;
+        }
+        int arity = Math.max(argCount, 0);
+        String key = normaliseClassName(className);
+        Map<String, Set<Integer>> methods = methodArityIndex.get(key);
+        if (methods == null) {
+            return false;
+        }
+        Set<Integer> arities = methods.get(methodName.trim());
+        if (arities == null) {
+            return false;
+        }
+        return arities.contains(arity);
+    }
+
+    public boolean constructorExists(String className, int argCount) {
+        int arity = Math.max(argCount, 0);
+        String key = normaliseClassName(className);
+        Set<Integer> arities = constructorArityIndex.get(key);
+        if (arities == null) {
+            return false;
+        }
+        return arities.contains(arity);
+    }
+
+    public boolean hasClass(String className) {
+        String key = normaliseClassName(className);
+        return classMethods.containsKey(key) || classConstructors.containsKey(key);
+    }
+
+    public Set<String> methodsFor(String className) {
+        String key = normaliseClassName(className);
+        Set<String> methods = classMethods.get(key);
+        if (methods == null) {
+            return Set.of();
+        }
+        return Collections.unmodifiableSet(methods);
+    }
+
+    public Set<String> constructorsFor(String className) {
+        String key = normaliseClassName(className);
+        Set<String> constructors = classConstructors.get(key);
+        if (constructors == null) {
+            return Set.of();
+        }
+        return Collections.unmodifiableSet(constructors);
+    }
+
+    private String extractMethodName(String signature) {
+        int parenIndex = signature.indexOf('(');
+        if (parenIndex <= 0) {
+            return "";
+        }
+        return signature.substring(0, parenIndex).trim();
+    }
+
+    private int extractArity(String signature) {
+        int start = signature.indexOf('(');
+        int end = signature.lastIndexOf(')');
+        if (start < 0 || end < start) {
+            return 0;
+        }
+        String inside = signature.substring(start + 1, end).trim();
+        if (inside.isEmpty()) {
+            return 0;
+        }
+        int depth = 0;
+        boolean inQuote = false;
+        int arity = 1;
+        for (int i = 0; i < inside.length(); i++) {
+            char ch = inside.charAt(i);
+            if (ch == '"' || ch == '\'') {
+                inQuote = !inQuote;
+            }
+            if (inQuote) {
+                continue;
+            }
+            if (ch == '<') {
+                depth++;
+                continue;
+            }
+            if (ch == '>') {
+                if (depth > 0) {
+                    depth--;
+                }
+                continue;
+            }
+            if (ch == '(' || ch == '[' || ch == '{') {
+                depth++;
+                continue;
+            }
+            if (ch == ')' || ch == ']' || ch == '}') {
+                if (depth > 0) {
+                    depth--;
+                }
+                continue;
+            }
+            if (ch == ',' && depth == 0) {
+                arity++;
+            }
+        }
+        return Math.max(arity, 0);
+    }
+
+    private String normaliseClassName(String className) {
+        if (className == null) {
+            return "";
+        }
+        String trimmed = className.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        int lastDot = trimmed.lastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < trimmed.length()) {
+            return trimmed.substring(lastDot + 1);
+        }
+        return trimmed;
+    }
+}

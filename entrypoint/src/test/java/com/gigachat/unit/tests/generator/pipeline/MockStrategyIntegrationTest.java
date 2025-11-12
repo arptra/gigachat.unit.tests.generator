@@ -1,5 +1,6 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
+import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
 import com.gigachat.unit.tests.generator.config.AgentMode;
@@ -27,12 +28,14 @@ class MockStrategyIntegrationTest {
     private Analyze analyze;
     private PromptBuilder promptBuilder;
     private SkeletonPromptBuilder skeletonPromptBuilder;
+    private MethodSignatureRegistry registry;
 
     @BeforeEach
     void setUp() {
         projectRoot = Path.of("..", "example-project").toAbsolutePath().normalize();
-        scanner = new JavaProjectScanner();
-        analyze = new Analyze();
+        registry = new MethodSignatureRegistry();
+        scanner = new JavaProjectScanner(registry);
+        analyze = new Analyze(registry);
         promptBuilder = new PromptBuilder();
         skeletonPromptBuilder = new SkeletonPromptBuilder();
     }

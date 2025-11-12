@@ -8,7 +8,8 @@ public record DependencyInfo(String className,
                              MockType mockType,
                              String context,
                              boolean externalDependency,
-                             boolean internalStructure) {
+                             boolean internalStructure,
+                             int argumentCount) {
 
     public DependencyInfo {
         className = normalise(className, "UnknownDependency");
@@ -16,6 +17,7 @@ public record DependencyInfo(String className,
         mockType = mockType == null ? MockType.UNKNOWN : mockType;
         context = normalise(context, "");
         internalStructure = internalStructure || !externalDependency;
+        argumentCount = Math.max(argumentCount, 0);
     }
 
     private static String normalise(String value, String defaultValue) {

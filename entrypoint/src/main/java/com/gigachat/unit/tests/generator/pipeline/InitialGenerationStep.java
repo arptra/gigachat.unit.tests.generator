@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
+import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
 import com.gigachat.unit.tests.generator.config.ParallelMode;
@@ -29,14 +30,32 @@ import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import com.github.javaparser.ParseProblemException;
+import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.FieldAccessExpr;
+import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.ThisExpr;
 
 /**
  * Executes the first seven stages of the generation pipeline for each discovered method.
@@ -53,6 +72,7 @@ public class InitialGenerationStep {
     private final ExecutionInvoker executionInvoker;
     private final SnapshotStorage snapshotStorage;
     private final ExternalCollaboratorDetector collaboratorDetector;
+    private final MethodSignatureRegistry signatureRegistry;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -63,7 +83,8 @@ public class InitialGenerationStep {
                                  DiffEngine diffEngine,
                                  CompilerInvoker compilerInvoker,
                                  ExecutionInvoker executionInvoker,
-                                 SnapshotStorage snapshotStorage) {
+                                 SnapshotStorage snapshotStorage,
+                                 MethodSignatureRegistry signatureRegistry) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.testClassWriter = Objects.requireNonNull(testClassWriter, "testClassWriter");
         this.skeletonPromptBuilder = Objects.requireNonNull(skeletonPromptBuilder, "skeletonPromptBuilder");
@@ -75,6 +96,7 @@ public class InitialGenerationStep {
         this.executionInvoker = Objects.requireNonNull(executionInvoker, "executionInvoker");
         this.snapshotStorage = Objects.requireNonNull(snapshotStorage, "snapshotStorage");
         this.collaboratorDetector = new ExternalCollaboratorDetector();
+        this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -123,6 +145,12 @@ public class InitialGenerationStep {
         logger.info("Processing method " + methodInfo.getSignature() + " for class " + classInfo.getClassName());
         String skeletonPrompt = skeletonPromptBuilder.build(classInfo, methodInfo);
         Analyze.AnalysisSummary analysisSummary = analyze.analyze(config, classInfo, methodInfo);
+        if (!analysisSummary.invalidCalls().isEmpty()) {
+            logger.warn("[WARN] Some inferred invocations were excluded (nonexistent in class metadata):");
+            for (String invalidCall : analysisSummary.invalidCalls()) {
+                logger.warn("  - " + invalidCall);
+            }
+        }
         MockPlan plan = analysisSummary.mockPlan();
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
@@ -235,9 +263,163 @@ public class InitialGenerationStep {
             logger.warn("⚠️  LLM reimplemented method " + methodName + " inside test class. Marking generation as invalid.");
             throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
         }
+        ensureMethodAndConstructorUsageIsValid(fullSource, analysisSummary, classInfo);
         if (moduleConfig != null && moduleConfig.validateMockUsage()) {
             ensureMockUsageIsValid(fullSource, analysisSummary, classInfo);
         }
+    }
+
+    private void ensureMethodAndConstructorUsageIsValid(String source,
+                                                        Analyze.AnalysisSummary analysisSummary,
+                                                        TestClassInfo classInfo) {
+        if (source == null || source.isBlank()) {
+            return;
+        }
+        CompilationUnit compilationUnit;
+        try {
+            compilationUnit = StaticJavaParser.parse(source);
+        } catch (ParseProblemException exception) {
+            logger.warn("Unable to parse generated source for API validation: " + exception.getMessage());
+            return;
+        }
+        Map<String, String> variableTypes = collectVariableTypes(compilationUnit, analysisSummary, classInfo);
+        Set<String> inventedApis = new LinkedHashSet<>();
+        compilationUnit.findAll(ObjectCreationExpr.class).forEach(expr -> {
+            String type = simpleName(expr.getType().asString());
+            if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
+                return;
+            }
+            if (!signatureRegistry.constructorExists(type, expr.getArguments().size())) {
+                inventedApis.add(formatConstructorInvocation(type, expr));
+            }
+        });
+        compilationUnit.findAll(MethodCallExpr.class).forEach(expr -> {
+            Optional<Expression> scope = expr.getScope();
+            if (scope.isEmpty()) {
+                return;
+            }
+            String resolvedType = resolveExpressionType(scope.get(), variableTypes, classInfo);
+            String simple = simpleName(resolvedType);
+            if (simple.isEmpty() || !signatureRegistry.hasClass(simple)) {
+                return;
+            }
+            if (!signatureRegistry.methodExists(simple, expr.getNameAsString(), expr.getArguments().size())) {
+                inventedApis.add(formatMethodInvocation(simple, expr));
+            }
+        });
+        if (!inventedApis.isEmpty()) {
+            String message = String.join(", ", inventedApis);
+            logger.warn("⚠️  LLM invented undefined API: " + message);
+            throw new InvalidLLMResponseException("LLM invented undefined API: " + message);
+        }
+    }
+
+    private Map<String, String> collectVariableTypes(CompilationUnit compilationUnit,
+                                                     Analyze.AnalysisSummary analysisSummary,
+                                                     TestClassInfo classInfo) {
+        Map<String, String> types = new LinkedHashMap<>();
+        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
+        if (targetContext != null && targetContext.instanceName() != null && !targetContext.instanceName().isBlank()) {
+            types.put(targetContext.instanceName(), targetContext.className());
+        }
+        analysisSummary.availableMethods().keySet().forEach(className -> types.putIfAbsent(className, className));
+        analysisSummary.availableConstructors().keySet().forEach(className -> types.putIfAbsent(className, className));
+        compilationUnit.findAll(VariableDeclarator.class).forEach(declarator -> {
+            String name = declarator.getNameAsString();
+            if (name == null || name.isBlank()) {
+                return;
+            }
+            String type = declarator.getType().asString();
+            if ("var".equals(type)) {
+                type = inferTypeFromInitializer(declarator.getInitializer());
+            }
+            types.putIfAbsent(name, type);
+        });
+        compilationUnit.findAll(MethodDeclaration.class).forEach(method ->
+                method.getParameters().forEach(parameter -> types.putIfAbsent(parameter.getNameAsString(), parameter.getType().asString())));
+        if (classInfo != null && classInfo.getClassMetadata() != null) {
+            classInfo.getClassMetadata().getFields().forEach(field -> types.putIfAbsent(field.getName(), field.getTypeName()));
+        }
+        return types;
+    }
+
+    private String inferTypeFromInitializer(Optional<Expression> initializer) {
+        if (initializer.isEmpty()) {
+            return "";
+        }
+        Expression expression = initializer.get();
+        if (expression instanceof ObjectCreationExpr creationExpr) {
+            return creationExpr.getType().asString();
+        }
+        return "";
+    }
+
+    private String resolveExpressionType(Expression expression,
+                                         Map<String, String> variableTypes,
+                                         TestClassInfo classInfo) {
+        if (expression instanceof ThisExpr) {
+            return classInfo == null ? "" : classInfo.getClassName();
+        }
+        if (expression instanceof NameExpr nameExpr) {
+            return variableTypes.getOrDefault(nameExpr.getNameAsString(), "");
+        }
+        if (expression instanceof FieldAccessExpr fieldAccessExpr) {
+            String fieldName = fieldAccessExpr.getNameAsString();
+            String direct = variableTypes.get(fieldName);
+            if (direct != null && !direct.isBlank()) {
+                return direct;
+            }
+            return resolveExpressionType(fieldAccessExpr.getScope(), variableTypes, classInfo);
+        }
+        return "";
+    }
+
+    private String formatConstructorInvocation(String type, ObjectCreationExpr expr) {
+        String arguments = describeArguments(new java.util.ArrayList<>(expr.getArguments()));
+        return type + '(' + arguments + ')';
+    }
+
+    private String formatMethodInvocation(String type, MethodCallExpr expr) {
+        String arguments = describeArguments(new java.util.ArrayList<>(expr.getArguments()));
+        return type + '.' + expr.getNameAsString() + '(' + arguments + ')';
+    }
+
+    private String describeArguments(List<Expression> arguments) {
+        if (arguments == null || arguments.isEmpty()) {
+            return "";
+        }
+        List<String> parts = new java.util.ArrayList<>(arguments.size());
+        for (Expression argument : arguments) {
+            String text = argument == null ? "" : argument.toString();
+            if (text.length() > 40) {
+                text = text.substring(0, 37) + "...";
+            }
+            parts.add(text);
+        }
+        return String.join(", ", parts);
+    }
+
+    private String simpleName(String type) {
+        if (type == null) {
+            return "";
+        }
+        String trimmed = type.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        int genericStart = trimmed.indexOf('<');
+        if (genericStart >= 0) {
+            trimmed = trimmed.substring(0, genericStart);
+        }
+        int arrayIndex = trimmed.indexOf('[');
+        if (arrayIndex >= 0) {
+            trimmed = trimmed.substring(0, arrayIndex);
+        }
+        int lastDot = trimmed.lastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < trimmed.length()) {
+            return trimmed.substring(lastDot + 1);
+        }
+        return trimmed;
     }
 
     private void ensureMockUsageIsValid(String fullSource,
