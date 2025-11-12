@@ -3,7 +3,6 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
-import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AnalysisConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
@@ -99,6 +98,9 @@ public class Analyze {
         Map<String, String> verificationPolicy = analysisConfig.includeVerificationPolicy()
                 ? buildVerificationPolicy(filteredResult.invocations())
                 : Map.of();
+        if (plan.strategy() == MockStrategy.NONE) {
+            verificationPolicy = Map.of();
+        }
         String contextJson = analysisFormatter.format(filteredResult);
         TestTargetContext targetContext = extractTestTargetContext(classInfo, methodInfo);
         Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(filteredAnalysis.relevantClasses());
@@ -144,12 +146,15 @@ public class Analyze {
                 }
             }
         }
-        if (methodInfo != null && methodInfo.getDeclaration() != null) {
-            methodInfo.getDeclaration().getParameters().forEach(parameter -> {
-                String type = parameter.getType().asString();
-                variableTypes.putIfAbsent(parameter.getNameAsString(), type);
-                addRelevantType(relevantClasses, type);
-            });
+        if (methodInfo != null) {
+            if (methodInfo.getDeclaration() != null) {
+                methodInfo.getDeclaration().getParameters().forEach(parameter -> {
+                    String type = parameter.getType().asString();
+                    variableTypes.putIfAbsent(parameter.getNameAsString(), type);
+                    addRelevantType(relevantClasses, type);
+                });
+            }
+            addRelevantType(relevantClasses, methodInfo.getReturnType());
         }
         if (analysis != null) {
             analysis.staticUsages().forEach(usage -> addRelevantType(relevantClasses, usage));
@@ -252,58 +257,10 @@ public class Analyze {
             if (constructors == null || constructors.isEmpty()) {
                 continue;
             }
-            List<ConstructorMetadata> enriched = new ArrayList<>(constructors.size());
-            for (ConstructorMetadata metadata : constructors) {
-                if (metadata == null) {
-                    continue;
-                }
-                List<String> hints = deriveConstructorHints(metadata);
-                enriched.add(metadata.withHints(hints));
-            }
-            if (!enriched.isEmpty()) {
-                map.put(simple, List.copyOf(enriched));
-            }
+            map.put(simple, List.copyOf(constructors));
         }
         return map;
     }
-
-
-    private List<String> deriveConstructorHints(ConstructorMetadata metadata) {
-        if (metadata == null || metadata.parameters().isEmpty()) {
-            return List.of();
-        }
-        LinkedHashSet<String> hints = new LinkedHashSet<>();
-        for (ParameterMetadata parameter : metadata.parameters()) {
-            if (parameter == null) {
-                continue;
-            }
-            String hint = deriveParameterHint(parameter);
-            if (hint != null && !hint.isBlank()) {
-                hints.add(hint);
-            }
-        }
-        return List.copyOf(hints);
-    }
-
-    private String deriveParameterHint(ParameterMetadata parameter) {
-        String description = parameter.description();
-        if (description != null && !description.isBlank()) {
-            return parameter.name() + ": " + description.trim();
-        }
-        String name = defaultString(parameter.name());
-        String lowerName = name.toLowerCase(Locale.ROOT);
-        if (lowerName.contains("email")) {
-            return name + ": email address";
-        }
-        if (lowerName.contains("username") || lowerName.contains("login")) {
-            return name + ": unique user name";
-        }
-        if (isPrimitiveType(parameter.type())) {
-            return name + ": numeric or boolean parameter";
-        }
-        return null;
-    }
-
     private boolean isPrimitiveType(String type) {
         if (type == null) {
             return false;

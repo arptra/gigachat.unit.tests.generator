@@ -14,6 +14,8 @@ import com.gigachat.unit.tests.generator.dto.FailedMethodSnapshot;
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
 import com.gigachat.unit.tests.generator.dto.MockStrategy;
+import com.gigachat.unit.tests.generator.dto.ClassMetadata;
+import com.gigachat.unit.tests.generator.dto.FieldMetadata;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
@@ -41,8 +43,6 @@ import java.util.Set;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import com.github.javaparser.ParseProblemException;
 import com.github.javaparser.StaticJavaParser;
@@ -263,27 +263,37 @@ public class InitialGenerationStep {
             logger.warn("⚠️  LLM reimplemented method " + methodName + " inside test class. Marking generation as invalid.");
             throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
         }
-        ensureMethodAndConstructorUsageIsValid(fullSource, analysisSummary, classInfo);
+        CompilationUnit compilationUnit = parseCompilationUnit(fullSource);
+        if (compilationUnit == null) {
+            return;
+        }
+        Map<String, String> variableTypes = ensureMethodAndConstructorUsageIsValid(compilationUnit, analysisSummary, classInfo);
+        ensureNoInternalFieldAccess(compilationUnit, analysisSummary, classInfo, variableTypes);
         if (moduleConfig != null && moduleConfig.validateMockUsage()) {
             ensureMockUsageIsValid(fullSource, analysisSummary, classInfo);
         }
     }
 
-    private void ensureMethodAndConstructorUsageIsValid(String source,
-                                                        Analyze.AnalysisSummary analysisSummary,
-                                                        TestClassInfo classInfo) {
+    private CompilationUnit parseCompilationUnit(String source) {
         if (source == null || source.isBlank()) {
-            return;
+            return null;
         }
-        CompilationUnit compilationUnit;
         try {
-            compilationUnit = StaticJavaParser.parse(source);
+            return StaticJavaParser.parse(source);
         } catch (ParseProblemException exception) {
             logger.warn("Unable to parse generated source for API validation: " + exception.getMessage());
-            return;
+            return null;
+        }
+    }
+
+    private Map<String, String> ensureMethodAndConstructorUsageIsValid(CompilationUnit compilationUnit,
+                                                                       Analyze.AnalysisSummary analysisSummary,
+                                                                       TestClassInfo classInfo) {
+        if (compilationUnit == null) {
+            return Map.of();
         }
         Map<String, String> variableTypes = collectVariableTypes(compilationUnit, analysisSummary, classInfo);
-        Set<String> inventedApis = new LinkedHashSet<>();
+        LinkedHashSet<String> issues = new LinkedHashSet<>();
         compilationUnit.findAll(ObjectCreationExpr.class).forEach(expr -> {
             String type = simpleName(expr.getType().asString());
             if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
@@ -294,7 +304,7 @@ public class InitialGenerationStep {
                 if (signatureRegistry.hasConstructorWithArgCount(type, argumentCount)) {
                     logger.warn("[LLM hint mismatch] " + type + " has constructor with " + argumentCount + " args; updating prompt data.");
                 }
-                inventedApis.add(formatConstructorInvocation(type, expr));
+                issues.add("E101: undefined constructor " + formatConstructorInvocation(type, expr));
             }
         });
         compilationUnit.findAll(MethodCallExpr.class).forEach(expr -> {
@@ -308,13 +318,48 @@ public class InitialGenerationStep {
                 return;
             }
             if (!signatureRegistry.methodExists(simple, expr.getNameAsString(), expr.getArguments().size())) {
-                inventedApis.add(formatMethodInvocation(simple, expr));
+                issues.add("E102: undefined method " + formatMethodInvocation(simple, expr));
             }
         });
-        if (!inventedApis.isEmpty()) {
-            String message = String.join(", ", inventedApis);
-            logger.warn("⚠️  LLM invented undefined API: " + message);
-            throw new InvalidLLMResponseException("LLM invented undefined API: " + message);
+        if (!issues.isEmpty()) {
+            String message = String.join("; ", issues);
+            logger.warn("⚠️  " + message);
+            throw new InvalidLLMResponseException(message);
+        }
+        return variableTypes;
+    }
+
+    private void ensureNoInternalFieldAccess(CompilationUnit compilationUnit,
+                                             Analyze.AnalysisSummary analysisSummary,
+                                             TestClassInfo classInfo,
+                                             Map<String, String> variableTypes) {
+        if (compilationUnit == null || classInfo == null) {
+            return;
+        }
+        ClassMetadata classMetadata = classInfo.getClassMetadata();
+        Map<String, FieldMetadata> fields = new LinkedHashMap<>();
+        if (classMetadata != null) {
+            for (FieldMetadata field : classMetadata.getFields()) {
+                fields.putIfAbsent(field.getName(), field);
+            }
+        }
+        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
+        LinkedHashSet<String> violations = new LinkedHashSet<>();
+        compilationUnit.findAll(FieldAccessExpr.class).forEach(expr -> {
+            if (!isTestTargetScope(expr.getScope(), targetContext, classInfo, variableTypes)) {
+                return;
+            }
+            String fieldName = expr.getNameAsString();
+            FieldMetadata fieldMetadata = fields.get(fieldName);
+            boolean inaccessible = fieldMetadata == null || fieldMetadata.isPrivate();
+            if (inaccessible) {
+                violations.add(expr.toString());
+            }
+        });
+        if (!violations.isEmpty()) {
+            String message = "E103: internal field access " + String.join(", ", violations);
+            logger.warn("⚠️  " + message);
+            throw new InvalidLLMResponseException(message);
         }
     }
 
@@ -436,27 +481,41 @@ public class InitialGenerationStep {
                     .map(field -> field.getTypeName() + " " + field.getName())
                     .orElse(null);
             if (collaboratorField != null) {
-                logger.warn("⚠️  LLM introduced Mockito usage despite NONE strategy. External collaborator field detected: "
-                        + collaboratorField + ". Marking generation as invalid.");
+                logger.warn("⚠️  E104: unexpected Mockito usage when mocks are disabled. External collaborator field detected: "
+                        + collaboratorField + '.');
             } else {
-                logger.warn("⚠️  LLM introduced Mockito usage despite NONE strategy. Marking generation as invalid.");
+                logger.warn("⚠️  E104: unexpected Mockito usage when mocks are disabled.");
             }
-            throw new InvalidLLMResponseException("LLM returned Mockito usage when mocks should be disabled.");
+            throw new InvalidLLMResponseException("E104: unexpected Mockito usage when mocks are disabled.");
         }
-        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
-        if (targetContext == null) {
-            return;
+    }
+
+    private boolean isTestTargetScope(Expression scope,
+                                      Analyze.TestTargetContext targetContext,
+                                      TestClassInfo classInfo,
+                                      Map<String, String> variableTypes) {
+        if (scope instanceof ThisExpr) {
+            return true;
         }
-        String instanceName = targetContext.instanceName();
-        if (instanceName == null || instanceName.isBlank()) {
-            return;
+        if (scope instanceof NameExpr nameExpr) {
+            String identifier = nameExpr.getNameAsString();
+            if (targetContext != null && identifier.equals(targetContext.instanceName())) {
+                return true;
+            }
+            if (classInfo != null && simpleName(classInfo.getClassName()).equals(identifier)) {
+                return true;
+            }
+            if (variableTypes != null) {
+                String type = variableTypes.get(identifier);
+                if (type != null && classInfo != null && simpleName(type).equals(simpleName(classInfo.getClassName()))) {
+                    return true;
+                }
+            }
         }
-        Pattern privateFieldPattern = Pattern.compile("\\b" + Pattern.quote(instanceName) + "\\.\\s*[A-Za-z_][A-Za-z0-9_]*\\b(?!\\s*\\()", Pattern.MULTILINE);
-        Matcher matcher = privateFieldPattern.matcher(fullSource);
-        if (matcher.find()) {
-            logger.warn("⚠️  LLM accessed private/internal field '" + matcher.group() + "'. Marking generation as invalid.");
-            throw new InvalidLLMResponseException("LLM accessed private field of tested class.");
+        if (scope instanceof FieldAccessExpr fieldAccessExpr) {
+            return isTestTargetScope(fieldAccessExpr.getScope(), targetContext, classInfo, variableTypes);
         }
+        return false;
     }
 
     private boolean containsMockito(String source) {

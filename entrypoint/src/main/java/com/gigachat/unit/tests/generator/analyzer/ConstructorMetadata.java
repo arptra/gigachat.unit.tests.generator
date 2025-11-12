@@ -3,22 +3,15 @@ package com.gigachat.unit.tests.generator.analyzer;
 import java.util.List;
 
 /**
- * Detailed representation of a constructor discovered within the project, including parameters and hints
- * that can be surfaced to the LLM prompt.
+ * Detailed representation of a constructor discovered within the project, including its signature and
+ * parameter metadata. The structure is intentionally minimal so it serialises cleanly into the prompt JSON
+ * consumed by the LLM.
  */
-public record ConstructorMetadata(String signature,
-                                  List<ParameterMetadata> parameters,
-                                  List<String> hints) {
+public record ConstructorMetadata(String signature, List<ParameterMetadata> parameters) {
 
     public ConstructorMetadata {
         signature = normaliseSignature(signature);
         parameters = parameters == null ? List.of() : List.copyOf(parameters);
-        hints = hints == null ? List.of() : List.copyOf(hints);
-    }
-
-    public ConstructorMetadata withHints(List<String> newHints) {
-        List<String> hintsCopy = newHints == null ? List.of() : List.copyOf(newHints);
-        return new ConstructorMetadata(signature, parameters, hintsCopy);
     }
 
     private static String normaliseSignature(String signature) {

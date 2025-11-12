@@ -6,6 +6,7 @@ import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.PromptConfig;
 import com.gigachat.unit.tests.generator.config.PromptMode;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
+import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.MockTarget;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
@@ -60,6 +61,11 @@ public class PromptBuilder {
         InstructionComposerStrategy strategy = composerFactory.select(promptConfig.mode(), context);
         Map<String, Object> instructions = strategy.compose(context);
 
+        MockPlan mockPlan = summary.mockPlan();
+        if (mockPlan != null && mockPlan.strategy() == MockStrategy.NONE) {
+            instructions.remove("verificationPolicy");
+        }
+
         LinkedHashMap<String, Object> root = new LinkedHashMap<>();
         String goal = resolveGoal(promptConfig.mode(), context);
         if (!goal.isBlank()) {
@@ -96,8 +102,8 @@ public class PromptBuilder {
         if (!summary.invalidCalls().isEmpty()) {
             root.put("invalidCalls", summary.invalidCalls());
         }
-        if (summary.mockPlan() != null) {
-            Map<String, Object> planBlock = buildMockPlan(summary.mockPlan());
+        if (mockPlan != null) {
+            Map<String, Object> planBlock = buildMockPlan(mockPlan);
             if (!planBlock.isEmpty()) {
                 root.put("mockPlan", planBlock);
             }
@@ -126,8 +132,14 @@ public class PromptBuilder {
         String lineSeparator = System.lineSeparator();
         StringBuilder builder = new StringBuilder();
         builder.append(header).append(lineSeparator).append(lineSeparator);
+        JSONObject instructionsBlock = contextJson.optJSONObject("instructions");
+        JSONObject mockPlanBlock = contextJson.optJSONObject("mockPlan");
+        String strategy = mockPlanBlock == null ? "" : mockPlanBlock.optString("strategy", "");
+        boolean mocksAllowed = !"NONE".equalsIgnoreCase(strategy);
+        boolean hasVerificationPolicy = instructionsBlock != null && instructionsBlock.has("verificationPolicy");
+
         builder.append("Your task:").append(lineSeparator);
-        builder.append("- Generate a JUnit 5 test class using Mockito based on the following structured JSON context.").append(lineSeparator);
+        builder.append("- Generate a JUnit 5 test class based on the following structured JSON context.").append(lineSeparator);
         builder.append("- Follow the \"goal\" and \"instructions\" fields to guide the behavior and structure.").append(lineSeparator);
         builder.append("- The \"methodSignature\" field describes the method that must be tested, NOT re-implemented.").append(lineSeparator);
         builder.append("- Do NOT include the original method implementation inside the test class.").append(lineSeparator);
@@ -136,20 +148,23 @@ public class PromptBuilder {
         builder.append("- Use only constructors listed in \"availableConstructors\".").append(lineSeparator);
         builder.append("- Follow each parameter type and count exactly.").append(lineSeparator);
         builder.append("- Do not invent or simplify constructor arguments.").append(lineSeparator);
+        builder.append("- Use only methods listed in \"availableMethods\".").append(lineSeparator);
         builder.append("- When mocking or instantiating objects, use only constructors and methods provided in the JSON context.").append(lineSeparator);
-        builder.append("- Determine mock usage automatically based on dependencies.").append(lineSeparator);
-        builder.append("- Do not mock private or internal data structures of the tested class.").append(lineSeparator);
-        builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);
-        builder.append("- Mockito should only be used for external or collaborative dependencies.").append(lineSeparator);
-        builder.append("- If the tested method has no external dependencies, use real objects and assert state changes.").append(lineSeparator);
-        if (contextJson.optBoolean("hasExternalCollaborators", false)) {
+        builder.append("- If you must create an object, use a constructor from \"availableConstructors\"; if none fit, skip that instance.").append(lineSeparator);
+        if (mocksAllowed) {
             builder.append("- Use Mockito to mock external dependencies listed in the mock plan.").append(lineSeparator);
+            builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);
+            builder.append("- Do not mock private or internal data structures of the tested class.").append(lineSeparator);
+            builder.append("- Mock dependencies listed in \"shouldMock\".").append(lineSeparator);
+            builder.append("- Keep real objects listed in \"shouldNotMock\".").append(lineSeparator);
+            if (hasVerificationPolicy) {
+                builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);
+            }
+            builder.append("- Mockito should only be used for external or collaborative dependencies.").append(lineSeparator);
         } else {
             builder.append("- Do not use Mockito. Use only JUnit 5 and real objects.").append(lineSeparator);
+            builder.append("- Focus on asserting observable behaviour through the class's public API.").append(lineSeparator);
         }
-        builder.append("- Mock dependencies listed in \"shouldMock\".").append(lineSeparator);
-        builder.append("- Keep real objects listed in \"shouldNotMock\".").append(lineSeparator);
-        builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);
         builder.append("- Add assertions for return values or side effects.").append(lineSeparator);
         builder.append("- Respect the naming convention from \"instructions.namingConvention\".").append(lineSeparator);
         builder.append("- Use standard Java indentation and line breaks.").append(lineSeparator);
@@ -204,9 +219,6 @@ public class PromptBuilder {
                         if (parameter.type() != null && !parameter.type().isBlank()) {
                             parameterBlock.put("type", parameter.type());
                         }
-                        if (parameter.description() != null) {
-                            parameterBlock.put("description", parameter.description());
-                        }
                         if (!parameterBlock.isEmpty()) {
                             parameters.add(parameterBlock);
                         }
@@ -214,9 +226,6 @@ public class PromptBuilder {
                     if (!parameters.isEmpty()) {
                         descriptor.put("parameters", parameters);
                     }
-                }
-                if (metadata.hints() != null && !metadata.hints().isEmpty()) {
-                    descriptor.put("hints", metadata.hints());
                 }
                 constructorArray.add(descriptor);
             }

@@ -36,7 +36,7 @@ public class MethodSignatureRegistry {
     }
 
     public void registerConstructor(String className, String signature) {
-        registerConstructor(className, new ConstructorMetadata(signature, List.of(), List.of()));
+        registerConstructor(className, new ConstructorMetadata(signature, List.of()));
     }
 
     public void registerConstructor(String className, ConstructorMetadata metadata) {
@@ -126,9 +126,9 @@ public class MethodSignatureRegistry {
 
     private ConstructorMetadata normaliseMetadata(ConstructorMetadata metadata) {
         if (metadata == null) {
-            return new ConstructorMetadata("", List.of(), List.of());
+            return new ConstructorMetadata("", List.of());
         }
-        return new ConstructorMetadata(metadata.signature(), metadata.parameters(), metadata.hints());
+        return new ConstructorMetadata(metadata.signature(), metadata.parameters());
     }
 
     private String extractMethodName(String signature) {
@@ -136,7 +136,12 @@ public class MethodSignatureRegistry {
         if (parenIndex <= 0) {
             return "";
         }
-        return signature.substring(0, parenIndex).trim();
+        String before = signature.substring(0, parenIndex).trim();
+        int lastSpace = before.lastIndexOf(' ');
+        if (lastSpace >= 0 && lastSpace + 1 < before.length()) {
+            return before.substring(lastSpace + 1);
+        }
+        return before;
     }
 
     private int extractArity(String signature) {

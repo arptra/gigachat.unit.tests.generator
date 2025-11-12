@@ -20,7 +20,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MockStrategyIntegrationTest {
     private Path projectRoot;
@@ -61,6 +62,8 @@ class MockStrategyIntegrationTest {
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeleton, summary);
         JSONObject context = new JSONObject(promptJson);
         assertEquals("MOCKITO", context.getJSONObject("mockPlan").getString("strategy"));
+        String llmPrompt = promptBuilder.buildPromptForLLM(context, config.getPromptConfig());
+        assertTrue(llmPrompt.contains("Use Mockito to mock external dependencies"));
     }
 
     @Test
@@ -86,6 +89,10 @@ class MockStrategyIntegrationTest {
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeleton, summary);
         JSONObject context = new JSONObject(promptJson);
         assertEquals("NONE", context.getJSONObject("mockPlan").getString("strategy"));
-        assertNotNull(context);
+        JSONObject instructions = context.getJSONObject("instructions");
+        assertFalse(instructions.has("verificationPolicy"));
+        String llmPrompt = promptBuilder.buildPromptForLLM(context, config.getPromptConfig());
+        assertTrue(llmPrompt.contains("Do not use Mockito. Use only JUnit 5 and real objects."));
+        assertFalse(llmPrompt.contains("Mockito.verify"));
     }
 }

@@ -7,8 +7,6 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
-import com.github.javaparser.javadoc.Javadoc;
-import com.github.javaparser.javadoc.JavadocBlockTag;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
@@ -22,10 +20,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -165,68 +161,29 @@ public class JavaProjectScanner {
 
     private void registerConstructors(String className, List<ConstructorDeclaration> constructors) {
         if (constructors == null || constructors.isEmpty()) {
-            ConstructorMetadata metadata = new ConstructorMetadata(className + "()", List.of(), List.of());
+            ConstructorMetadata metadata = new ConstructorMetadata(className + "()", List.of());
             methodRegistry.registerConstructor(className, metadata);
             return;
         }
         for (ConstructorDeclaration constructor : constructors) {
+            if (constructor == null || !constructor.isPublic()) {
+                continue;
+            }
             String signature = buildConstructorSignature(className, constructor);
-            Map<String, String> parameterDocs = extractParameterDescriptions(constructor);
             List<ParameterMetadata> parameters = new ArrayList<>();
             NodeList<Parameter> constructorParameters = constructor.getParameters();
             for (Parameter parameter : constructorParameters) {
                 String name = parameter.getNameAsString();
                 String type = parameter.getType().asString();
-                String description = parameterDocs.getOrDefault(name, null);
-                parameters.add(new ParameterMetadata(name, type, description));
+                parameters.add(new ParameterMetadata(name, type));
             }
-            ConstructorMetadata metadata = new ConstructorMetadata(signature, parameters, List.of());
+            ConstructorMetadata metadata = new ConstructorMetadata(signature, parameters);
             methodRegistry.registerConstructor(className, metadata);
         }
     }
 
-    private Map<String, String> extractParameterDescriptions(ConstructorDeclaration constructor) {
-        if (constructor == null) {
-            return Map.of();
-        }
-        return constructor.getJavadoc()
-                .map(this::extractParameterDescriptions)
-                .orElseGet(Map::of);
-    }
-
-    private Map<String, String> extractParameterDescriptions(Javadoc javadoc) {
-        Map<String, String> descriptions = new HashMap<>();
-        for (JavadocBlockTag tag : javadoc.getBlockTags()) {
-            if (tag.getType() == JavadocBlockTag.Type.PARAM && tag.getName().isPresent()) {
-                String name = tag.getName().get();
-                String text = tag.getContent().toText().trim();
-                if (!text.isEmpty()) {
-                    descriptions.put(name, text);
-                }
-            }
-        }
-        return descriptions;
-    }
-
     private String buildConstructorSignature(String className, ConstructorDeclaration constructor) {
-        String modifiers = resolveConstructorModifiers(constructor);
-        return (modifiers + className + formatParameters(constructor.getParameters())).trim();
-    }
-
-    private String resolveConstructorModifiers(ConstructorDeclaration constructor) {
-        if (constructor == null) {
-            return "";
-        }
-        if (constructor.isPublic()) {
-            return "public ";
-        }
-        if (constructor.isProtected()) {
-            return "protected ";
-        }
-        if (constructor.isPrivate()) {
-            return "private ";
-        }
-        return "";
+        return (className + formatParameters(constructor == null ? new NodeList<>() : constructor.getParameters())).trim();
     }
 
     private void registerMethods(String className, List<MethodDeclaration> methods) {
@@ -234,10 +191,11 @@ public class JavaProjectScanner {
             return;
         }
         for (MethodDeclaration method : methods) {
-            if (method.isPrivate()) {
+            if (method.isPrivate() || !method.isPublic() || method.isStatic()) {
                 continue;
             }
-            String signature = method.getNameAsString() + formatParameters(method.getParameters());
+            String signature = method.getType().asString() + " "
+                    + method.getNameAsString() + formatParameters(method.getParameters());
             methodRegistry.registerMethod(className, signature);
         }
     }
