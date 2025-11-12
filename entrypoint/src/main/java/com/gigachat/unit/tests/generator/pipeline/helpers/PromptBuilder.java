@@ -66,6 +66,10 @@ public class PromptBuilder {
         if (!instructions.isEmpty()) {
             root.put("instructions", instructions);
         }
+        Map<String, Object> mockPolicy = buildMockPolicyBlock();
+        if (!mockPolicy.isEmpty()) {
+            root.put("mockPolicy", mockPolicy);
+        }
         if (skeletonJson != null && !skeletonJson.isBlank()) {
             root.put("methodContext", PromptJsonRenderer.raw(skeletonJson));
         }
@@ -117,6 +121,11 @@ public class PromptBuilder {
         builder.append("- Do NOT include the original method implementation inside the test class.").append(lineSeparator);
         builder.append("- Always invoke the tested method on the instance of the class under test (for example: repository.save(user)).").append(lineSeparator);
         builder.append("- Use the \"testTarget.instanceName\" as the variable name for the tested object.").append(lineSeparator);
+        builder.append("- Determine mock usage automatically based on dependencies.").append(lineSeparator);
+        builder.append("- Do not mock private or internal data structures of the tested class.").append(lineSeparator);
+        builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);
+        builder.append("- Mockito should only be used for external or collaborative dependencies.").append(lineSeparator);
+        builder.append("- If the tested method has no external dependencies, use real objects and assert state changes.").append(lineSeparator);
         builder.append("- Mock dependencies listed in \"shouldMock\".").append(lineSeparator);
         builder.append("- Keep real objects listed in \"shouldNotMock\".").append(lineSeparator);
         builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);
@@ -166,6 +175,14 @@ public class PromptBuilder {
         if (!plan.shouldNotMock().isEmpty()) {
             block.put("shouldNotMock", plan.shouldNotMock());
         }
+        return block;
+    }
+
+    private Map<String, Object> buildMockPolicyBlock() {
+        LinkedHashMap<String, Object> block = new LinkedHashMap<>();
+        block.put("internalFieldsAreInaccessible", true);
+        block.put("mockInternalStructures", false);
+        block.put("mockOnlyExternalDependencies", true);
         return block;
     }
 

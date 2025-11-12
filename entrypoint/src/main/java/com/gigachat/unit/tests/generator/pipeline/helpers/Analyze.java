@@ -2,6 +2,7 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AnalysisConfig;
+import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
@@ -49,8 +50,14 @@ public class Analyze {
 
     public AnalysisSummary analyze(AgentConfig config, TestClassInfo classInfo, TestMethodInfo methodInfo) {
         AnalysisConfig analysisConfig = config == null ? AnalysisConfig.from(Map.of()) : config.getAnalysisConfig();
-        MethodAnalysisResult result = methodAnalyzer.analyze(methodInfo, config);
-        MockPlan plan = mockStrategyResolver.createPlan(result, analysisConfig);
+        PipelineModuleConfig pipelineConfig = config == null
+                ? PipelineModuleConfig.from(Map.of())
+                : config.getPipelineModuleConfig();
+        MethodAnalysisResult result = methodAnalyzer.analyze(classInfo, methodInfo, config, pipelineConfig);
+        MockPlan plan = mockStrategyResolver.createPlan(result,
+                analysisConfig,
+                pipelineConfig.autoMockDetectionEnabled(),
+                pipelineConfig.excludeInternalCollections());
         Map<String, String> verificationPolicy = analysisConfig.includeVerificationPolicy()
                 ? buildVerificationPolicy(result.invocations())
                 : Map.of();

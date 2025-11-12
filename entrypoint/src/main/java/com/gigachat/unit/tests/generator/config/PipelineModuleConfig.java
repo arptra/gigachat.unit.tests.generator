@@ -9,12 +9,18 @@ import java.util.Map;
 public record PipelineModuleConfig(ParallelMode parallelMode,
                                    boolean compileEnabled,
                                    boolean executeEnabled,
-                                   boolean snapshotsEnabled) {
+                                   boolean snapshotsEnabled,
+                                   boolean autoMockDetectionEnabled,
+                                   boolean validateMockUsage,
+                                   boolean excludeInternalCollections) {
 
     private static final String KEY_PARALLEL_MODE = "pipeline.parallelMode";
     private static final String KEY_COMPILE_ENABLED = "pipeline.compile.enabled";
     private static final String KEY_EXECUTE_ENABLED = "pipeline.execute.enabled";
     private static final String KEY_SNAPSHOTS_ENABLED = "pipeline.snapshots.enabled";
+    private static final String KEY_AUTO_MOCK_DETECTION = "pipeline.autoMockDetectionEnabled";
+    private static final String KEY_VALIDATE_MOCK_USAGE = "pipeline.validateMockUsage";
+    private static final String KEY_EXCLUDE_INTERNAL_COLLECTIONS = "pipeline.excludeInternalCollections";
 
     public static PipelineModuleConfig from(Map<String, Object> options) {
         if (options == null || options.isEmpty()) {
@@ -24,7 +30,16 @@ public record PipelineModuleConfig(ParallelMode parallelMode,
         boolean compileEnabled = parseBoolean(options.get(KEY_COMPILE_ENABLED), true);
         boolean executeEnabled = parseBoolean(options.get(KEY_EXECUTE_ENABLED), true);
         boolean snapshotsEnabled = parseBoolean(options.get(KEY_SNAPSHOTS_ENABLED), true);
-        return new PipelineModuleConfig(mode, compileEnabled, executeEnabled, snapshotsEnabled);
+        boolean autoMockDetection = parseBoolean(options.get(KEY_AUTO_MOCK_DETECTION), true);
+        boolean validateMockUsage = parseBoolean(options.get(KEY_VALIDATE_MOCK_USAGE), true);
+        boolean excludeInternalCollections = parseBoolean(options.get(KEY_EXCLUDE_INTERNAL_COLLECTIONS), true);
+        return new PipelineModuleConfig(mode,
+                compileEnabled,
+                executeEnabled,
+                snapshotsEnabled,
+                autoMockDetection,
+                validateMockUsage,
+                excludeInternalCollections);
     }
 
     private static ParallelMode parseMode(Object raw) {
@@ -51,6 +66,12 @@ public record PipelineModuleConfig(ParallelMode parallelMode,
     }
 
     private static PipelineModuleConfig defaults() {
-        return new PipelineModuleConfig(ParallelMode.NONE, true, true, true);
+        return new PipelineModuleConfig(ParallelMode.NONE,
+                true,
+                true,
+                true,
+                true,
+                true,
+                true);
     }
 }

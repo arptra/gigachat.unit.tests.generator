@@ -51,6 +51,13 @@ public class MockStrategyResolver {
     }
 
     public MockPlan createPlan(MethodAnalysisResult analysis, AnalysisConfig config) {
+        return createPlan(analysis, config, true, true);
+    }
+
+    public MockPlan createPlan(MethodAnalysisResult analysis,
+                               AnalysisConfig config,
+                               boolean autoMockDetectionEnabled,
+                               boolean excludeInternalStructures) {
         AnalysisConfig effectiveConfig = config == null ? AnalysisConfig.from(Map.of()) : config;
         FilterPolicy filterPolicy = new FilterPolicy(effectiveConfig);
         Map<String, MockTarget> targets = new LinkedHashMap<>();
@@ -62,10 +69,23 @@ public class MockStrategyResolver {
         boolean hasStaticMocks = false;
         boolean hasConstructorOnly = true;
         boolean hasUnknown = false;
+        boolean hasExternalDependency = false;
 
         for (DependencyInfo dependency : analysis.dependencies()) {
             MockType type = dependency.mockType();
             String dependencyKey = dependency.className() + "#" + dependency.variableName();
+            boolean skipInternal = excludeInternalStructures && dependency.internalStructure();
+            if (skipInternal) {
+                shouldNotMock.add(formatDependencyName(dependency));
+                continue;
+            }
+            if (dependency.externalDependency()) {
+                hasExternalDependency = true;
+            }
+            if (autoMockDetectionEnabled && !dependency.externalDependency()) {
+                shouldNotMock.add(formatDependencyName(dependency));
+                continue;
+            }
             switch (type) {
                 case CONSTRUCTOR -> {
                     hasConstructorOnly &= true;
@@ -120,6 +140,10 @@ public class MockStrategyResolver {
             }
         }
 
+        if (!hasExternalDependency && !analysis.staticUsages().isEmpty()) {
+            hasExternalDependency = true;
+        }
+
         MockStrategy strategy = determineStrategy(hasStaticMocks,
                 hasChainMocks,
                 hasFieldMocks,
@@ -127,6 +151,10 @@ public class MockStrategyResolver {
                 hasConstructorOnly,
                 !shouldMock.isEmpty(),
                 !analysis.staticUsages().isEmpty());
+
+        if (!hasExternalDependency) {
+            strategy = MockStrategy.NONE;
+        }
 
         return new MockPlan(List.copyOf(targets.values()),
                 strategy,

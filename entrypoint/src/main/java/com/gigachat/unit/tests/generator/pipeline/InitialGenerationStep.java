@@ -11,6 +11,7 @@ import com.gigachat.unit.tests.generator.dto.ExecuteErrors;
 import com.gigachat.unit.tests.generator.dto.FailedMethodSnapshot;
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
+import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
@@ -32,6 +33,9 @@ import java.util.Objects;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Executes the first seven stages of the generation pipeline for each discovered method.
@@ -124,7 +128,7 @@ public class InitialGenerationStep {
         GeneratedTestSnippet snippet;
         try {
             snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
-            validateGeneratedSnippet(snippet, methodInfo, analysisSummary);
+            validateGeneratedSnippet(snippet, methodInfo, analysisSummary, moduleConfig);
         } catch (InvalidLLMResponseException exception) {
             logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
             return;
@@ -207,7 +211,8 @@ public class InitialGenerationStep {
 
     private void validateGeneratedSnippet(GeneratedTestSnippet snippet,
                                           TestMethodInfo methodInfo,
-                                          Analyze.AnalysisSummary analysisSummary) {
+                                          Analyze.AnalysisSummary analysisSummary,
+                                          PipelineModuleConfig moduleConfig) {
         if (snippet == null || methodInfo == null) {
             return;
         }
@@ -226,5 +231,42 @@ public class InitialGenerationStep {
             logger.warn("⚠️  LLM reimplemented method " + methodName + " inside test class. Marking generation as invalid.");
             throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
         }
+        if (moduleConfig != null && moduleConfig.validateMockUsage()) {
+            ensureMockUsageIsValid(fullSource, analysisSummary);
+        }
+    }
+
+    private void ensureMockUsageIsValid(String fullSource, Analyze.AnalysisSummary analysisSummary) {
+        MockPlan plan = analysisSummary.mockPlan();
+        if (plan != null && plan.strategy() == MockStrategy.NONE && containsMockito(fullSource)) {
+            logger.warn("⚠️  LLM introduced Mockito usage despite NONE strategy. Marking generation as invalid.");
+            throw new InvalidLLMResponseException("LLM returned Mockito usage when mocks should be disabled.");
+        }
+        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
+        if (targetContext == null) {
+            return;
+        }
+        String instanceName = targetContext.instanceName();
+        if (instanceName == null || instanceName.isBlank()) {
+            return;
+        }
+        Pattern privateFieldPattern = Pattern.compile("\\b" + Pattern.quote(instanceName) + "\\.\\s*[A-Za-z_][A-Za-z0-9_]*\\b(?!\\s*\\()", Pattern.MULTILINE);
+        Matcher matcher = privateFieldPattern.matcher(fullSource);
+        if (matcher.find()) {
+            logger.warn("⚠️  LLM accessed private/internal field '" + matcher.group() + "'. Marking generation as invalid.");
+            throw new InvalidLLMResponseException("LLM accessed private field of tested class.");
+        }
+    }
+
+    private boolean containsMockito(String source) {
+        if (source == null || source.isBlank()) {
+            return false;
+        }
+        if (source.contains("Mockito")) {
+            return true;
+        }
+        return source.contains("org.mockito")
+                || source.contains("import static org.mockito")
+                || source.contains("@Mock");
     }
 }
