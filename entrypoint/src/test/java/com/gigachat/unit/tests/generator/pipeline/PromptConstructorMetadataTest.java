@@ -67,6 +67,7 @@ class PromptConstructorMetadataTest {
         assertTrue(promptJson.contains("\"email\""));
         assertTrue(promptJson.contains("\"availableMethods\""));
         assertTrue(promptJson.contains("\"UserRepository\""));
+        assertTrue(promptJson.contains("\"User\""));
         assertTrue(promptJson.contains("\"constructorPolicy\""));
         assertFalse(promptJson.contains("\"internalFields\""));
     }

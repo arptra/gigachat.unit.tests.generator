@@ -286,7 +286,7 @@ public class InitialGenerationStep {
                 + (retryAttempt ? " [retry]" : ""));
         GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
         snippet = autoCorrectionStage.apply(snippet);
-        validateGeneratedSnippet(classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
+        validateGeneratedSnippet(config, classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
         return snippet;
     }
 
@@ -343,7 +343,8 @@ public class InitialGenerationStep {
         logger.info("Reverted generated method from " + file);
     }
 
-    private void validateGeneratedSnippet(TestClassInfo classInfo,
+    private void validateGeneratedSnippet(AgentConfig config,
+                                          TestClassInfo classInfo,
                                           GeneratedTestSnippet snippet,
                                           TestMethodInfo methodInfo,
                                           Analyze.AnalysisSummary analysisSummary,
@@ -370,7 +371,11 @@ public class InitialGenerationStep {
         if (compilationUnit == null) {
             return;
         }
-        Map<String, String> variableTypes = ensureMethodAndConstructorUsageIsValid(compilationUnit, analysisSummary, classInfo);
+        Map<String, String> variableTypes = ensureMethodAndConstructorUsageIsValid(config,
+                compilationUnit,
+                analysisSummary,
+                classInfo,
+                methodInfo);
         ensureNoInternalFieldAccess(fullSource, analysisSummary);
         if (moduleConfig != null && moduleConfig.validateMockUsage()) {
             ensureMockUsageIsValid(fullSource, analysisSummary, classInfo);
@@ -389,15 +394,18 @@ public class InitialGenerationStep {
         }
     }
 
-    private Map<String, String> ensureMethodAndConstructorUsageIsValid(CompilationUnit compilationUnit,
+    private Map<String, String> ensureMethodAndConstructorUsageIsValid(AgentConfig config,
+                                                                       CompilationUnit compilationUnit,
                                                                        Analyze.AnalysisSummary analysisSummary,
-                                                                       TestClassInfo classInfo) {
+                                                                       TestClassInfo classInfo,
+                                                                       TestMethodInfo methodInfo) {
         if (compilationUnit == null) {
             return Map.of();
         }
         Map<String, String> variableTypes = collectVariableTypes(compilationUnit, analysisSummary, classInfo);
         LinkedHashSet<String> issues = new LinkedHashSet<>();
         LinkedHashSet<String> missingConstructorMetadata = new LinkedHashSet<>();
+        Set<String> signatureTypes = collectMethodSignatureTypeNames(methodInfo);
         compilationUnit.findAll(ObjectCreationExpr.class).forEach(expr -> {
             String type = simpleName(expr.getType().asString());
             if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
@@ -406,6 +414,13 @@ public class InitialGenerationStep {
             int argumentCount = expr.getArguments().size();
             List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(type);
             if (constructors.isEmpty() || !signatureRegistry.constructorExists(type, argumentCount)) {
+                if (signatureTypes.contains(type)) {
+                    attemptConstructorRefresh(config, classInfo, methodInfo, type);
+                    constructors = signatureRegistry.getConstructorsForClass(type);
+                    if (!constructors.isEmpty() && signatureRegistry.constructorExists(type, argumentCount)) {
+                        return;
+                    }
+                }
                 missingConstructorMetadata.add(type);
                 issues.add("E104: Missing constructor metadata for " + formatConstructorInvocation(type, expr));
             }
@@ -433,6 +448,70 @@ public class InitialGenerationStep {
             throw new InvalidLLMResponseException(message);
         }
         return variableTypes;
+    }
+
+    private Set<String> collectMethodSignatureTypeNames(TestMethodInfo methodInfo) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        if (methodInfo == null) {
+            return names;
+        }
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration != null) {
+            declaration.getParameters().forEach(parameter ->
+                    extractTypeNames(parameter.getType(), names));
+            extractTypeNames(declaration.getType(), names);
+        } else {
+            String returnType = methodInfo.getReturnType();
+            if (returnType != null && !returnType.isBlank()) {
+                names.add(simpleName(returnType));
+            }
+        }
+        return names;
+    }
+
+    private void extractTypeNames(com.github.javaparser.ast.type.Type type, Set<String> collector) {
+        if (type == null || collector == null) {
+            return;
+        }
+        if (type.isPrimitiveType()) {
+            return;
+        }
+        if (type.isArrayType()) {
+            extractTypeNames(type.asArrayType().getComponentType(), collector);
+            return;
+        }
+        if (type.isUnionType()) {
+            type.asUnionType().getElements().forEach(element -> extractTypeNames(element, collector));
+            return;
+        }
+        if (type.isIntersectionType()) {
+            type.asIntersectionType().getElements().forEach(element -> extractTypeNames(element, collector));
+            return;
+        }
+        if (type.isWildcardType()) {
+            type.asWildcardType().getExtendedType().ifPresent(t -> extractTypeNames(t, collector));
+            type.asWildcardType().getSuperType().ifPresent(t -> extractTypeNames(t, collector));
+            return;
+        }
+        if (type.isClassOrInterfaceType()) {
+            collector.add(simpleName(type.asClassOrInterfaceType().getNameWithScope()));
+            type.asClassOrInterfaceType().getTypeArguments()
+                    .ifPresent(arguments -> arguments.forEach(argument -> extractTypeNames(argument, collector)));
+            return;
+        }
+        collector.add(simpleName(type.asString()));
+    }
+
+    private void attemptConstructorRefresh(AgentConfig config,
+                                           TestClassInfo classInfo,
+                                           TestMethodInfo methodInfo,
+                                           String type) {
+        if (config == null || analyze == null) {
+            return;
+        }
+        logger.warn("Attempting constructor metadata refresh for type " + type
+                + " referenced in method signature before failing validation.");
+        analyze.analyze(config, classInfo, methodInfo);
     }
 
     private void ensureNoInternalFieldAccess(String generatedCode,

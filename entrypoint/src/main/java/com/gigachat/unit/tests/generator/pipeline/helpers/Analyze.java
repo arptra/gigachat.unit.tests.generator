@@ -13,6 +13,12 @@ import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.type.ArrayType;
+import com.github.javaparser.ast.type.ClassOrInterfaceType;
+import com.github.javaparser.ast.type.IntersectionType;
+import com.github.javaparser.ast.type.Type;
+import com.github.javaparser.ast.type.UnionType;
+import com.github.javaparser.ast.type.WildcardType;
 import com.testagent.entrypoint.pipeline.helpers.analyze.AnalysisFormatter;
 import com.testagent.entrypoint.pipeline.helpers.analyze.DependencyInfo;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodAnalysisResult;
@@ -107,8 +113,13 @@ public class Analyze {
         }
         String contextJson = analysisFormatter.format(sanitisedResult);
         TestTargetContext targetContext = extractTestTargetContext(classInfo, methodInfo);
-        Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(filteredAnalysis.relevantClasses());
-        Map<String, List<String>> availableMethods = collectAvailableMethods(filteredAnalysis.relevantClasses());
+        Set<String> enrichedRelevantClasses = new LinkedHashSet<>(filteredAnalysis.relevantClasses());
+        Set<String> methodRelatedTypes = collectMethodRelatedTypes(methodInfo);
+        for (String type : methodRelatedTypes) {
+            addRelevantType(enrichedRelevantClasses, type);
+        }
+        Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(enrichedRelevantClasses);
+        Map<String, List<String>> availableMethods = collectAvailableMethods(enrichedRelevantClasses);
         if (logger != null) {
             logger.info("Analysis JSON context prepared for method " + filteredResult.method().name());
         }
@@ -342,10 +353,12 @@ public class Analyze {
         if (collector == null) {
             return;
         }
-        if (!isMeaningfulType(type)) {
-            return;
+        for (String candidate : expandTypeCandidates(type)) {
+            if (!isMeaningfulType(candidate)) {
+                continue;
+            }
+            collector.add(candidate.trim());
         }
-        collector.add(type.trim());
     }
 
     private boolean isMeaningfulType(String type) {
@@ -380,6 +393,178 @@ public class Analyze {
             map.put(simple, List.copyOf(constructors));
         }
         return map;
+    }
+
+    private Set<String> collectMethodRelatedTypes(TestMethodInfo methodInfo) {
+        LinkedHashSet<String> types = new LinkedHashSet<>();
+        if (methodInfo == null) {
+            return types;
+        }
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration != null) {
+            declaration.getParameters().forEach(parameter ->
+                    extractTypesFromAst(parameter.getType(), types));
+            extractTypesFromAst(declaration.getType(), types);
+        } else {
+            addRawTypeIfPresent(types, methodInfo.getReturnType());
+        }
+        return types;
+    }
+
+    private void extractTypesFromAst(Type type, Set<String> collector) {
+        if (type == null) {
+            return;
+        }
+        if (type.isPrimitiveType()) {
+            return;
+        }
+        if (type instanceof ArrayType arrayType) {
+            extractTypesFromAst(arrayType.getComponentType(), collector);
+            return;
+        }
+        if (type instanceof UnionType unionType) {
+            unionType.getElements().forEach(element -> extractTypesFromAst(element, collector));
+            return;
+        }
+        if (type instanceof IntersectionType intersectionType) {
+            intersectionType.getElements().forEach(element -> extractTypesFromAst(element, collector));
+            return;
+        }
+        if (type instanceof WildcardType wildcardType) {
+            wildcardType.getExtendedType().ifPresent(t -> extractTypesFromAst(t, collector));
+            wildcardType.getSuperType().ifPresent(t -> extractTypesFromAst(t, collector));
+            return;
+        }
+        if (type instanceof ClassOrInterfaceType classType) {
+            collector.add(classType.getNameWithScope());
+            classType.getTypeArguments()
+                    .ifPresent(arguments -> arguments.forEach(argument -> extractTypesFromAst(argument, collector)));
+            return;
+        }
+        addRawTypeIfPresent(collector, type.asString());
+    }
+
+    private void addRawTypeIfPresent(Set<String> collector, String type) {
+        if (collector == null || type == null) {
+            return;
+        }
+        String trimmed = defaultString(type);
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        collector.add(trimmed);
+    }
+
+    private List<String> expandTypeCandidates(String type) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        collectTypeCandidates(type, candidates);
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(candidates);
+    }
+
+    private void collectTypeCandidates(String type, Set<String> collector) {
+        if (collector == null) {
+            return;
+        }
+        if (type == null) {
+            return;
+        }
+        String trimmed = defaultString(type);
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        if (trimmed.endsWith("...")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3).trim();
+        }
+        while (trimmed.endsWith("[]")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 2).trim();
+        }
+        if (trimmed.startsWith("? extends ")) {
+            trimmed = trimmed.substring(10).trim();
+        } else if (trimmed.startsWith("? super ")) {
+            trimmed = trimmed.substring(8).trim();
+        } else if (trimmed.startsWith("?")) {
+            trimmed = trimmed.substring(1).trim();
+        }
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        int genericStart = findGenericStart(trimmed);
+        if (genericStart > 0 && trimmed.endsWith(">")) {
+            String base = trimmed.substring(0, genericStart).trim();
+            if (!base.isEmpty()) {
+                collector.add(base);
+            }
+            String content = trimmed.substring(genericStart + 1, trimmed.lastIndexOf('>'));
+            for (String part : splitTopLevel(content)) {
+                collectTypeCandidates(part, collector);
+            }
+            return;
+        }
+        if (trimmed.contains("|")) {
+            for (String part : trimmed.split("\\|")) {
+                collectTypeCandidates(part, collector);
+            }
+            return;
+        }
+        if (trimmed.contains("&")) {
+            for (String part : trimmed.split("&")) {
+                collectTypeCandidates(part, collector);
+            }
+            return;
+        }
+        collector.add(trimmed);
+    }
+
+    private int findGenericStart(String text) {
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '<') {
+                if (depth == 0) {
+                    return i;
+                }
+                depth++;
+            } else if (ch == '>') {
+                depth = Math.max(0, depth - 1);
+            }
+        }
+        return -1;
+    }
+
+    private List<String> splitTopLevel(String text) {
+        if (text == null) {
+            return List.of();
+        }
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) {
+            return List.of();
+        }
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        int depth = 0;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char ch = trimmed.charAt(i);
+            if (ch == '<' || ch == '(' || ch == '[') {
+                depth++;
+            } else if (ch == '>' || ch == ')' || ch == ']') {
+                if (depth > 0) {
+                    depth--;
+                }
+            } else if (ch == ',' && depth == 0) {
+                parts.add(current.toString().trim());
+                current.setLength(0);
+                continue;
+            }
+            current.append(ch);
+        }
+        String last = current.toString().trim();
+        if (!last.isEmpty()) {
+            parts.add(last);
+        }
+        return parts;
     }
     private boolean isPrimitiveType(String type) {
         if (type == null) {
