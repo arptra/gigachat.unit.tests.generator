@@ -69,6 +69,13 @@ public class PromptBuilder {
         if (skeletonJson != null && !skeletonJson.isBlank()) {
             root.put("methodContext", PromptJsonRenderer.raw(skeletonJson));
         }
+        Analyze.TestTargetContext targetContext = summary.testTargetContext();
+        if (targetContext != null) {
+            Map<String, Object> targetBlock = buildTestTargetBlock(targetContext);
+            if (!targetBlock.isEmpty()) {
+                root.put("testTarget", targetBlock);
+            }
+        }
         String analysisJson = summary.jsonContext();
         if (analysisJson != null && !analysisJson.isBlank()) {
             root.put("analysis", PromptJsonRenderer.raw(analysisJson));
@@ -106,11 +113,16 @@ public class PromptBuilder {
         builder.append("Your task:").append(lineSeparator);
         builder.append("- Generate a JUnit 5 test class using Mockito based on the following structured JSON context.").append(lineSeparator);
         builder.append("- Follow the \"goal\" and \"instructions\" fields to guide the behavior and structure.").append(lineSeparator);
+        builder.append("- The \"methodSignature\" field describes the method that must be tested, NOT re-implemented.").append(lineSeparator);
+        builder.append("- Do NOT include the original method implementation inside the test class.").append(lineSeparator);
+        builder.append("- Always invoke the tested method on the instance of the class under test (for example: repository.save(user)).").append(lineSeparator);
+        builder.append("- Use the \"testTarget.instanceName\" as the variable name for the tested object.").append(lineSeparator);
         builder.append("- Mock dependencies listed in \"shouldMock\".").append(lineSeparator);
         builder.append("- Keep real objects listed in \"shouldNotMock\".").append(lineSeparator);
         builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);
-        builder.append("- Add assertions for return values or behavior mentioned in \"methodContext\".").append(lineSeparator);
+        builder.append("- Add assertions for return values or side effects.").append(lineSeparator);
         builder.append("- Respect the naming convention from \"instructions.namingConvention\".").append(lineSeparator);
+        builder.append("- Use standard Java indentation and line breaks.").append(lineSeparator);
         builder.append("- ").append(responseDirective).append(lineSeparator).append(lineSeparator);
         builder.append("JSON CONTEXT:").append(lineSeparator);
         builder.append(contextJson.toString(2));
@@ -154,6 +166,19 @@ public class PromptBuilder {
         if (!plan.shouldNotMock().isEmpty()) {
             block.put("shouldNotMock", plan.shouldNotMock());
         }
+        return block;
+    }
+
+    private Map<String, Object> buildTestTargetBlock(Analyze.TestTargetContext targetContext) {
+        LinkedHashMap<String, Object> block = new LinkedHashMap<>();
+        if (targetContext.className() != null && !targetContext.className().isBlank()) {
+            block.put("className", targetContext.className());
+        }
+        if (targetContext.instanceName() != null && !targetContext.instanceName().isBlank()) {
+            block.put("instanceName", targetContext.instanceName());
+        }
+        block.put("requiresInstance", targetContext.requiresInstance());
+        block.put("isStatic", targetContext.isStatic());
         return block;
     }
 

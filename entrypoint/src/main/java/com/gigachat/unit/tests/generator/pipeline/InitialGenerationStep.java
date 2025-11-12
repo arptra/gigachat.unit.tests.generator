@@ -23,6 +23,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.PromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
+import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -120,7 +121,14 @@ public class InitialGenerationStep {
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
         String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
         logger.info("Prepared LLM prompt for method " + methodInfo.getSignature());
-        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
+        GeneratedTestSnippet snippet;
+        try {
+            snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
+            validateGeneratedSnippet(snippet, methodInfo, analysisSummary);
+        } catch (InvalidLLMResponseException exception) {
+            logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
+            return;
+        }
         DiffEngine.MergeResult mergeResult = diffEngine.merge(classInfo, snippet);
         if (!mergeResult.changed()) {
             logger.warn("Merge step did not change target class for method " + snippet.methodName());
@@ -195,5 +203,28 @@ public class InitialGenerationStep {
         Path file = classInfo.getTargetPath();
         testClassWriter.writeSource(file, mergeResult.originalSource());
         logger.info("Reverted generated method from " + file);
+    }
+
+    private void validateGeneratedSnippet(GeneratedTestSnippet snippet,
+                                          TestMethodInfo methodInfo,
+                                          Analyze.AnalysisSummary analysisSummary) {
+        if (snippet == null || methodInfo == null) {
+            return;
+        }
+        String fullSource = snippet.fullClassSource();
+        if (fullSource == null || fullSource.isBlank()) {
+            return;
+        }
+        String signature = methodInfo.getSignature();
+        if (signature == null || signature.isBlank()) {
+            return;
+        }
+        String normalisedSignature = signature.replaceAll("\\s+", " ").trim();
+        String normalisedSource = fullSource.replaceAll("\\s+", " ").trim();
+        if (normalisedSource.contains(normalisedSignature + " {")) {
+            String methodName = analysisSummary.methodAnalysis().method().name();
+            logger.warn("⚠️  LLM reimplemented method " + methodName + " inside test class. Marking generation as invalid.");
+            throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
+        }
     }
 }

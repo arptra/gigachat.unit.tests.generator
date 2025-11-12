@@ -112,7 +112,7 @@ public class JavaProjectScanner {
         String body = methodDeclaration.getBody()
                 .map(Object::toString)
                 .orElse("");
-        return new TestMethodInfo(signature, returnType, body);
+        return new TestMethodInfo(signature, returnType, body, methodDeclaration.clone());
     }
 
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,
