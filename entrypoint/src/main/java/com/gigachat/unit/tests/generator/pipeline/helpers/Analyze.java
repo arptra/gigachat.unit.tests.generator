@@ -86,37 +86,141 @@ public class Analyze {
         MethodAnalysisResult result = methodAnalyzer.analyze(classInfo, methodInfo, config, pipelineConfig);
         ClassMetadata metadata = classInfo == null ? null : classInfo.getClassMetadata();
         boolean hasExternalCollaborators = collaboratorDetector.hasExternalCollaborators(metadata);
+        Set<String> accessibleFields = extractAccessibleFields(metadata);
+        Set<String> internalFields = extractInternalFields(metadata);
         FilteredAnalysis filteredAnalysis = filterInvalidCalls(result, classInfo, methodInfo);
         MethodAnalysisResult filteredResult = filteredAnalysis.filteredResult();
+        boolean invokesCollaborator = collaboratorDetector.methodInvokesExternalCollaborator(filteredResult, metadata);
         MockPlan plan = mockStrategyResolver.createPlan(filteredResult,
                 analysisConfig,
                 pipelineConfig.autoMockDetectionEnabled(),
                 pipelineConfig.excludeInternalCollections());
-        if (hasExternalCollaborators && plan.strategy() == MockStrategy.NONE) {
+        if ((hasExternalCollaborators || invokesCollaborator) && plan.strategy() == MockStrategy.NONE) {
             plan = new MockPlan(plan.targets(), MockStrategy.MOCKITO, plan.shouldMock(), plan.shouldNotMock());
         }
+        MethodAnalysisResult sanitisedResult = sanitizeInvocations(filteredResult, internalFields);
         Map<String, String> verificationPolicy = analysisConfig.includeVerificationPolicy()
-                ? buildVerificationPolicy(filteredResult.invocations())
+                ? buildVerificationPolicy(sanitisedResult.invocations())
                 : Map.of();
         if (plan.strategy() == MockStrategy.NONE) {
             verificationPolicy = Map.of();
         }
-        String contextJson = analysisFormatter.format(filteredResult);
+        String contextJson = analysisFormatter.format(sanitisedResult);
         TestTargetContext targetContext = extractTestTargetContext(classInfo, methodInfo);
         Map<String, List<ConstructorMetadata>> availableConstructors = collectAvailableConstructors(filteredAnalysis.relevantClasses());
         Map<String, List<String>> availableMethods = collectAvailableMethods(filteredAnalysis.relevantClasses());
         if (logger != null) {
             logger.info("Analysis JSON context prepared for method " + filteredResult.method().name());
         }
+        Set<String> accessibleSnapshot = Set.copyOf(accessibleFields);
+        Set<String> internalSnapshot = Set.copyOf(internalFields);
         return new AnalysisSummary(plan,
-                filteredResult,
+                sanitisedResult,
                 contextJson,
                 verificationPolicy,
                 targetContext,
                 hasExternalCollaborators,
                 filteredAnalysis.invalidCalls(),
+                accessibleSnapshot,
+                internalSnapshot,
                 availableConstructors,
                 availableMethods);
+    }
+
+    private Set<String> extractAccessibleFields(ClassMetadata metadata) {
+        LinkedHashSet<String> fields = new LinkedHashSet<>();
+        if (metadata == null) {
+            return fields;
+        }
+        for (FieldMetadata field : metadata.getFields()) {
+            if (field == null) {
+                continue;
+            }
+            String name = defaultString(field.getName());
+            if (name.isBlank()) {
+                continue;
+            }
+            if (!field.isPrivate()) {
+                fields.add(name);
+            }
+        }
+        return fields;
+    }
+
+    private Set<String> extractInternalFields(ClassMetadata metadata) {
+        LinkedHashSet<String> fields = new LinkedHashSet<>();
+        if (metadata == null) {
+            return fields;
+        }
+        for (FieldMetadata field : metadata.getFields()) {
+            if (field == null) {
+                continue;
+            }
+            String name = defaultString(field.getName());
+            if (name.isBlank()) {
+                continue;
+            }
+            if (field.isPrivate()) {
+                fields.add(name);
+            }
+        }
+        return fields;
+    }
+
+    private MethodAnalysisResult sanitizeInvocations(MethodAnalysisResult analysis,
+                                                     Set<String> internalFields) {
+        if (analysis == null || internalFields == null || internalFields.isEmpty()) {
+            return analysis;
+        }
+        List<InvocationInfo> sanitisedInvocations = new ArrayList<>();
+        for (InvocationInfo invocation : analysis.invocations()) {
+            if (invocation == null) {
+                continue;
+            }
+            String target = sanitizeInvocationTarget(invocation.target(), internalFields);
+            sanitisedInvocations.add(new InvocationInfo(target, invocation.methodName(), invocation.argTypes()));
+        }
+        return new MethodAnalysisResult(analysis.method(),
+                analysis.dependencies(),
+                sanitisedInvocations,
+                analysis.staticUsages(),
+                analysis.unresolved());
+    }
+
+    private String sanitizeInvocationTarget(String target, Set<String> internalFields) {
+        String text = defaultString(target);
+        if (text.isEmpty()) {
+            return text;
+        }
+        if (containsInternalFieldReference(text, internalFields)) {
+            return "internal_state";
+        }
+        return text;
+    }
+
+    private boolean containsInternalFieldReference(String target, Set<String> internalFields) {
+        if (internalFields == null || internalFields.isEmpty()) {
+            return false;
+        }
+        String normalised = defaultString(target);
+        if (normalised.isEmpty()) {
+            return false;
+        }
+        for (String field : internalFields) {
+            String candidate = defaultString(field);
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            if (normalised.equals(candidate)
+                    || normalised.equals("this." + candidate)
+                    || normalised.startsWith(candidate + '.')
+                    || normalised.startsWith("this." + candidate + '.')
+                    || normalised.endsWith('.' + candidate)
+                    || normalised.contains('.' + candidate + '.')) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private FilteredAnalysis filterInvalidCalls(MethodAnalysisResult analysis,
@@ -473,6 +577,8 @@ public class Analyze {
                                   TestTargetContext testTargetContext,
                                   boolean hasExternalCollaborators,
                                   List<String> invalidCalls,
+                                  Set<String> accessibleFields,
+                                  Set<String> internalFields,
                                   Map<String, List<ConstructorMetadata>> availableConstructors,
                                   Map<String, List<String>> availableMethods) {
     }

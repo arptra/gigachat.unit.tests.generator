@@ -2,25 +2,31 @@ package com.gigachat.unit.tests.generator.analyzer;
 
 import com.gigachat.unit.tests.generator.dto.ClassMetadata;
 import com.gigachat.unit.tests.generator.dto.FieldMetadata;
+import com.testagent.entrypoint.pipeline.helpers.analyze.InvocationInfo;
+import com.testagent.entrypoint.pipeline.helpers.analyze.MethodAnalysisResult;
 
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Detects whether a class declares collaborators that should be mocked.
  */
 public class ExternalCollaboratorDetector {
-    private static final String EXTERNAL_TYPE_SUFFIX_PATTERN = 
+    private static final String EXTERNAL_TYPE_SUFFIX_PATTERN =
             ".*(Service|Repository|Client|Component|Manager|Controller)$";
+    private static final String PACKAGE_SUFFIX_PATTERN =
+            ".*(\\.service|\\.repository|\\.gateway|\\.client)(\\.|$)";
+    private static final String CORE_MODEL_PATTERN =
+            ".*(\\.model|\\.util)(\\.|$)";
 
     public boolean hasExternalCollaborators(ClassMetadata metadata) {
         if (metadata == null) {
             return false;
         }
         return metadata.getFields().stream()
-                .map(FieldMetadata::getTypeName)
-                .map(this::normalise)
-                .filter(name -> !name.isEmpty())
-                .anyMatch(name -> name.matches(EXTERNAL_TYPE_SUFFIX_PATTERN));
+                .anyMatch(this::isExternalField);
     }
 
     public Optional<FieldMetadata> findFirstExternalCollaborator(ClassMetadata metadata) {
@@ -28,11 +34,83 @@ public class ExternalCollaboratorDetector {
             return Optional.empty();
         }
         return metadata.getFields().stream()
-                .filter(field -> {
-                    String typeName = normalise(field.getTypeName());
-                    return !typeName.isEmpty() && typeName.matches(EXTERNAL_TYPE_SUFFIX_PATTERN);
-                })
+                .filter(this::isExternalField)
                 .findFirst();
+    }
+
+    public boolean methodInvokesExternalCollaborator(MethodAnalysisResult analysis, ClassMetadata metadata) {
+        if (analysis == null || metadata == null) {
+            return false;
+        }
+        Set<String> collaboratorNames = new LinkedHashSet<>();
+        for (FieldMetadata field : metadata.getFields()) {
+            if (!isExternalField(field)) {
+                continue;
+            }
+            String name = normalise(field.getName());
+            if (!name.isEmpty()) {
+                collaboratorNames.add(name);
+            }
+        }
+        if (collaboratorNames.isEmpty()) {
+            return false;
+        }
+        for (InvocationInfo invocation : analysis.invocations()) {
+            if (invocation == null) {
+                continue;
+            }
+            String target = normaliseInvocationTarget(invocation.target());
+            if (target.isEmpty()) {
+                continue;
+            }
+            if (collaboratorNames.contains(target)) {
+                return true;
+            }
+            for (String collaborator : collaboratorNames) {
+                if (target.startsWith(collaborator + '.')
+                        || target.equals("this." + collaborator)
+                        || target.startsWith("this." + collaborator + '.')) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isExternalField(FieldMetadata field) {
+        if (field == null) {
+            return false;
+        }
+        String typeName = normalise(field.getTypeName());
+        if (typeName.isEmpty()) {
+            return false;
+        }
+        String lower = typeName.toLowerCase(Locale.ROOT);
+        if (lower.contains(".")) {
+            if (lower.startsWith("java.")) {
+                return false;
+            }
+            if (lower.matches(CORE_MODEL_PATTERN)) {
+                return false;
+            }
+            if (lower.matches(PACKAGE_SUFFIX_PATTERN)) {
+                return true;
+            }
+            return true;
+        }
+        return typeName.matches(EXTERNAL_TYPE_SUFFIX_PATTERN);
+    }
+
+    private String normaliseInvocationTarget(String target) {
+        String text = normalise(target);
+        if (text.startsWith("this.")) {
+            return text.substring(5);
+        }
+        int dot = text.indexOf('.');
+        if (dot > 0) {
+            return text.substring(0, dot);
+        }
+        return text;
     }
 
     private String normalise(String value) {

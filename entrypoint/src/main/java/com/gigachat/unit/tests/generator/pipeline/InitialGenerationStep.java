@@ -29,6 +29,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
+import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -39,6 +40,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -73,6 +76,7 @@ public class InitialGenerationStep {
     private final SnapshotStorage snapshotStorage;
     private final ExternalCollaboratorDetector collaboratorDetector;
     private final MethodSignatureRegistry signatureRegistry;
+    private final AutoCorrectionStage autoCorrectionStage;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -97,6 +101,7 @@ public class InitialGenerationStep {
         this.snapshotStorage = Objects.requireNonNull(snapshotStorage, "snapshotStorage");
         this.collaboratorDetector = new ExternalCollaboratorDetector();
         this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
+        this.autoCorrectionStage = new AutoCorrectionStage();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -159,6 +164,7 @@ public class InitialGenerationStep {
         GeneratedTestSnippet snippet;
         try {
             snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
+            snippet = autoCorrectionStage.apply(snippet);
             validateGeneratedSnippet(classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
         } catch (InvalidLLMResponseException exception) {
             logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
@@ -268,7 +274,7 @@ public class InitialGenerationStep {
             return;
         }
         Map<String, String> variableTypes = ensureMethodAndConstructorUsageIsValid(compilationUnit, analysisSummary, classInfo);
-        ensureNoInternalFieldAccess(compilationUnit, analysisSummary, classInfo, variableTypes);
+        ensureNoInternalFieldAccess(fullSource, analysisSummary);
         if (moduleConfig != null && moduleConfig.validateMockUsage()) {
             ensureMockUsageIsValid(fullSource, analysisSummary, classInfo);
         }
@@ -329,33 +335,38 @@ public class InitialGenerationStep {
         return variableTypes;
     }
 
-    private void ensureNoInternalFieldAccess(CompilationUnit compilationUnit,
-                                             Analyze.AnalysisSummary analysisSummary,
-                                             TestClassInfo classInfo,
-                                             Map<String, String> variableTypes) {
-        if (compilationUnit == null || classInfo == null) {
+    private void ensureNoInternalFieldAccess(String generatedCode,
+                                             Analyze.AnalysisSummary analysisSummary) {
+        if (analysisSummary == null) {
             return;
         }
-        ClassMetadata classMetadata = classInfo.getClassMetadata();
-        Map<String, FieldMetadata> fields = new LinkedHashMap<>();
-        if (classMetadata != null) {
-            for (FieldMetadata field : classMetadata.getFields()) {
-                fields.putIfAbsent(field.getName(), field);
+        Set<String> internalFields = analysisSummary.internalFields();
+        if (internalFields == null || internalFields.isEmpty()) {
+            return;
+        }
+        String code = generatedCode == null ? "" : generatedCode;
+        if (code.isBlank()) {
+            return;
+        }
+        Pattern pattern = Pattern.compile("\\b(\\w+)\\.(\\w+)\\b");
+        Matcher matcher = pattern.matcher(code);
+        LinkedHashSet<String> violations = new LinkedHashSet<>();
+        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
+        String targetInstance = targetContext == null ? "" : normalise(targetContext.instanceName());
+        Set<String> accessible = analysisSummary.accessibleFields();
+        while (matcher.find()) {
+            String instance = matcher.group(1);
+            String field = matcher.group(2);
+            if ("this".equals(instance) && field.equals(targetInstance)) {
+                continue;
+            }
+            if (accessible != null && accessible.contains(field)) {
+                continue;
+            }
+            if (internalFields.contains(field)) {
+                violations.add(instance + '.' + field);
             }
         }
-        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
-        LinkedHashSet<String> violations = new LinkedHashSet<>();
-        compilationUnit.findAll(FieldAccessExpr.class).forEach(expr -> {
-            if (!isTestTargetScope(expr.getScope(), targetContext, classInfo, variableTypes)) {
-                return;
-            }
-            String fieldName = expr.getNameAsString();
-            FieldMetadata fieldMetadata = fields.get(fieldName);
-            boolean inaccessible = fieldMetadata == null || fieldMetadata.isPrivate();
-            if (inaccessible) {
-                violations.add(expr.toString());
-            }
-        });
         if (!violations.isEmpty()) {
             String message = "E103: internal field access " + String.join(", ", violations);
             logger.warn("⚠️  " + message);
@@ -490,32 +501,12 @@ public class InitialGenerationStep {
         }
     }
 
-    private boolean isTestTargetScope(Expression scope,
-                                      Analyze.TestTargetContext targetContext,
-                                      TestClassInfo classInfo,
-                                      Map<String, String> variableTypes) {
-        if (scope instanceof ThisExpr) {
-            return true;
+    private String normalise(String value) {
+        if (value == null) {
+            return "";
         }
-        if (scope instanceof NameExpr nameExpr) {
-            String identifier = nameExpr.getNameAsString();
-            if (targetContext != null && identifier.equals(targetContext.instanceName())) {
-                return true;
-            }
-            if (classInfo != null && simpleName(classInfo.getClassName()).equals(identifier)) {
-                return true;
-            }
-            if (variableTypes != null) {
-                String type = variableTypes.get(identifier);
-                if (type != null && classInfo != null && simpleName(type).equals(simpleName(classInfo.getClassName()))) {
-                    return true;
-                }
-            }
-        }
-        if (scope instanceof FieldAccessExpr fieldAccessExpr) {
-            return isTestTargetScope(fieldAccessExpr.getScope(), targetContext, classInfo, variableTypes);
-        }
-        return false;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? "" : trimmed;
     }
 
     private boolean containsMockito(String source) {

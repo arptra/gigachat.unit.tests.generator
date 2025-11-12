@@ -64,6 +64,8 @@ public class PromptBuilder {
         MockPlan mockPlan = summary.mockPlan();
         if (mockPlan != null && mockPlan.strategy() == MockStrategy.NONE) {
             instructions.remove("verificationPolicy");
+            instructions.remove("mockFramework");
+            instructions.remove("mockStrategy");
         }
 
         LinkedHashMap<String, Object> root = new LinkedHashMap<>();
@@ -94,6 +96,8 @@ public class PromptBuilder {
         if (!summary.availableMethods().isEmpty()) {
             root.put("availableMethods", summary.availableMethods());
         }
+        root.put("accessibleFields", new ArrayList<>(summary.accessibleFields()));
+        root.put("internalFields", new ArrayList<>(summary.internalFields()));
         String analysisJson = summary.jsonContext();
         if (analysisJson != null && !analysisJson.isBlank()) {
             root.put("analysis", PromptJsonRenderer.raw(analysisJson));
@@ -151,6 +155,10 @@ public class PromptBuilder {
         builder.append("- Use only methods listed in \"availableMethods\".").append(lineSeparator);
         builder.append("- When mocking or instantiating objects, use only constructors and methods provided in the JSON context.").append(lineSeparator);
         builder.append("- If you must create an object, use a constructor from \"availableConstructors\"; if none fit, skip that instance.").append(lineSeparator);
+        builder.append("- Do not access or modify private or internal fields (like repository.users).").append(lineSeparator);
+        builder.append("- Use only fields listed in \"accessibleFields\".").append(lineSeparator);
+        builder.append("- To prepare state, call public methods (for example: save()) instead of assigning to fields.").append(lineSeparator);
+        builder.append("- If state preparation requires internal field access, skip that test case.").append(lineSeparator);
         if (mocksAllowed) {
             builder.append("- Use Mockito to mock external dependencies listed in the mock plan.").append(lineSeparator);
             builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);
@@ -161,9 +169,13 @@ public class PromptBuilder {
                 builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);
             }
             builder.append("- Mockito should only be used for external or collaborative dependencies.").append(lineSeparator);
+            builder.append("- Never use Mockito for internal fields or collections of the tested class.").append(lineSeparator);
         } else {
             builder.append("- Do not use Mockito. Use only JUnit 5 and real objects.").append(lineSeparator);
             builder.append("- Focus on asserting observable behaviour through the class's public API.").append(lineSeparator);
+            builder.append("- Never modify or access internal fields of the tested class.").append(lineSeparator);
+            builder.append("- Use only public methods or constructors listed in \"availableConstructors\" to prepare state.").append(lineSeparator);
+            builder.append("- If preparing internal state is impossible without private access, skip that scenario.").append(lineSeparator);
         }
         builder.append("- Add assertions for return values or side effects.").append(lineSeparator);
         builder.append("- Respect the naming convention from \"instructions.namingConvention\".").append(lineSeparator);
