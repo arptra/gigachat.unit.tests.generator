@@ -108,8 +108,16 @@ public class PromptBuilder {
                 root.put("availableConstructors", constructorsBlock);
             }
         }
-        if (!summary.availableMethods().isEmpty()) {
-            root.put("availableMethods", summary.availableMethods());
+        Map<String, List<String>> availableMethods = new LinkedHashMap<>(summary.availableMethods());
+        for (String stdType : Analyze.STANDARD_TYPES) {
+            String simple = simpleName(stdType);
+            List<String> methods = summary.availableMethods().get(simple);
+            if (methods != null && !methods.isEmpty()) {
+                availableMethods.putIfAbsent(simple, methods);
+            }
+        }
+        if (!availableMethods.isEmpty()) {
+            root.put("availableMethods", availableMethods);
         }
         root.put("accessibleFields", filterAccessibleFields(summary.accessibleFields()));
         root.put("constructorPolicy", Map.of(

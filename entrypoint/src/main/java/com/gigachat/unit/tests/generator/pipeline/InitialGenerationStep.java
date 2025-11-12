@@ -432,6 +432,9 @@ public class InitialGenerationStep {
                 return;
             }
             String resolvedType = resolveExpressionType(scope.get(), variableTypes, classInfo);
+            if (isStandardLibraryType(resolvedType)) {
+                return;
+            }
             String simple = simpleName(resolvedType);
             if (simple.isEmpty() || !signatureRegistry.hasClass(simple)) {
                 return;
@@ -707,5 +710,47 @@ public class InitialGenerationStep {
         return source.contains("org.mockito")
                 || source.contains("import static org.mockito")
                 || source.contains("@Mock");
+    }
+
+    private boolean isStandardLibraryType(String type) {
+        if (type == null || type.isBlank()) {
+            return false;
+        }
+        for (String standard : Analyze.STANDARD_TYPES) {
+            if (matchesStandardLibraryType(type, standard)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesStandardLibraryType(String candidate, String standard) {
+        if (candidate == null || standard == null) {
+            return false;
+        }
+        String trimmedCandidate = candidate.trim();
+        if (trimmedCandidate.isEmpty()) {
+            return false;
+        }
+        if (trimmedCandidate.contains(standard)) {
+            return true;
+        }
+        String standardSimple = simpleName(standard);
+        String candidateSimple = simpleName(trimmedCandidate);
+        if (!standardSimple.isEmpty()) {
+            if (candidateSimple.equals(standardSimple)) {
+                return true;
+            }
+            if (trimmedCandidate.startsWith(standardSimple + "<")) {
+                return true;
+            }
+            if (trimmedCandidate.endsWith('.' + standardSimple)) {
+                return true;
+            }
+            if (trimmedCandidate.equals(standardSimple)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

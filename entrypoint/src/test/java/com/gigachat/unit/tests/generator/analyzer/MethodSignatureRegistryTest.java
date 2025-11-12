@@ -44,4 +44,14 @@ class MethodSignatureRegistryTest {
         assertEquals(1, constructorsForClass.size());
         assertEquals("User(String username, String email)", constructorsForClass.get(0).signature());
     }
+
+    @Test
+    void registersPublicMethodsForStandardLibraryTypes() {
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        registry.registerPublicMethods("java.util.Optional");
+
+        assertTrue(registry.hasMethods("Optional"));
+        assertTrue(registry.methodExists("Optional", "isPresent", 0));
+        assertTrue(registry.methodExists("Optional", "orElse", 1));
+    }
 }

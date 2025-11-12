@@ -43,6 +43,14 @@ import java.util.stream.Collectors;
  * Performs analysis of the target method to understand mocking needs and provide context for the LLM.
  */
 public class Analyze {
+    public static final Set<String> STANDARD_TYPES = Set.of(
+            "java.util.Optional",
+            "java.util.List",
+            "java.util.Map",
+            "java.util.Set",
+            "java.util.Collections",
+            "java.time.Instant"
+    );
     private final MethodAnalyzer methodAnalyzer;
     private final AnalysisFormatter analysisFormatter;
     private final MockStrategyResolver mockStrategyResolver;
@@ -123,6 +131,20 @@ public class Analyze {
         methodRelatedTypes.addAll(methodReturnTypes);
         for (String type : methodRelatedTypes) {
             addRelevantType(enrichedRelevantClasses, type);
+        }
+        LinkedHashSet<String> detectedTypes = new LinkedHashSet<>();
+        detectedTypes.addAll(enrichedRelevantClasses);
+        detectedTypes.addAll(methodRelatedTypes);
+        detectedTypes.addAll(methodParameterTypes);
+        detectedTypes.addAll(methodReturnTypes);
+        for (String detectedType : detectedTypes) {
+            if (!isStandardType(detectedType)) {
+                continue;
+            }
+            String standardType = resolveStandardTypeQualifiedName(detectedType);
+            if (standardType != null) {
+                signatureRegistry.registerPublicMethods(standardType);
+            }
         }
         Set<String> methodSignatureSimpleNames = methodRelatedTypes.stream()
                 .map(this::simpleName)
@@ -361,6 +383,60 @@ public class Analyze {
             addRelevantType(relevantClasses, type);
         }
         return new FilteredAnalysis(filtered, List.copyOf(invalidCalls), Set.copyOf(relevantClasses));
+    }
+
+    private String resolveStandardTypeQualifiedName(String typeName) {
+        if (typeName == null || typeName.isBlank()) {
+            return null;
+        }
+        for (String standardType : STANDARD_TYPES) {
+            if (matchesStandardType(typeName, standardType)) {
+                return standardType;
+            }
+        }
+        return null;
+    }
+
+    private boolean isStandardType(String typeName) {
+        if (typeName == null || typeName.isBlank()) {
+            return false;
+        }
+        for (String standardType : STANDARD_TYPES) {
+            if (matchesStandardType(typeName, standardType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesStandardType(String candidate, String standardType) {
+        if (candidate == null || standardType == null) {
+            return false;
+        }
+        String trimmedCandidate = candidate.trim();
+        if (trimmedCandidate.isEmpty()) {
+            return false;
+        }
+        if (trimmedCandidate.contains(standardType)) {
+            return true;
+        }
+        String candidateSimple = simpleName(trimmedCandidate);
+        String standardSimple = simpleName(standardType);
+        if (!standardSimple.isEmpty()) {
+            if (candidateSimple.equals(standardSimple)) {
+                return true;
+            }
+            if (trimmedCandidate.startsWith(standardSimple + "<")) {
+                return true;
+            }
+            if (trimmedCandidate.endsWith('.' + standardSimple)) {
+                return true;
+            }
+            if (trimmedCandidate.equals(standardSimple)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void addRelevantType(Set<String> collector, String type) {

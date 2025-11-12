@@ -1,5 +1,8 @@
 package com.gigachat.unit.tests.generator.analyzer;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -102,6 +105,27 @@ public class MethodSignatureRegistry {
         methodArityIndex.computeIfAbsent(key, ignored -> new HashMap<>());
     }
 
+    public void registerPublicMethods(String className) {
+        if (className == null || className.isBlank()) {
+            return;
+        }
+        try {
+            Class<?> clazz = Class.forName(className);
+            Method[] methods = clazz.getMethods();
+            for (Method method : methods) {
+                if (method == null) {
+                    continue;
+                }
+                if (!Modifier.isPublic(method.getModifiers()) || Modifier.isStatic(method.getModifiers())) {
+                    continue;
+                }
+                registerMethod(clazz.getName(), formatMethodSignature(method));
+            }
+        } catch (ClassNotFoundException ignored) {
+            // Standard type not present in runtime classpath; ignore.
+        }
+    }
+
     public boolean methodExists(String className, String methodName, int argCount) {
         if (methodName == null || methodName.isBlank()) {
             return false;
@@ -138,6 +162,12 @@ public class MethodSignatureRegistry {
         return classMethods.containsKey(key) || classConstructors.containsKey(key);
     }
 
+    public boolean hasMethods(String className) {
+        String key = normaliseClassName(className);
+        Set<String> methods = classMethods.get(key);
+        return methods != null && !methods.isEmpty();
+    }
+
     public Set<String> methodsFor(String className) {
         String key = normaliseClassName(className);
         Set<String> methods = classMethods.get(key);
@@ -145,6 +175,14 @@ public class MethodSignatureRegistry {
             return Set.of();
         }
         return Collections.unmodifiableSet(methods);
+    }
+
+    public List<String> getMethods(String className) {
+        Set<String> methods = classMethods.get(normaliseClassName(className));
+        if (methods == null || methods.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(methods);
     }
 
     public Set<String> constructorsFor(String className) {
@@ -279,5 +317,33 @@ public class MethodSignatureRegistry {
             return trimmed.substring(lastDot + 1);
         }
         return trimmed;
+    }
+
+    private String formatMethodSignature(Method method) {
+        StringBuilder builder = new StringBuilder();
+        String returnType = method.getReturnType().getSimpleName();
+        if (returnType != null && !returnType.isBlank()) {
+            builder.append(returnType.trim()).append(' ');
+        }
+        builder.append(method.getName()).append('(');
+        Parameter[] parameters = method.getParameters();
+        List<String> parameterParts = new ArrayList<>(parameters.length);
+        for (Parameter parameter : parameters) {
+            if (parameter == null) {
+                continue;
+            }
+            String type = parameter.getType().getSimpleName();
+            String name = parameter.getName();
+            if (type == null) {
+                type = "Object";
+            }
+            if (name == null || name.isBlank()) {
+                name = "arg" + parameterParts.size();
+            }
+            parameterParts.add(type + ' ' + name);
+        }
+        builder.append(String.join(", ", parameterParts));
+        builder.append(')');
+        return builder.toString();
     }
 }
