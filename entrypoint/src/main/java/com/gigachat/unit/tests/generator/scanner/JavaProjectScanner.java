@@ -5,6 +5,8 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.dto.ClassMetadata;
+import com.gigachat.unit.tests.generator.dto.FieldMetadata;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 
@@ -97,12 +99,14 @@ public class JavaProjectScanner {
                 .map(importDeclaration -> importDeclaration.toString().trim())
                 .collect(Collectors.toCollection(LinkedHashSet::new)));
 
+        ClassMetadata metadata = extractClassMetadata(declaration);
         return new TestClassInfo(
                 declaration.getNameAsString(),
                 testClassName,
                 targetFile,
                 List.copyOf(imports),
-                List.copyOf(methods)
+                List.copyOf(methods),
+                metadata
         );
     }
 
@@ -113,6 +117,20 @@ public class JavaProjectScanner {
                 .map(Object::toString)
                 .orElse("");
         return new TestMethodInfo(signature, returnType, body, methodDeclaration.clone());
+    }
+
+    private ClassMetadata extractClassMetadata(ClassOrInterfaceDeclaration declaration) {
+        if (declaration == null) {
+            return new ClassMetadata("", List.of());
+        }
+        List<FieldMetadata> fields = new ArrayList<>();
+        declaration.getFields().forEach(field -> {
+            String typeName = field.getElementType().asString();
+            boolean isPrivate = field.isPrivate();
+            field.getVariables().forEach(variable ->
+                    fields.add(new FieldMetadata(variable.getNameAsString(), typeName, isPrivate)));
+        });
+        return new ClassMetadata(declaration.getNameAsString(), fields);
     }
 
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,

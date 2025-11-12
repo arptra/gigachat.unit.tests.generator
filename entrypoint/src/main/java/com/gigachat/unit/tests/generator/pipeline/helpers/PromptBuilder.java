@@ -84,6 +84,7 @@ public class PromptBuilder {
         if (analysisJson != null && !analysisJson.isBlank()) {
             root.put("analysis", PromptJsonRenderer.raw(analysisJson));
         }
+        root.put("hasExternalCollaborators", summary.hasExternalCollaborators());
         if (summary.mockPlan() != null) {
             Map<String, Object> planBlock = buildMockPlan(summary.mockPlan());
             if (!planBlock.isEmpty()) {
@@ -126,6 +127,11 @@ public class PromptBuilder {
         builder.append("- Only mock external dependencies such as services, repositories, or network clients.").append(lineSeparator);
         builder.append("- Mockito should only be used for external or collaborative dependencies.").append(lineSeparator);
         builder.append("- If the tested method has no external dependencies, use real objects and assert state changes.").append(lineSeparator);
+        if (contextJson.optBoolean("hasExternalCollaborators", false)) {
+            builder.append("- Use Mockito to mock external dependencies listed in the mock plan.").append(lineSeparator);
+        } else {
+            builder.append("- Do not use Mockito. Use only JUnit 5 and real objects.").append(lineSeparator);
+        }
         builder.append("- Mock dependencies listed in \"shouldMock\".").append(lineSeparator);
         builder.append("- Keep real objects listed in \"shouldNotMock\".").append(lineSeparator);
         builder.append("- Add verification calls from \"verificationPolicy\" using Mockito.verify().").append(lineSeparator);

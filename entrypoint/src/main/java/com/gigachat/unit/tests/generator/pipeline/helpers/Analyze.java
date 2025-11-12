@@ -1,9 +1,12 @@
 package com.gigachat.unit.tests.generator.pipeline.helpers;
 
+import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AnalysisConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
+import com.gigachat.unit.tests.generator.dto.ClassMetadata;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
+import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -28,6 +31,7 @@ public class Analyze {
     private final MethodAnalyzer methodAnalyzer;
     private final AnalysisFormatter analysisFormatter;
     private final MockStrategyResolver mockStrategyResolver;
+    private final ExternalCollaboratorDetector collaboratorDetector;
     private final PipelineLogger logger;
 
     public Analyze() {
@@ -35,17 +39,19 @@ public class Analyze {
     }
 
     public Analyze(PipelineLogger logger) {
-        this(new MethodAnalyzer(logger), new AnalysisFormatter(), new MockStrategyResolver(), logger);
+        this(new MethodAnalyzer(logger), new AnalysisFormatter(), new MockStrategyResolver(), logger, new ExternalCollaboratorDetector());
     }
 
     public Analyze(MethodAnalyzer methodAnalyzer,
                    AnalysisFormatter analysisFormatter,
                    MockStrategyResolver mockStrategyResolver,
-                   PipelineLogger logger) {
+                   PipelineLogger logger,
+                   ExternalCollaboratorDetector collaboratorDetector) {
         this.methodAnalyzer = Objects.requireNonNull(methodAnalyzer, "methodAnalyzer");
         this.analysisFormatter = Objects.requireNonNull(analysisFormatter, "analysisFormatter");
         this.mockStrategyResolver = Objects.requireNonNull(mockStrategyResolver, "mockStrategyResolver");
         this.logger = logger;
+        this.collaboratorDetector = Objects.requireNonNull(collaboratorDetector, "collaboratorDetector");
     }
 
     public AnalysisSummary analyze(AgentConfig config, TestClassInfo classInfo, TestMethodInfo methodInfo) {
@@ -54,10 +60,15 @@ public class Analyze {
                 ? PipelineModuleConfig.from(Map.of())
                 : config.getPipelineModuleConfig();
         MethodAnalysisResult result = methodAnalyzer.analyze(classInfo, methodInfo, config, pipelineConfig);
+        ClassMetadata metadata = classInfo == null ? null : classInfo.getClassMetadata();
+        boolean hasExternalCollaborators = collaboratorDetector.hasExternalCollaborators(metadata);
         MockPlan plan = mockStrategyResolver.createPlan(result,
                 analysisConfig,
                 pipelineConfig.autoMockDetectionEnabled(),
                 pipelineConfig.excludeInternalCollections());
+        if (hasExternalCollaborators && plan.strategy() == MockStrategy.NONE) {
+            plan = new MockPlan(plan.targets(), MockStrategy.MOCKITO, plan.shouldMock(), plan.shouldNotMock());
+        }
         Map<String, String> verificationPolicy = analysisConfig.includeVerificationPolicy()
                 ? buildVerificationPolicy(result.invocations())
                 : Map.of();
@@ -66,7 +77,7 @@ public class Analyze {
         if (logger != null) {
             logger.info("Analysis JSON context prepared for method " + result.method().name());
         }
-        return new AnalysisSummary(plan, result, contextJson, verificationPolicy, targetContext);
+        return new AnalysisSummary(plan, result, contextJson, verificationPolicy, targetContext, hasExternalCollaborators);
     }
 
     public MockPlan analyze(TestClassInfo classInfo, TestMethodInfo methodInfo) {
@@ -160,7 +171,8 @@ public class Analyze {
                                   MethodAnalysisResult methodAnalysis,
                                   String jsonContext,
                                   Map<String, String> verificationPolicy,
-                                  TestTargetContext testTargetContext) {
+                                  TestTargetContext testTargetContext,
+                                  boolean hasExternalCollaborators) {
     }
 
     public record TestTargetContext(String className,

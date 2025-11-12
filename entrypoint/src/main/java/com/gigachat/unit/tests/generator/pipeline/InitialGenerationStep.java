@@ -1,5 +1,6 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
+import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
 import com.gigachat.unit.tests.generator.config.ParallelMode;
@@ -51,6 +52,7 @@ public class InitialGenerationStep {
     private final CompilerInvoker compilerInvoker;
     private final ExecutionInvoker executionInvoker;
     private final SnapshotStorage snapshotStorage;
+    private final ExternalCollaboratorDetector collaboratorDetector;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -72,6 +74,7 @@ public class InitialGenerationStep {
         this.compilerInvoker = Objects.requireNonNull(compilerInvoker, "compilerInvoker");
         this.executionInvoker = Objects.requireNonNull(executionInvoker, "executionInvoker");
         this.snapshotStorage = Objects.requireNonNull(snapshotStorage, "snapshotStorage");
+        this.collaboratorDetector = new ExternalCollaboratorDetector();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -128,7 +131,7 @@ public class InitialGenerationStep {
         GeneratedTestSnippet snippet;
         try {
             snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
-            validateGeneratedSnippet(snippet, methodInfo, analysisSummary, moduleConfig);
+            validateGeneratedSnippet(classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
         } catch (InvalidLLMResponseException exception) {
             logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
             return;
@@ -209,7 +212,8 @@ public class InitialGenerationStep {
         logger.info("Reverted generated method from " + file);
     }
 
-    private void validateGeneratedSnippet(GeneratedTestSnippet snippet,
+    private void validateGeneratedSnippet(TestClassInfo classInfo,
+                                          GeneratedTestSnippet snippet,
                                           TestMethodInfo methodInfo,
                                           Analyze.AnalysisSummary analysisSummary,
                                           PipelineModuleConfig moduleConfig) {
@@ -232,14 +236,25 @@ public class InitialGenerationStep {
             throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
         }
         if (moduleConfig != null && moduleConfig.validateMockUsage()) {
-            ensureMockUsageIsValid(fullSource, analysisSummary);
+            ensureMockUsageIsValid(fullSource, analysisSummary, classInfo);
         }
     }
 
-    private void ensureMockUsageIsValid(String fullSource, Analyze.AnalysisSummary analysisSummary) {
+    private void ensureMockUsageIsValid(String fullSource,
+                                        Analyze.AnalysisSummary analysisSummary,
+                                        TestClassInfo classInfo) {
         MockPlan plan = analysisSummary.mockPlan();
         if (plan != null && plan.strategy() == MockStrategy.NONE && containsMockito(fullSource)) {
-            logger.warn("⚠️  LLM introduced Mockito usage despite NONE strategy. Marking generation as invalid.");
+            String collaboratorField = collaboratorDetector.findFirstExternalCollaborator(
+                            classInfo != null ? classInfo.getClassMetadata() : null)
+                    .map(field -> field.getTypeName() + " " + field.getName())
+                    .orElse(null);
+            if (collaboratorField != null) {
+                logger.warn("⚠️  LLM introduced Mockito usage despite NONE strategy. External collaborator field detected: "
+                        + collaboratorField + ". Marking generation as invalid.");
+            } else {
+                logger.warn("⚠️  LLM introduced Mockito usage despite NONE strategy. Marking generation as invalid.");
+            }
             throw new InvalidLLMResponseException("LLM returned Mockito usage when mocks should be disabled.");
         }
         Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();

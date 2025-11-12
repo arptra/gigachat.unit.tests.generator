@@ -12,17 +12,28 @@ public class TestClassInfo {
     private final Path targetPath;
     private final List<String> imports;
     private final List<TestMethodInfo> methods;
+    private final ClassMetadata classMetadata;
 
     public TestClassInfo(String className,
                          String testClassName,
                          Path targetPath,
                          List<String> imports,
                          List<TestMethodInfo> methods) {
+        this(className, testClassName, targetPath, imports, methods, null);
+    }
+
+    public TestClassInfo(String className,
+                         String testClassName,
+                         Path targetPath,
+                         List<String> imports,
+                         List<TestMethodInfo> methods,
+                         ClassMetadata classMetadata) {
         this.className = Objects.requireNonNull(className, "className").trim();
         this.testClassName = Objects.requireNonNull(testClassName, "testClassName").trim();
         this.targetPath = Objects.requireNonNull(targetPath, "targetPath").toAbsolutePath().normalize();
         this.imports = normaliseImports(imports);
         this.methods = normaliseMethods(methods);
+        this.classMetadata = classMetadata == null ? new ClassMetadata(this.className, List.of()) : classMetadata;
     }
 
     public String getClassName() {
@@ -43,6 +54,10 @@ public class TestClassInfo {
 
     public List<TestMethodInfo> getMethods() {
         return methods;
+    }
+
+    public ClassMetadata getClassMetadata() {
+        return classMetadata;
     }
 
     public boolean hasMethods() {
