@@ -6,13 +6,18 @@ package com.testagent.entrypoint.pipeline.helpers.analyze;
 public record DependencyInfo(String className,
                              String variableName,
                              MockType mockType,
-                             String context) {
+                             String context,
+                             boolean externalDependency,
+                             boolean internalStructure,
+                             int argumentCount) {
 
     public DependencyInfo {
         className = normalise(className, "UnknownDependency");
         variableName = normalise(variableName, "unknown");
         mockType = mockType == null ? MockType.UNKNOWN : mockType;
         context = normalise(context, "");
+        internalStructure = internalStructure || !externalDependency;
+        argumentCount = Math.max(argumentCount, 0);
     }
 
     private static String normalise(String value, String defaultValue) {

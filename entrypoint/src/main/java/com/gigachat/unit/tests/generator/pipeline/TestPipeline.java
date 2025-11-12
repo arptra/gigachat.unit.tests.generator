@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
 import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
 import com.gigachat.unit.tests.generator.dto.ErrorsReport;
@@ -27,13 +28,23 @@ import java.util.Objects;
 
 public class TestPipeline {
     private final JavaProjectScanner scanner;
+    private final MethodSignatureRegistry methodRegistry;
 
     public TestPipeline() {
-        this(new JavaProjectScanner());
+        this(new MethodSignatureRegistry());
+    }
+
+    public TestPipeline(MethodSignatureRegistry methodRegistry) {
+        this(new JavaProjectScanner(methodRegistry), methodRegistry);
     }
 
     public TestPipeline(JavaProjectScanner scanner) {
+        this(scanner, scanner.getMethodRegistry());
+    }
+
+    public TestPipeline(JavaProjectScanner scanner, MethodSignatureRegistry registry) {
         this.scanner = Objects.requireNonNull(scanner, "scanner");
+        this.methodRegistry = Objects.requireNonNull(registry, "methodRegistry");
     }
 
     public List<TestClassInfo> execute(AgentConfig config) throws IOException {
@@ -56,7 +67,7 @@ public class TestPipeline {
         PipelineLogger logger = new PipelineLogger(projectRoot);
         TestClassWriter testClassWriter = new TestClassWriter(logger);
         SkeletonPromptBuilder skeletonPromptBuilder = new SkeletonPromptBuilder();
-        Analyze analyze = new Analyze(logger);
+        Analyze analyze = new Analyze(logger, methodRegistry);
         PromptBuilder promptBuilder = new PromptBuilder();
         LlmClient llmClient = createLlmClient(config, logger);
         DiffEngine diffEngine = new DiffEngine(testClassWriter, logger);
@@ -72,7 +83,8 @@ public class TestPipeline {
                 diffEngine,
                 compilerInvoker,
                 executionInvoker,
-                snapshotStorage);
+                snapshotStorage,
+                methodRegistry);
     }
 
     private LlmClient createLlmClient(AgentConfig config, PipelineLogger logger) {

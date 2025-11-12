@@ -40,7 +40,9 @@ public class AnalysisFormatter {
             builder.append("    {\"class\": \"").append(escape(info.className())).append("\", ")
                     .append("\"mockType\": \"").append(info.mockType()).append("\", ")
                     .append("\"usage\": \"").append(escape(info.context())).append("\", ")
-                    .append("\"variable\": \"").append(escape(info.variableName())).append("\"}");
+                    .append("\"variable\": \"").append(escape(info.variableName())).append("\", ")
+                    .append("\"externalDependency\": ").append(info.externalDependency()).append(", ")
+                    .append("\"internalStructure\": ").append(info.internalStructure()).append('}');
             builder.append(i + 1 < dependencies.size() ? ",\n" : "\n");
         }
         builder.append("  ],\n");

@@ -2,6 +2,8 @@ package com.testagent.entrypoint.pipeline.helpers.analyze;
 
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AnalysisConfig;
+import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
+import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.github.javaparser.ParseProblemException;
@@ -29,13 +31,21 @@ public class MethodAnalyzer {
         this.logger = logger;
     }
 
-    public MethodAnalysisResult analyze(TestMethodInfo methodInfo, AgentConfig config) {
+    public MethodAnalysisResult analyze(TestClassInfo classInfo,
+                                       TestMethodInfo methodInfo,
+                                       AgentConfig config,
+                                       PipelineModuleConfig pipelineConfig) {
         AnalysisConfig options = config == null ? AnalysisConfig.from(Map.of()) : config.getAnalysisConfig();
         BlockStmt body = parseBody(methodInfo.getBody());
         MethodMetadata metadata = new MethodMetadata(extractMethodName(methodInfo.getSignature()),
                 methodInfo.getSignature(),
                 methodInfo.getReturnType());
-        List<DependencyInfo> dependencies = dependencyAnalyzer.analyze(body, options);
+        boolean excludeInternalCollections = pipelineConfig == null || pipelineConfig.excludeInternalCollections();
+        List<DependencyInfo> dependencies = dependencyAnalyzer.analyze(classInfo,
+                methodInfo,
+                body,
+                options,
+                excludeInternalCollections);
         InvocationAnalyzer.InvocationAnalysis invocationAnalysis = invocationAnalyzer.analyze(body, options);
         MethodAnalysisResult result = new MethodAnalysisResult(metadata,
                 dependencies,

@@ -1,0 +1,6 @@
+{
+  "E102": "Invented method not found in availableMethods",
+  "E103": "Access to internal field of tested class",
+  "E104": "Missing constructor metadata for referenced class",
+  "E105": "Mockito usage not allowed under NONE strategy"
+}
