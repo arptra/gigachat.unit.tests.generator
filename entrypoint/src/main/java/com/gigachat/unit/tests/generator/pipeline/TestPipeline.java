@@ -20,16 +20,15 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
-import com.gigachat.unit.tests.generator.scanner.SingleFileProjectScanner;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 public class TestPipeline {
     private final JavaProjectScanner scanner;
-    private final SingleFileProjectScanner singleFileScanner;
     private final MethodSignatureRegistry methodRegistry;
 
     public TestPipeline() {
@@ -37,34 +36,47 @@ public class TestPipeline {
     }
 
     public TestPipeline(MethodSignatureRegistry methodRegistry) {
-        this(new JavaProjectScanner(methodRegistry), new SingleFileProjectScanner(methodRegistry), methodRegistry);
+        this(new JavaProjectScanner(methodRegistry), methodRegistry);
     }
 
     public TestPipeline(JavaProjectScanner scanner) {
-        this(scanner, new SingleFileProjectScanner(scanner.getMethodRegistry()), scanner.getMethodRegistry());
-    }
-
-    public TestPipeline(JavaProjectScanner scanner, MethodSignatureRegistry registry) {
-        this(scanner, new SingleFileProjectScanner(registry), registry);
-    }
-
-    public TestPipeline(JavaProjectScanner scanner, SingleFileProjectScanner singleFileScanner) {
-        this(scanner, singleFileScanner, scanner.getMethodRegistry());
+        this(scanner, scanner.getMethodRegistry());
     }
 
     public TestPipeline(JavaProjectScanner scanner,
-                        SingleFileProjectScanner singleFileScanner,
                         MethodSignatureRegistry registry) {
         this.scanner = Objects.requireNonNull(scanner, "scanner");
-        this.singleFileScanner = Objects.requireNonNull(singleFileScanner, "singleFileScanner");
         this.methodRegistry = Objects.requireNonNull(registry, "methodRegistry");
     }
 
     public List<TestClassInfo> execute(AgentConfig config) throws IOException {
-        List<TestClassInfo> classes = scanClasses(config);
+        if (config.isSingleFileMode()) {
+            return executeSequentialMode(config);
+        }
+        List<TestClassInfo> classes = scanner.scan(config);
         System.out.printf("Scan completed: %d classes detected.%n", classes.size());
         InitialGenerationStep generationStep = createGenerationStep(config);
         ErrorsReport report = generationStep.run(config, classes);
+        logReport(report);
+        return classes;
+    }
+
+    private List<TestClassInfo> executeSequentialMode(AgentConfig config) throws IOException {
+        List<TestClassInfo> processed = new ArrayList<>();
+        InitialGenerationStep generationStep = createGenerationStep(config);
+        scanner.scanSequentially(config, classes -> {
+            if (classes == null || classes.isEmpty()) {
+                return;
+            }
+            processed.addAll(classes);
+            System.out.printf("Scan completed: %d classes detected.%n", classes.size());
+            ErrorsReport report = generationStep.run(config, classes);
+            logReport(report);
+        });
+        return List.copyOf(processed);
+    }
+
+    private void logReport(ErrorsReport report) {
         if (report.hasErrors()) {
             System.out.printf("Generation completed with %d compilation errors and %d execution errors.%n",
                     report.getCompileErrors().size(),
@@ -72,15 +84,6 @@ public class TestPipeline {
         } else {
             System.out.println("Generation completed without errors.");
         }
-        return classes;
-    }
-
-    List<TestClassInfo> scanClasses(AgentConfig config) throws IOException {
-        Path singleFile = config.getSingleFile().orElse(null);
-        if (singleFile != null) {
-            return singleFileScanner.scan(singleFile, config);
-        }
-        return scanner.scan(config);
     }
 
     protected InitialGenerationStep createGenerationStep(AgentConfig config) {

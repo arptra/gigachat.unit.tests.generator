@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 public class AgentConfig {
@@ -17,7 +16,7 @@ public class AgentConfig {
     private final boolean parallelExecution;
     private final boolean scanWholeProject;
     private final List<String> targetClasses;
-    private final Path singleFile;
+    private final boolean singleFileMode;
     private final GigaChatClientConfig gigaChat;
     private final Map<String, Object> moduleOptions;
     private final PromptConfig promptConfig;
@@ -30,7 +29,7 @@ public class AgentConfig {
                 boolean parallelExecution,
                 boolean scanWholeProject,
                 List<String> targetClasses,
-                Path singleFile,
+                boolean singleFileMode,
                 GigaChatClientConfig gigaChat,
                 Map<String, Object> moduleOptions) {
         this.mode = Objects.requireNonNull(mode, "mode");
@@ -40,7 +39,7 @@ public class AgentConfig {
         this.parallelExecution = parallelExecution;
         this.scanWholeProject = scanWholeProject;
         this.targetClasses = sanitise(targetClasses);
-        this.singleFile = singleFile == null ? null : singleFile.toAbsolutePath().normalize();
+        this.singleFileMode = singleFileMode;
         this.gigaChat = gigaChat == null ? GigaChatClientConfig.empty() : gigaChat;
         this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
         this.promptConfig = PromptConfig.from(this.moduleOptions);
@@ -75,8 +74,8 @@ public class AgentConfig {
         return targetClasses;
     }
 
-    public Optional<Path> getSingleFile() {
-        return Optional.ofNullable(singleFile);
+    public boolean isSingleFileMode() {
+        return singleFileMode;
     }
 
     public GigaChatClientConfig getGigaChat() {
@@ -108,7 +107,7 @@ public class AgentConfig {
         builder.parallelExecution(parallelExecution);
         builder.scanWholeProject(scanWholeProject);
         builder.targetClasses(new ArrayList<>(targetClasses));
-        builder.singleFile(singleFile);
+        builder.singleFileMode(singleFileMode);
         builder.gigaChat(gigaChat);
         builder.moduleOptions(new LinkedHashMap<>(moduleOptions));
         return builder;
@@ -124,7 +123,7 @@ public class AgentConfig {
         builder.append("  \"parallelExecution\": ").append(parallelExecution).append(",\n");
         builder.append("  \"scanWholeProject\": ").append(scanWholeProject).append(",\n");
         builder.append("  \"targetClasses\": ").append(renderArray(targetClasses)).append(",\n");
-        builder.append("  \"singleFile\": ").append(renderNullable(singleFile == null ? null : singleFile.toString())).append(",\n");
+        builder.append("  \"singleFileMode\": ").append(singleFileMode).append(",\n");
         builder.append("  \"gigaChat\": {");
         builder.append("\n    \"authMode\": \"").append(gigaChat.authMode()).append("\",");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
@@ -176,7 +175,7 @@ public class AgentConfig {
         builder.append("scanWholeProject: ").append(scanWholeProject).append('\n');
         builder.append("targetClasses:").append(targetClasses.isEmpty() ? " []\n" : '\n');
         targetClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
-        builder.append("singleFile: ").append(renderYamlNullable(singleFile == null ? null : singleFile.toString())).append('\n');
+        builder.append("singleFileMode: ").append(singleFileMode).append('\n');
         builder.append("gigaChat:\n");
         builder.append("  authMode: ").append(gigaChat.authMode()).append('\n');
         builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
