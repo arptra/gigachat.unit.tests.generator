@@ -57,6 +57,8 @@ public class ArgsParser {
                 case "cert" -> certificatePath = toPath(readValue(args, ++i, key));
                 case "rootCert" -> rootCertificatePath = toPath(readValue(args, ++i, key));
                 case "key" -> privateKeyPath = toPath(readValue(args, ++i, key));
+                case "compile" -> builder.moduleOption("pipeline.compile.enabled", true);
+                case "execute" -> builder.moduleOption("pipeline.execute.enabled", true);
                 case "ssl" -> {
                     boolean value = true;
                     if (hasValue(args, i)) {

@@ -27,8 +27,8 @@ public record PipelineModuleConfig(ParallelMode parallelMode,
             return defaults();
         }
         ParallelMode mode = parseMode(options.get(KEY_PARALLEL_MODE));
-        boolean compileEnabled = parseBoolean(options.get(KEY_COMPILE_ENABLED), true);
-        boolean executeEnabled = parseBoolean(options.get(KEY_EXECUTE_ENABLED), true);
+        boolean compileEnabled = parseBoolean(options.get(KEY_COMPILE_ENABLED), false);
+        boolean executeEnabled = parseBoolean(options.get(KEY_EXECUTE_ENABLED), false);
         boolean snapshotsEnabled = parseBoolean(options.get(KEY_SNAPSHOTS_ENABLED), true);
         boolean autoMockDetection = parseBoolean(options.get(KEY_AUTO_MOCK_DETECTION), true);
         boolean validateMockUsage = parseBoolean(options.get(KEY_VALIDATE_MOCK_USAGE), true);
@@ -67,8 +67,8 @@ public record PipelineModuleConfig(ParallelMode parallelMode,
 
     private static PipelineModuleConfig defaults() {
         return new PipelineModuleConfig(ParallelMode.NONE,
-                true,
-                true,
+                false,
+                false,
                 true,
                 true,
                 true,
