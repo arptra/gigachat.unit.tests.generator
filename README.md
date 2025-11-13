@@ -15,6 +15,17 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --project"
 ```
 
+### Scan a Single Java File
+
+When you only want to analyse one source file, pass its path via `--single-file`.
+The file must belong to the project directory provided via `--path`.
+
+```bash
+./gradlew :entrypoint:run --args="--mode scan --path ./example-project --single-file ./example-project/src/main/java/com/example/app/service/UserService.java"
+```
+
+The entrypoint parses just the supplied file and immediately feeds the discovered class metadata into the pipeline.
+
 ### Scan a Single Class from the Example Project
 
 To limit the pipeline to a single class (e.g., `com.example.app.service.UserService`), run:
