@@ -111,7 +111,7 @@ public class InitialGenerationStep {
         this.collaboratorDetector = new ExternalCollaboratorDetector();
         this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
         this.autoCorrectionStage = new AutoCorrectionStage();
-        this.semanticMethodAnalyzer = new SemanticMethodAnalyzer();
+        this.semanticMethodAnalyzer = new SemanticMethodAnalyzer(signatureRegistry);
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -243,18 +243,22 @@ public class InitialGenerationStep {
 
     private JSONObject buildSemanticContext(MethodAnalysisDTO semanticAnalysis) {
         JSONObject semanticJson = new JSONObject();
-        JSONArray constructors = new JSONArray();
-        for (ConstructorInfo constructor : semanticAnalysis.getConstructors()) {
-            JSONObject ctorJson = new JSONObject();
-            ctorJson.put("className", constructor.getClassName());
-            ctorJson.put("parameterTypes", constructor.getParameterTypes());
-            ctorJson.put("signature", constructor.getSignature());
-            constructors.put(ctorJson);
+        JSONObject constructors = new JSONObject();
+        for (Map.Entry<String, List<ConstructorInfo>> entry : semanticAnalysis.getTypeConstructors().entrySet()) {
+            JSONArray constructorArray = new JSONArray();
+            for (ConstructorInfo constructor : entry.getValue()) {
+                JSONObject ctorJson = new JSONObject();
+                ctorJson.put("className", constructor.getClassName());
+                ctorJson.put("parameterTypes", constructor.getParameterTypes());
+                ctorJson.put("signature", constructor.getSignature());
+                constructorArray.put(ctorJson);
+            }
+            constructors.put(entry.getKey(), constructorArray);
         }
-        semanticJson.put("constructors", constructors);
+        semanticJson.put("typeConstructors", constructors);
 
         JSONObject methods = new JSONObject();
-        for (Map.Entry<String, List<MethodInfo>> entry : semanticAnalysis.getMethods().entrySet()) {
+        for (Map.Entry<String, List<MethodInfo>> entry : semanticAnalysis.getTypeMethods().entrySet()) {
             JSONArray methodArray = new JSONArray();
             for (MethodInfo method : entry.getValue()) {
                 JSONObject methodJson = new JSONObject();
@@ -265,19 +269,18 @@ public class InitialGenerationStep {
             }
             methods.put(entry.getKey(), methodArray);
         }
-        semanticJson.put("methods", methods);
+        semanticJson.put("typeMethods", methods);
 
-        JSONArray staticDependencies = new JSONArray();
+        JSONArray staticCalls = new JSONArray();
         for (StaticDependency dependency : semanticAnalysis.getStaticDependencies()) {
             JSONObject dependencyJson = new JSONObject();
             dependencyJson.put("owner", dependency.getOwner());
             dependencyJson.put("methodName", dependency.getMethodName());
             dependencyJson.put("strategy", dependency.getStrategy().name());
             dependencyJson.put("replacement", dependency.getReplacement());
-            staticDependencies.put(dependencyJson);
+            staticCalls.put(dependencyJson);
         }
-        semanticJson.put("staticDependencies", staticDependencies);
-        semanticJson.put("collaboratorTypes", new JSONArray(semanticAnalysis.getCollaboratorTypes()));
+        semanticJson.put("staticCalls", staticCalls);
         semanticJson.put("domainTypes", new JSONArray(semanticAnalysis.getDomainTypes()));
         return semanticJson;
     }

@@ -1,6 +1,5 @@
 package com.gigachat.unit.tests.generator.analysis.semantic;
 
-import com.gigachat.unit.tests.generator.analysis.api.StaticDependency;
 import com.gigachat.unit.tests.generator.analysis.api.StaticMockStrategy;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
@@ -17,21 +16,21 @@ public class StaticDependencyResolver {
             "Math#random", "0.5d"
     );
 
-    public List<StaticDependency> resolve(List<MethodCallExpr> staticCalls) {
+    public List<StaticCall> resolve(List<MethodCallExpr> staticCalls) {
         if (staticCalls == null || staticCalls.isEmpty()) {
             return List.of();
         }
-        List<StaticDependency> result = new ArrayList<>();
+        List<StaticCall> result = new ArrayList<>();
         for (MethodCallExpr call : staticCalls) {
             String owner = call.getScope().map(Expression::toString).orElse("Unknown");
             String key = owner + "#" + call.getNameAsString();
             if (FIXED_VALUES.containsKey(key)) {
-                result.add(new StaticDependency(owner,
+                result.add(new StaticCall(owner,
                         call.getNameAsString(),
                         StaticMockStrategy.FIXED_VALUE,
                         FIXED_VALUES.get(key)));
             } else {
-                result.add(new StaticDependency(owner,
+                result.add(new StaticCall(owner,
                         call.getNameAsString(),
                         StaticMockStrategy.STUB,
                         null));
