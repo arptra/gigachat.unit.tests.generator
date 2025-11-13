@@ -15,6 +15,7 @@ public class AgentConfigBuilder {
     private boolean parallelExecution;
     private boolean scanWholeProject;
     private final List<String> targetClasses = new ArrayList<>();
+    private boolean singleFileMode;
     private GigaChatClientConfig gigaChat = GigaChatClientConfig.empty();
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
     private boolean verifySslCerts;
@@ -73,6 +74,11 @@ public class AgentConfigBuilder {
         if (targetClasses != null) {
             this.targetClasses.addAll(targetClasses);
         }
+        return this;
+    }
+
+    public AgentConfigBuilder singleFileMode(boolean enabled) {
+        this.singleFileMode = enabled;
         return this;
     }
 
@@ -189,6 +195,7 @@ public class AgentConfigBuilder {
                 parallelExecution,
                 scanWholeProject,
                 targetClasses,
+                singleFileMode,
                 gigaChat,
                 moduleOptions
         );

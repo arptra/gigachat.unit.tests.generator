@@ -15,6 +15,21 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --project"
 ```
 
+### Sequential Single-File Mode
+
+Use `--single-file` to enable sequential scanning. In this mode the entrypoint
+parses one Java file at a time, feeds its classes into the pipeline, waits for
+the generation step to finish, and only then moves to the next file. The flag
+has no arguments:
+
+```bash
+./gradlew :entrypoint:run --args="--mode scan --path ./example-project --single-file"
+```
+
+This mode is useful when you want to control resource usage or stop the run
+after processing a subset of files because the scanner never loads the whole
+project at once.
+
 ### Scan a Single Class from the Example Project
 
 To limit the pipeline to a single class (e.g., `com.example.app.service.UserService`), run:

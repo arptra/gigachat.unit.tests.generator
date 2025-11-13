@@ -23,6 +23,7 @@ import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -42,16 +43,40 @@ public class TestPipeline {
         this(scanner, scanner.getMethodRegistry());
     }
 
-    public TestPipeline(JavaProjectScanner scanner, MethodSignatureRegistry registry) {
+    public TestPipeline(JavaProjectScanner scanner,
+                        MethodSignatureRegistry registry) {
         this.scanner = Objects.requireNonNull(scanner, "scanner");
         this.methodRegistry = Objects.requireNonNull(registry, "methodRegistry");
     }
 
     public List<TestClassInfo> execute(AgentConfig config) throws IOException {
+        if (config.isSingleFileMode()) {
+            return executeSequentialMode(config);
+        }
         List<TestClassInfo> classes = scanner.scan(config);
         System.out.printf("Scan completed: %d classes detected.%n", classes.size());
         InitialGenerationStep generationStep = createGenerationStep(config);
         ErrorsReport report = generationStep.run(config, classes);
+        logReport(report);
+        return classes;
+    }
+
+    private List<TestClassInfo> executeSequentialMode(AgentConfig config) throws IOException {
+        List<TestClassInfo> processed = new ArrayList<>();
+        InitialGenerationStep generationStep = createGenerationStep(config);
+        scanner.scanSequentially(config, classes -> {
+            if (classes == null || classes.isEmpty()) {
+                return;
+            }
+            processed.addAll(classes);
+            System.out.printf("Scan completed: %d classes detected.%n", classes.size());
+            ErrorsReport report = generationStep.run(config, classes);
+            logReport(report);
+        });
+        return List.copyOf(processed);
+    }
+
+    private void logReport(ErrorsReport report) {
         if (report.hasErrors()) {
             System.out.printf("Generation completed with %d compilation errors and %d execution errors.%n",
                     report.getCompileErrors().size(),
@@ -59,10 +84,9 @@ public class TestPipeline {
         } else {
             System.out.println("Generation completed without errors.");
         }
-        return classes;
     }
 
-    private InitialGenerationStep createGenerationStep(AgentConfig config) {
+    protected InitialGenerationStep createGenerationStep(AgentConfig config) {
         Path projectRoot = config.getProjectPath();
         PipelineLogger logger = new PipelineLogger(projectRoot);
         TestClassWriter testClassWriter = new TestClassWriter(logger);

@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -63,10 +64,40 @@ public class JavaProjectScanner {
         return List.copyOf(discoveredClasses);
     }
 
-    private void parseJavaFile(Path javaFile,
-                               Path moduleRoot,
-                               AgentConfig config,
-                               List<TestClassInfo> collector) {
+    public void scanSequentially(AgentConfig config, Consumer<List<TestClassInfo>> perFileConsumer) throws IOException {
+        Objects.requireNonNull(perFileConsumer, "perFileConsumer");
+        Path projectPath = config.getProjectPath();
+        List<Path> moduleRoots = determineModuleRoots(projectPath, config.getIncludeModules());
+        for (Path moduleRoot : moduleRoots) {
+            Path sourceRoot = resolveSourceRoot(moduleRoot);
+            if (!Files.exists(sourceRoot)) {
+                continue;
+            }
+            try (Stream<Path> files = Files.walk(sourceRoot)) {
+                files.filter(Files::isRegularFile)
+                        .filter(path -> path.toString().endsWith(".java"))
+                        .forEach(path -> parseAndEmit(path, moduleRoot, config, perFileConsumer));
+            } catch (java.io.UncheckedIOException ex) {
+                throw (IOException) ex.getCause();
+            }
+        }
+    }
+
+    private void parseAndEmit(Path javaFile,
+                              Path moduleRoot,
+                              AgentConfig config,
+                              Consumer<List<TestClassInfo>> perFileConsumer) {
+        List<TestClassInfo> collector = new ArrayList<>();
+        parseJavaFile(javaFile, moduleRoot, config, collector);
+        if (!collector.isEmpty()) {
+            perFileConsumer.accept(List.copyOf(collector));
+        }
+    }
+
+    protected void parseJavaFile(Path javaFile,
+                                 Path moduleRoot,
+                                 AgentConfig config,
+                                 List<TestClassInfo> collector) {
         try {
             javaParser.parse(javaFile).getResult().ifPresentOrElse(
                     compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector),
@@ -77,10 +108,10 @@ public class JavaProjectScanner {
         }
     }
 
-    private void handleCompilationUnit(CompilationUnit compilationUnit,
-                                       Path moduleRoot,
-                                       AgentConfig config,
-                                       List<TestClassInfo> collector) {
+    protected void handleCompilationUnit(CompilationUnit compilationUnit,
+                                         Path moduleRoot,
+                                         AgentConfig config,
+                                         List<TestClassInfo> collector) {
         String packageName = compilationUnit.getPackageDeclaration()
                 .map(declaration -> declaration.getName().asString())
                 .orElse("");
