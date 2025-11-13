@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Collects method invocations grouped by the resolved receiver type.
@@ -18,21 +19,31 @@ public class MethodUsageExtractor {
         }
         Map<String, List<MethodSignature>> result = new LinkedHashMap<>();
         for (MethodCallExpr call : calls) {
-            String owner = call.getScope()
-                    .flatMap(resolver::resolve)
-                    .orElse(TypeResolver.UNKNOWN_TYPE);
-            List<String> parameterTypes = new ArrayList<>();
-            for (Expression argument : call.getArguments()) {
-                parameterTypes.add(resolver.resolve(argument)
-                        .orElseGet(() -> resolver.inferLiteralType(argument)));
+            Optional<ResolvedType> ownerType = call.getScope()
+                    .flatMap(resolver::resolveOwnerType)
+                    .or(() -> resolver.resolveOwnerType(null));
+            if (ownerType.isEmpty() || ownerType.get().isUnknown()) {
+                continue;
             }
-            MethodSignature signature = new MethodSignature(owner,
+            List<String> parameterTypes = new ArrayList<>(call.getArguments().size());
+            for (Expression argument : call.getArguments()) {
+                parameterTypes.add(resolveParameterType(resolver, argument));
+            }
+            String typeName = ownerType.get().getName();
+            MethodSignature signature = new MethodSignature(typeName,
                     call.getNameAsString(),
                     parameterTypes,
                     TypeResolver.UNKNOWN_TYPE);
-            result.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(signature);
+            result.computeIfAbsent(typeName, ignored -> new ArrayList<>()).add(signature);
         }
-        result.replaceAll((type, signatures) -> List.copyOf(signatures));
+        result.replaceAll((key, value) -> value == null ? List.of() : List.copyOf(value));
         return Map.copyOf(result);
+    }
+
+    private String resolveParameterType(TypeResolver resolver, Expression argument) {
+        return resolver.resolve(argument)
+                .or(() -> Optional.of(resolver.inferLiteralType(argument)))
+                .map(ResolvedType::getName)
+                .orElse(TypeResolver.UNKNOWN_TYPE);
     }
 }

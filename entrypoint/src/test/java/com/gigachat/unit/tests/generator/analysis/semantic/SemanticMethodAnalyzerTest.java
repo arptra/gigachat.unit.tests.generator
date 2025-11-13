@@ -9,6 +9,7 @@ import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import org.junit.jupiter.api.Test;
 
@@ -84,8 +85,43 @@ class SemanticMethodAnalyzerTest {
                 .findFirst().orElse(null));
     }
 
+    @Test
+    void shouldInferLambdaTypesFromCollectionGenerics() throws Exception {
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        SemanticMethodAnalyzer analyzer = new SemanticMethodAnalyzer(registry);
+        MethodAnalysisDTO analysis = analyze("public void cleanup(List<User> users) { users.removeIf(user -> user.isInactive()); }", analyzer);
+
+        Map<String, List<MethodInfo>> methods = analysis.getMethods();
+        assertTrue(methods.containsKey("User"));
+        assertTrue(methods.get("User").stream().anyMatch(info -> "isInactive".equals(info.getMethodName())));
+    }
+
+    @Test
+    void shouldResolveCollaboratorFieldTypes() throws Exception {
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        SemanticMethodAnalyzer analyzer = new SemanticMethodAnalyzer(registry);
+        String classSource = "class Sample { private Collaborator collaborator; public void process() { collaborator.execute(); } }";
+        MethodAnalysisDTO analysis = analyzeClass(classSource, "process", analyzer);
+
+        Map<String, List<MethodInfo>> methods = analysis.getMethods();
+        assertTrue(methods.containsKey("Collaborator"));
+        assertTrue(methods.get("Collaborator").stream().anyMatch(info -> "execute".equals(info.getMethodName())));
+    }
+
     private MethodAnalysisDTO analyze(String methodSource, SemanticMethodAnalyzer analyzer) throws Exception {
         MethodDeclaration declaration = StaticJavaParser.parseBodyDeclaration(methodSource).asMethodDeclaration();
+        String signature = declaration.getDeclarationAsString(false, false, true);
+        TestMethodInfo info = new TestMethodInfo(signature,
+                declaration.getType().asString(),
+                declaration.toString(),
+                declaration);
+        return analyzer.analyze(info);
+    }
+
+    private MethodAnalysisDTO analyzeClass(String classSource, String methodName, SemanticMethodAnalyzer analyzer) throws Exception {
+        CompilationUnit unit = StaticJavaParser.parse(classSource);
+        MethodDeclaration declaration = unit.findFirst(MethodDeclaration.class, method -> method.getNameAsString().equals(methodName))
+                .orElseThrow();
         String signature = declaration.getDeclarationAsString(false, false, true);
         TestMethodInfo info = new TestMethodInfo(signature,
                 declaration.getType().asString(),

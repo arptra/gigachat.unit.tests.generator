@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Extracts unique domain types referenced inside a method body.
+ * Extracts semantic domain types referenced inside a method body.
  */
 public class DomainTypesExtractor {
     public Set<String> extract(MethodDeclaration declaration,
@@ -22,33 +22,33 @@ public class DomainTypesExtractor {
         LinkedHashSet<String> domainTypes = new LinkedHashSet<>();
         if (declaration != null) {
             declaration.findAll(VariableDeclarationExpr.class)
-                    .forEach(expr -> expr.getVariables()
-                            .forEach(variable -> addTypeTokens(variable.getType().asString(), domainTypes)));
+                    .forEach(expr -> expr.getVariables().forEach(variable ->
+                            addResolvedType(ResolvedType.of(variable.getType().asString()), domainTypes)));
         }
         for (MethodCallExpr call : methodCalls) {
-            call.getScope().flatMap(resolver::resolve)
-                    .ifPresent(type -> addTypeTokens(type, domainTypes));
+            call.getScope()
+                    .flatMap(resolver::resolveOwnerType)
+                    .ifPresent(type -> addResolvedType(type, domainTypes));
         }
         for (ConstructorSignature signature : constructorSignatures) {
-            addTypeTokens(signature.getTypeName(), domainTypes);
+            if (signature == null) {
+                continue;
+            }
+            addResolvedType(ResolvedType.of(signature.getTypeName()), domainTypes);
         }
         for (Expression expression : returnExpressions) {
-            resolver.resolve(expression).ifPresent(type -> addTypeTokens(type, domainTypes));
+            resolver.resolve(expression).ifPresent(type -> addResolvedType(type, domainTypes));
         }
-        if (domainTypes.isEmpty() && declaredReturnType != null && !declaredReturnType.isBlank()) {
-            addTypeTokens(declaredReturnType, domainTypes);
+        if (declaredReturnType != null && !declaredReturnType.isBlank()) {
+            addResolvedType(ResolvedType.of(declaredReturnType), domainTypes);
         }
         return Set.copyOf(domainTypes);
     }
 
-    private void addTypeTokens(String rawType, Set<String> accumulator) {
-        if (rawType == null || rawType.isBlank()) {
+    private void addResolvedType(ResolvedType type, Set<String> domainTypes) {
+        if (type == null || type.isUnknown()) {
             return;
         }
-        List<String> exploded = TypeResolver.explodeTypes(rawType);
-        if (exploded.isEmpty()) {
-            return;
-        }
-        accumulator.addAll(exploded);
+        domainTypes.addAll(type.flatten());
     }
 }
