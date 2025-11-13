@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.analysis.semantic;
 
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.LambdaExpr;
 
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -16,6 +17,7 @@ public class SemanticTypeContext {
     private final Map<String, ResolvedType> locals = new LinkedHashMap<>();
     private final Map<String, ResolvedType> lambdaParameters = new LinkedHashMap<>();
     private final Map<Expression, ResolvedType> expressionTypes = new IdentityHashMap<>();
+    private final Map<LambdaExpr, ResolvedType> lambdaReturnTypes = new IdentityHashMap<>();
 
     public void registerParameter(String name, ResolvedType type) {
         register(parameters, name, type);
@@ -42,6 +44,20 @@ public class SemanticTypeContext {
             return Optional.empty();
         }
         return Optional.ofNullable(lambdaParameters.get(name));
+    }
+
+    public void registerLambdaReturn(LambdaExpr expr, ResolvedType type) {
+        if (expr == null || type == null || type.isUnknown()) {
+            return;
+        }
+        lambdaReturnTypes.put(expr, type);
+    }
+
+    public Optional<ResolvedType> getLambdaReturn(LambdaExpr expr) {
+        if (expr == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(lambdaReturnTypes.get(expr));
     }
 
     public Optional<ResolvedType> resolveSymbol(String name) {
@@ -92,6 +108,10 @@ public class SemanticTypeContext {
 
     public Map<String, ResolvedType> getLocals() {
         return locals;
+    }
+
+    public Map<Expression, ResolvedType> getExpressionTypes() {
+        return expressionTypes;
     }
 
     private void register(Map<String, ResolvedType> target, String name, ResolvedType type) {
