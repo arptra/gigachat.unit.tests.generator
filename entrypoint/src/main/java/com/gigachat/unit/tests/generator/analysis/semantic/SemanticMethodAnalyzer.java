@@ -22,23 +22,17 @@ import java.util.Optional;
 import java.util.Set;
 
 public class SemanticMethodAnalyzer implements MethodAnalyzer {
-    private final DomainTypesExtractor domainTypesExtractor;
-    private final MethodUsageExtractor methodUsageExtractor;
     private final StaticDependencyResolver staticDependencyResolver;
     private final MethodSignatureRegistry typeRegistry;
     private final SemanticMetadataMerger metadataMerger;
 
     public SemanticMethodAnalyzer(MethodSignatureRegistry typeRegistry) {
-        this(typeRegistry, new DomainTypesExtractor(), new MethodUsageExtractor(), new StaticDependencyResolver());
+        this(typeRegistry, new StaticDependencyResolver());
     }
 
     public SemanticMethodAnalyzer(MethodSignatureRegistry typeRegistry,
-                                  DomainTypesExtractor domainTypesExtractor,
-                                  MethodUsageExtractor methodUsageExtractor,
                                   StaticDependencyResolver staticDependencyResolver) {
         this.typeRegistry = typeRegistry == null ? new MethodSignatureRegistry() : typeRegistry;
-        this.domainTypesExtractor = Objects.requireNonNull(domainTypesExtractor, "domainTypesExtractor");
-        this.methodUsageExtractor = Objects.requireNonNull(methodUsageExtractor, "methodUsageExtractor");
         this.staticDependencyResolver = Objects.requireNonNull(staticDependencyResolver, "staticDependencyResolver");
         this.metadataMerger = new SemanticMetadataMerger(this.typeRegistry);
     }
@@ -55,42 +49,29 @@ public class SemanticMethodAnalyzer implements MethodAnalyzer {
         String enclosingType = resolveEnclosingType(declaration);
         TypeResolver resolver = new TypeResolver(enclosingType, context, typeRegistry);
 
-        LinkedHashSet<String> signatureTypes = new LinkedHashSet<>();
-        declaration.getParameters().forEach(parameter -> {
-            ResolvedType parameterType = ResolvedType.of(parameter.getType().asString());
-            signatureTypes.add(parameterType.describe());
-            signatureTypes.addAll(parameterType.flatten());
-        });
+        LinkedHashSet<ResolvedType> discoveredTypes = new LinkedHashSet<>();
+        context.getFields().values().forEach(type -> addDiscoveredType(discoveredTypes, type));
+        context.getParameters().values().forEach(type -> addDiscoveredType(discoveredTypes, type));
         ResolvedType declaredReturn = ResolvedType.of(info.getReturnType());
-        signatureTypes.add(declaredReturn.describe());
-        signatureTypes.addAll(declaredReturn.flatten());
-
-        LinkedHashSet<String> domainTypes = new LinkedHashSet<>(signatureTypes);
+        addDiscoveredType(discoveredTypes, declaredReturn);
 
         SemanticMethodVisitor visitor = new SemanticMethodVisitor(resolver, context);
         declaration.getBody().ifPresent(body -> body.accept(visitor, context));
-        domainTypes.addAll(visitor.getDomainTypes());
 
-        Map<String, List<MethodSignature>> semanticMethods = methodUsageExtractor.extract(visitor.getMethodCalls(), resolver);
-        Map<String, List<ConstructorSignature>> semanticConstructors = groupConstructors(visitor.getSemanticConstructors());
+        visitor.getRawDomainTypes().forEach(type -> addDiscoveredType(discoveredTypes, type));
+        visitor.getRawMethodUsages().values().forEach(list -> list.forEach(usage -> {
+            addDiscoveredType(discoveredTypes, usage.getOwnerType());
+            usage.getParameterTypes().forEach(type -> addDiscoveredType(discoveredTypes, type));
+            addDiscoveredType(discoveredTypes, usage.getReturnType());
+        }));
 
-        domainTypes.addAll(domainTypesExtractor.extract(declaration,
-                visitor.getMethodCalls(),
-                visitor.getReturnExpressions(),
-                visitor.getSemanticConstructors(),
-                resolver,
-                info.getReturnType()));
+        Map<String, ResolvedType> normalizedDomainTypes = metadataMerger.normalizeDomainTypes(discoveredTypes);
+        Map<String, List<MethodSignature>> typeMethods = metadataMerger.buildTypeMethods(normalizedDomainTypes);
+        Map<String, List<ConstructorSignature>> typeConstructors = metadataMerger.buildTypeConstructors(normalizedDomainTypes);
+        List<StaticCall> staticCalls = staticDependencyResolver.resolve(visitor.getRawStaticCalls());
 
-        Map<String, List<MethodSignature>> mergedMethods = metadataMerger.mergeMethods(domainTypes, semanticMethods);
-        mergedMethods = redistributeRegistryMethods(mergedMethods, semanticMethods.keySet());
-        mergedMethods = removeUnknown(mergedMethods);
-        Map<String, List<ConstructorSignature>> mergedConstructors = removeUnknownConstructors(
-                metadataMerger.mergeConstructors(domainTypes, semanticConstructors));
-
-        Set<String> filteredDomainTypes = filterDomainTypes(domainTypes, mergedMethods, mergedConstructors, signatureTypes);
-
-        List<StaticCall> staticCalls = staticDependencyResolver.resolve(visitor.getStaticCalls());
-        SemanticAnalysisResult result = new SemanticAnalysisResult(filteredDomainTypes, mergedMethods, mergedConstructors, staticCalls);
+        Set<String> domainTypes = new LinkedHashSet<>(normalizedDomainTypes.keySet());
+        SemanticAnalysisResult result = new SemanticAnalysisResult(domainTypes, typeMethods, typeConstructors, staticCalls);
         return convert(result);
     }
 
@@ -113,154 +94,6 @@ public class SemanticMethodAnalyzer implements MethodAnalyzer {
     private String resolveEnclosingType(MethodDeclaration declaration) {
         Optional<ClassOrInterfaceDeclaration> clazz = declaration.findAncestor(ClassOrInterfaceDeclaration.class);
         return clazz.map(ClassOrInterfaceDeclaration::getNameAsString).orElse("");
-    }
-
-    private Map<String, List<ConstructorSignature>> groupConstructors(List<ConstructorSignature> constructors) {
-        Map<String, List<ConstructorSignature>> grouped = new LinkedHashMap<>();
-        if (constructors == null) {
-            return grouped;
-        }
-        for (ConstructorSignature signature : constructors) {
-            if (signature == null || signature.getTypeName().isBlank()) {
-                continue;
-            }
-            grouped.computeIfAbsent(signature.getTypeName(), ignored -> new ArrayList<>()).add(signature);
-        }
-        grouped.replaceAll((type, list) -> List.copyOf(list));
-        return grouped;
-    }
-
-    private Map<String, List<MethodSignature>> removeUnknown(Map<String, List<MethodSignature>> methods) {
-        Map<String, List<MethodSignature>> sanitized = new LinkedHashMap<>();
-        methods.forEach((type, list) -> {
-            if (TypeResolver.UNKNOWN_TYPE.equals(type) || type == null || type.isBlank()) {
-                return;
-            }
-            sanitized.put(type, list);
-        });
-        return Map.copyOf(sanitized);
-    }
-
-    private Map<String, List<ConstructorSignature>> removeUnknownConstructors(Map<String, List<ConstructorSignature>> constructors) {
-        Map<String, List<ConstructorSignature>> sanitized = new LinkedHashMap<>();
-        constructors.forEach((type, list) -> {
-            if (TypeResolver.UNKNOWN_TYPE.equals(type) || type == null || type.isBlank()) {
-                return;
-            }
-            sanitized.put(type, list);
-        });
-        return Map.copyOf(sanitized);
-    }
-
-    private Set<String> filterDomainTypes(Set<String> candidates,
-                                          Map<String, List<MethodSignature>> typeMethods,
-                                          Map<String, List<ConstructorSignature>> typeConstructors,
-                                          Set<String> signatureTypes) {
-        LinkedHashSet<String> filtered = new LinkedHashSet<>();
-        for (String type : candidates) {
-            if (type == null || type.isBlank() || TypeResolver.UNKNOWN_TYPE.equals(type)) {
-                continue;
-            }
-            ResolvedType resolved = ResolvedType.of(type);
-            if (resolved.isPrimitive() || isJavaPackage(type)) {
-                continue;
-            }
-        boolean hasConstructors = hasEntries(typeConstructors, type, resolved);
-        boolean hasMethods = hasEntries(typeMethods, type, resolved);
-        boolean partOfSignature = signatureTypes.contains(type) || signatureTypes.contains(resolved.getName());
-        if (hasConstructors || hasMethods || partOfSignature) {
-                if (!type.isBlank()) {
-                    filtered.add(type);
-                }
-                filtered.add(resolved.getName());
-                resolved.getGenericArguments().stream()
-                        .map(ResolvedType::normalise)
-                        .filter(argument -> argument != null && !argument.isBlank())
-                        .forEach(filtered::add);
-        }
-        }
-        return Set.copyOf(filtered);
-    }
-
-    private boolean isJavaPackage(String type) {
-        return type != null && type.startsWith("java.");
-    }
-
-    private boolean hasEntries(Map<String, ? extends List<?>> map, String rawType, ResolvedType resolved) {
-        if (map == null || map.isEmpty()) {
-            return false;
-        }
-        if (hasNonEmpty(map.get(rawType))) {
-            return true;
-        }
-        String base = resolved.getName();
-        return hasNonEmpty(map.get(base));
-    }
-
-    private boolean hasNonEmpty(List<?> values) {
-        return values != null && !values.isEmpty();
-    }
-
-    private Map<String, List<MethodSignature>> redistributeRegistryMethods(Map<String, List<MethodSignature>> mergedMethods,
-                                                                           Set<String> semanticKeys) {
-        if (mergedMethods == null || mergedMethods.isEmpty() || semanticKeys == null || semanticKeys.isEmpty()) {
-            return mergedMethods == null ? Map.of() : mergedMethods;
-        }
-        LinkedHashMap<String, List<MethodSignature>> mutable = new LinkedHashMap<>();
-        mergedMethods.forEach((key, value) -> mutable.put(key, value == null ? new ArrayList<>() : new ArrayList<>(value)));
-
-        LinkedHashMap<String, List<String>> baseToVariants = new LinkedHashMap<>();
-        for (String semanticKey : semanticKeys) {
-            ResolvedType resolved = ResolvedType.of(semanticKey);
-            String base = resolved.getName();
-            if (base.isBlank()) {
-                continue;
-            }
-            baseToVariants.computeIfAbsent(base, ignored -> new ArrayList<>());
-            List<String> variants = baseToVariants.get(base);
-            if (!variants.contains(semanticKey)) {
-                variants.add(semanticKey);
-            }
-        }
-
-        for (Map.Entry<String, List<String>> entry : baseToVariants.entrySet()) {
-            String base = entry.getKey();
-            List<String> variants = entry.getValue();
-            boolean hasSpecialisedVariant = variants.stream().anyMatch(variant -> !variant.equals(base));
-            if (!hasSpecialisedVariant) {
-                continue;
-            }
-            List<MethodSignature> baseMethods = mutable.get(base);
-            if (baseMethods == null || baseMethods.isEmpty()) {
-                continue;
-            }
-            for (String variant : variants) {
-                if (variant.equals(base)) {
-                    continue;
-                }
-                mutable.computeIfAbsent(variant, ignored -> new ArrayList<>()).addAll(baseMethods);
-            }
-            mutable.remove(base);
-        }
-
-        mutable.replaceAll((key, value) -> deduplicateSignatures(value));
-        mutable.replaceAll((key, value) -> value == null ? List.of() : List.copyOf(value));
-        return Map.copyOf(mutable);
-    }
-
-    private List<MethodSignature> deduplicateSignatures(List<MethodSignature> signatures) {
-        if (signatures == null || signatures.isEmpty()) {
-            return List.of();
-        }
-        LinkedHashMap<String, MethodSignature> deduped = new LinkedHashMap<>();
-        for (MethodSignature signature : signatures) {
-            if (signature == null) {
-                continue;
-            }
-            String key = signature.getMethodName() + '#' + signature.getParameterTypes() + '#' + signature.getReturnType();
-            deduped.putIfAbsent(key, signature);
-        }
-        return new ArrayList<>(deduped.values());
     }
 
     private MethodAnalysisDTO convert(SemanticAnalysisResult result) {
@@ -293,5 +126,12 @@ public class SemanticMethodAnalyzer implements MethodAnalyzer {
         }
 
         return new MethodAnalysisDTO(typeConstructors, typeMethods, staticDependencies, result.getDomainTypes());
+    }
+
+    private void addDiscoveredType(Set<ResolvedType> discoveredTypes, ResolvedType type) {
+        if (discoveredTypes == null || type == null || type.isUnknown()) {
+            return;
+        }
+        discoveredTypes.add(type);
     }
 }

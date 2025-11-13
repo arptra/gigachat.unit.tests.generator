@@ -10,17 +10,18 @@ import com.github.javaparser.ast.expr.LambdaExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
-import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.expr.ThisExpr;
+import com.github.javaparser.ast.expr.TypeExpr;
 import com.github.javaparser.ast.expr.VariableDeclarationExpr;
+import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -29,13 +30,9 @@ import java.util.Set;
 public class SemanticMethodVisitor extends VoidVisitorAdapter<SemanticTypeContext> {
     private final TypeResolver resolver;
     private final SemanticTypeContext context;
-    private final List<MethodCallExpr> methodCalls = new ArrayList<>();
-    private final List<MethodCallExpr> staticCalls = new ArrayList<>();
-    private final List<Expression> returnExpressions = new ArrayList<>();
-    private final List<ConstructorSignature> semanticConstructors = new ArrayList<>();
-    private final Set<String> domainTypes = new LinkedHashSet<>();
-    private final Map<String, List<MethodSignature>> typeMethods = new LinkedHashMap<>();
-    private final Map<String, List<ConstructorSignature>> typeConstructors = new LinkedHashMap<>();
+    private final Map<String, List<RawMethodUsage>> rawMethodUsages = new LinkedHashMap<>();
+    private final List<RawStaticCall> rawStaticCalls = new ArrayList<>();
+    private final Set<ResolvedType> rawDomainTypes = new LinkedHashSet<>();
 
     public SemanticMethodVisitor(TypeResolver resolver, SemanticTypeContext context) {
         this.resolver = resolver;
@@ -84,21 +81,26 @@ public class SemanticMethodVisitor extends VoidVisitorAdapter<SemanticTypeContex
                 argument.accept(this, arg);
             }
         }
-        ownerType.ifPresent(type -> {
-            addDomainType(type);
-            expr.getScope().ifPresent(scope -> context.registerExpressionType(scope, type));
-        });
+        ownerType.ifPresent(type -> expr.getScope().ifPresent(scope -> context.registerExpressionType(scope, type)));
         Optional<ResolvedType> returnType = resolver.resolve(expr);
         returnType.ifPresent(resolved -> {
             context.registerExpressionType(expr, resolved);
             addDomainType(resolved);
         });
-        if (isStaticCall(expr, ownerType)) {
-            staticCalls.add(expr);
+        boolean staticCall = isStaticCall(expr, ownerType);
+        if (!staticCall) {
+            ownerType.ifPresent(this::addDomainType);
+        }
+        List<ResolvedType> parameterTypes = resolveParameterTypes(expr);
+        parameterTypes.forEach(this::addDomainType);
+        if (staticCall) {
+            String owner = extractStaticOwner(expr);
+            if (!owner.isBlank()) {
+                rawStaticCalls.add(new RawStaticCall(owner, expr.getNameAsString()));
+            }
             return;
         }
-        methodCalls.add(expr);
-        ownerType.ifPresent(type -> recordMethod(type, expr, resolveParameterTypes(expr), returnType));
+        ownerType.ifPresent(type -> recordMethod(type, expr, parameterTypes, returnType.orElse(ResolvedType.unknown())));
     }
 
     private Map<String, ResolvedType> inferLambdaParameters(LambdaExpr lambdaExpr,
@@ -171,27 +173,17 @@ public class SemanticMethodVisitor extends VoidVisitorAdapter<SemanticTypeContex
     @Override
     public void visit(ReturnStmt stmt, SemanticTypeContext arg) {
         super.visit(stmt, arg);
-        stmt.getExpression().ifPresent(expression -> {
-            returnExpressions.add(expression);
-            resolver.resolve(expression).ifPresent(this::addDomainType);
-        });
+        stmt.getExpression().ifPresent(expression -> resolver.resolve(expression).ifPresent(this::addDomainType));
     }
 
     @Override
     public void visit(ObjectCreationExpr expr, SemanticTypeContext arg) {
         super.visit(expr, arg);
-        List<String> parameterTypes = new ArrayList<>();
         for (Expression argument : expr.getArguments()) {
             ResolvedType resolved = resolver.resolve(argument)
                     .orElseGet(() -> resolver.inferLiteralType(argument));
-            if (!resolved.isUnknown()) {
-                addDomainType(resolved);
-            }
-            parameterTypes.add(resolved.isUnknown() ? "Object" : resolved.describe());
+            addDomainType(resolved);
         }
-        ConstructorSignature signature = new ConstructorSignature(expr.getType().asString(), parameterTypes);
-        semanticConstructors.add(signature);
-        recordConstructor(signature);
         ResolvedType createdType = ResolvedType.of(expr.getType().asString());
         context.registerExpressionType(expr, createdType);
         addDomainType(createdType);
@@ -278,40 +270,29 @@ public class SemanticMethodVisitor extends VoidVisitorAdapter<SemanticTypeContex
         });
     }
 
-    public List<MethodCallExpr> getMethodCalls() {
-        return methodCalls;
+    public Map<String, List<RawMethodUsage>> getRawMethodUsages() {
+        return copy(rawMethodUsages);
     }
 
-    public List<MethodCallExpr> getStaticCalls() {
-        return staticCalls;
+    public List<RawStaticCall> getRawStaticCalls() {
+        return List.copyOf(rawStaticCalls);
     }
 
-    public List<Expression> getReturnExpressions() {
-        return returnExpressions;
-    }
-
-    public List<ConstructorSignature> getSemanticConstructors() {
-        return semanticConstructors;
-    }
-
-    public Set<String> getDomainTypes() {
-        return Set.copyOf(domainTypes);
-    }
-
-    public Map<String, List<MethodSignature>> getTypeMethods() {
-        return copy(typeMethods);
-    }
-
-    public Map<String, List<ConstructorSignature>> getTypeConstructors() {
-        return copy(typeConstructors);
+    public Set<ResolvedType> getRawDomainTypes() {
+        return Set.copyOf(rawDomainTypes);
     }
 
     private void addDomainType(ResolvedType type) {
         if (type == null || type.isUnknown()) {
             return;
         }
-        domainTypes.add(type.describe());
-        domainTypes.addAll(type.flatten());
+        rawDomainTypes.add(type);
+        for (String flattened : type.flatten()) {
+            ResolvedType generic = ResolvedType.of(flattened);
+            if (!generic.isUnknown()) {
+                rawDomainTypes.add(generic);
+            }
+        }
     }
 
     private Optional<ResolvedType> resolveLambdaReturn(LambdaExpr expr) {
@@ -332,25 +313,20 @@ public class SemanticMethodVisitor extends VoidVisitorAdapter<SemanticTypeContex
         return Optional.empty();
     }
 
-    private List<String> resolveParameterTypes(MethodCallExpr expr) {
-        List<String> params = new ArrayList<>();
+    private List<ResolvedType> resolveParameterTypes(MethodCallExpr expr) {
+        List<ResolvedType> params = new ArrayList<>();
         for (Expression argument : expr.getArguments()) {
             ResolvedType resolved = resolver.resolve(argument)
                     .orElseGet(() -> resolver.inferLiteralType(argument));
-            if (!resolved.isUnknown()) {
-                addDomainType(resolved);
-                params.add(resolved.describe());
-            } else {
-                params.add("Object");
-            }
+            params.add(resolved);
         }
         return params;
     }
 
     private void recordMethod(ResolvedType ownerType,
                               MethodCallExpr expr,
-                              List<String> parameterTypes,
-                              Optional<ResolvedType> returnType) {
+                              List<ResolvedType> parameterTypes,
+                              ResolvedType returnType) {
         if (ownerType == null || ownerType.isUnknown() || expr == null) {
             return;
         }
@@ -358,26 +334,37 @@ public class SemanticMethodVisitor extends VoidVisitorAdapter<SemanticTypeContex
         if (ownerKey.isBlank()) {
             return;
         }
-        String returnTypeName = returnType.map(ResolvedType::describe).filter(value -> !value.isBlank()).orElse("void");
-        MethodSignature signature = new MethodSignature(ownerKey, expr.getNameAsString(), parameterTypes, returnTypeName);
-        typeMethods.computeIfAbsent(ownerKey, ignored -> new ArrayList<>());
-        List<MethodSignature> signatures = typeMethods.get(ownerKey);
-        if (signatures.stream().noneMatch(signature::equals)) {
-            signatures.add(signature);
+        List<ResolvedType> params = new ArrayList<>();
+        for (ResolvedType parameterType : parameterTypes) {
+            params.add(parameterType == null ? ResolvedType.unknown() : parameterType);
+        }
+        RawMethodUsage usage = new RawMethodUsage(ownerType, expr.getNameAsString(), params, returnType);
+        rawMethodUsages.computeIfAbsent(ownerKey, ignored -> new ArrayList<>());
+        List<RawMethodUsage> usages = rawMethodUsages.get(ownerKey);
+        if (!usages.contains(usage)) {
+            usages.add(usage);
         }
     }
 
-    private void recordConstructor(ConstructorSignature signature) {
-        if (signature == null || signature.getTypeName().isBlank()) {
-            return;
-        }
-        String owner = ResolvedType.of(signature.getTypeName()).describe();
-        addDomainType(ResolvedType.of(owner));
-        typeConstructors.computeIfAbsent(owner, ignored -> new ArrayList<>());
-        List<ConstructorSignature> signatures = typeConstructors.get(owner);
-        if (signatures.stream().noneMatch(existing -> existing.getParameterTypes().equals(signature.getParameterTypes()))) {
-            signatures.add(signature);
-        }
+    private String extractStaticOwner(MethodCallExpr expr) {
+        return expr.getScope()
+                .map(scope -> {
+                    if (scope.isTypeExpr()) {
+                        TypeExpr typeExpr = scope.asTypeExpr();
+                        return ResolvedType.normalise(typeExpr.getTypeAsString());
+                    }
+                    if (scope instanceof NameExpr nameExpr) {
+                        return ResolvedType.normalise(nameExpr.getNameAsString());
+                    }
+                    if (scope instanceof FieldAccessExpr fieldAccessExpr) {
+                        if (fieldAccessExpr.getScope() instanceof NameExpr nameExpr) {
+                            return ResolvedType.normalise(nameExpr.getNameAsString());
+                        }
+                        return ResolvedType.normalise(fieldAccessExpr.getScope().toString());
+                    }
+                    return ResolvedType.normalise(scope.toString());
+                })
+                .orElse("");
     }
 
     private <T> Map<String, List<T>> copy(Map<String, List<T>> source) {

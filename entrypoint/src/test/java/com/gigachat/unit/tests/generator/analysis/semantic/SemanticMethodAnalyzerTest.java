@@ -26,6 +26,7 @@ class SemanticMethodAnalyzerTest {
     void basicOwnerResolution_directObjectCall() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("MyType", "void perform()");
+        registry.registerConstructor("MyType", "MyType()");
 
         MethodAnalysisDTO analysis = analyze("""
                 public void process() {
@@ -77,6 +78,7 @@ class SemanticMethodAnalyzerTest {
     @Test
     void genericContainers_listAddAndUserConstructors() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        registerListMetadata(registry, "User");
         registry.registerConstructor("User", "User(String username)");
 
         MethodAnalysisDTO analysis = analyzeClass("""
@@ -136,6 +138,8 @@ class SemanticMethodAnalyzerTest {
     void chainedCalls_streamFilterProducesStreamDomainType() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("User", "boolean isActive()");
+        registerListMetadata(registry, "User");
+        registerStreamFilterMetadata(registry, "User");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.List;
@@ -156,6 +160,7 @@ class SemanticMethodAnalyzerTest {
     void lambdaInference_removeIfCapturesPredicate() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("User", "boolean isInactive()");
+        registerListMetadata(registry, "User");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.List;
@@ -176,6 +181,9 @@ class SemanticMethodAnalyzerTest {
     void lambdaInference_mapInfersReturnType() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("User", "String getUsername()");
+        registerListMetadata(registry, "User");
+        registerStreamFilterMetadata(registry, "User");
+        registerStreamMapMetadata(registry, "User", "String");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.List;
@@ -217,6 +225,7 @@ class SemanticMethodAnalyzerTest {
     @Test
     void constructors_detectedFromNewExpressions() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        registry.registerConstructor("User", "User(String username)");
         MethodAnalysisDTO analysis = analyze("""
                 public User create(String username) {
                     return new User(username);
@@ -288,6 +297,7 @@ class SemanticMethodAnalyzerTest {
     void domainTypes_captureLambdaParameters() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("User", "boolean isActive()");
+        registerListMetadata(registry, "User");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.List;
@@ -338,6 +348,9 @@ class SemanticMethodAnalyzerTest {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("User", "boolean isActive()");
         registry.registerConstructor("OrderResponse", "OrderResponse(java.util.List list, String id)");
+        registerListMetadata(registry, "User");
+        registerStreamFilterMetadata(registry, "User");
+        registry.registerMethod("Stream<User>", "java.util.List toList()");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.Collections;
@@ -362,6 +375,7 @@ class SemanticMethodAnalyzerTest {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("UserRepository", "java.util.List fetchAll()");
         registry.registerConstructor("Report", "Report(java.util.List data)");
+        registerListMetadata(registry, "User");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.List;
@@ -384,6 +398,10 @@ class SemanticMethodAnalyzerTest {
     void integration_mapFilterAndStaticUtilities() throws Exception {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         registry.registerMethod("User", "String getUsername()");
+        registerListMetadata(registry, "User");
+        registerStreamFilterMetadata(registry, "User");
+        registerStreamMapMetadata(registry, "User", "String");
+        registry.registerMethod("Stream<String>", "java.util.List toList()");
 
         MethodAnalysisDTO analysis = analyzeClass("""
                 import java.util.Collections;
@@ -427,5 +445,20 @@ class SemanticMethodAnalyzerTest {
                 declaration.toString(),
                 declaration);
         return analyzer.analyze(info);
+    }
+
+    private void registerListMetadata(MethodSignatureRegistry registry, String elementType) {
+        registry.registerMethod("List<" + elementType + ">", "boolean add(" + elementType + " value)");
+        registry.registerMethod("List<" + elementType + ">", "boolean removeIf(Predicate<" + elementType + "> predicate)");
+        registry.registerMethod("List<" + elementType + ">", "Stream<" + elementType + "> stream()");
+    }
+
+    private void registerStreamFilterMetadata(MethodSignatureRegistry registry, String elementType) {
+        registry.registerMethod("Stream<" + elementType + ">", "Stream<" + elementType + "> filter(Predicate<" + elementType + "> predicate)");
+        registry.registerMethod("Stream<" + elementType + ">", "long count()");
+    }
+
+    private void registerStreamMapMetadata(MethodSignatureRegistry registry, String sourceType, String targetType) {
+        registry.registerMethod("Stream<" + sourceType + ">", "Stream<" + targetType + "> map(Function<" + sourceType + ", " + targetType + "> mapper)");
     }
 }
