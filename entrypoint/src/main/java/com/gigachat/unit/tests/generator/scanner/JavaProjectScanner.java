@@ -63,10 +63,10 @@ public class JavaProjectScanner {
         return List.copyOf(discoveredClasses);
     }
 
-    private void parseJavaFile(Path javaFile,
-                               Path moduleRoot,
-                               AgentConfig config,
-                               List<TestClassInfo> collector) {
+    protected void parseJavaFile(Path javaFile,
+                                 Path moduleRoot,
+                                 AgentConfig config,
+                                 List<TestClassInfo> collector) {
         try {
             javaParser.parse(javaFile).getResult().ifPresentOrElse(
                     compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector),
@@ -77,10 +77,10 @@ public class JavaProjectScanner {
         }
     }
 
-    private void handleCompilationUnit(CompilationUnit compilationUnit,
-                                       Path moduleRoot,
-                                       AgentConfig config,
-                                       List<TestClassInfo> collector) {
+    protected void handleCompilationUnit(CompilationUnit compilationUnit,
+                                         Path moduleRoot,
+                                         AgentConfig config,
+                                         List<TestClassInfo> collector) {
         String packageName = compilationUnit.getPackageDeclaration()
                 .map(declaration -> declaration.getName().asString())
                 .orElse("");
