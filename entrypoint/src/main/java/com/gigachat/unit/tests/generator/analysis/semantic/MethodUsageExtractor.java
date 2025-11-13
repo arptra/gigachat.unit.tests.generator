@@ -25,25 +25,74 @@ public class MethodUsageExtractor {
             if (ownerType.isEmpty() || ownerType.get().isUnknown()) {
                 continue;
             }
-            List<String> parameterTypes = new ArrayList<>(call.getArguments().size());
-            for (Expression argument : call.getArguments()) {
-                parameterTypes.add(resolveParameterType(resolver, argument));
+            List<String> parameterTypes = resolveParameterTypes(call, resolver, ownerType.get());
+            String typeName = ownerType.get().describe();
+            if (typeName.isBlank()) {
+                continue;
             }
-            String typeName = ownerType.get().getName();
+            String returnType = resolver.resolve(call)
+                    .map(ResolvedType::describe)
+                    .orElse(TypeResolver.UNKNOWN_TYPE);
             MethodSignature signature = new MethodSignature(typeName,
                     call.getNameAsString(),
                     parameterTypes,
-                    TypeResolver.UNKNOWN_TYPE);
+                    returnType);
             result.computeIfAbsent(typeName, ignored -> new ArrayList<>()).add(signature);
         }
         result.replaceAll((key, value) -> value == null ? List.of() : List.copyOf(value));
         return Map.copyOf(result);
     }
 
+    private List<String> resolveParameterTypes(MethodCallExpr call,
+                                               TypeResolver resolver,
+                                               ResolvedType ownerType) {
+        List<String> parameterTypes = new ArrayList<>(call.getArguments().size());
+        for (Expression argument : call.getArguments()) {
+            parameterTypes.add(resolveParameterType(resolver, argument));
+        }
+        return enrichCollectionMethodParameters(ownerType, call.getNameAsString(), parameterTypes);
+    }
+
+    private List<String> enrichCollectionMethodParameters(ResolvedType ownerType,
+                                                          String methodName,
+                                                          List<String> parameterTypes) {
+        if (ownerType == null || ownerType.getName().isBlank()) {
+            return parameterTypes;
+        }
+        if (!"List".equals(ownerType.getName())) {
+            return parameterTypes;
+        }
+        List<String> generics = ownerType.getGenericArguments();
+        if (generics.isEmpty()) {
+            return parameterTypes;
+        }
+        String elementType = ResolvedType.normalise(generics.get(0));
+        if (elementType.isBlank()) {
+            return parameterTypes;
+        }
+        if ("removeIf".equals(methodName)) {
+            return List.of("Predicate<" + elementType + ">");
+        }
+        if ("add".equals(methodName) && !parameterTypes.isEmpty()) {
+            List<String> enriched = new ArrayList<>(parameterTypes);
+            if (enriched.get(0) == null
+                    || enriched.get(0).isBlank()
+                    || TypeResolver.UNKNOWN_TYPE.equals(enriched.get(0))) {
+                enriched.set(0, elementType);
+            }
+            return enriched;
+        }
+        return parameterTypes;
+    }
+
     private String resolveParameterType(TypeResolver resolver, Expression argument) {
-        return resolver.resolve(argument)
-                .or(() -> Optional.of(resolver.inferLiteralType(argument)))
-                .map(ResolvedType::getName)
-                .orElse(TypeResolver.UNKNOWN_TYPE);
+        Optional<ResolvedType> resolved = resolver.resolve(argument);
+        if (resolved.isEmpty() || resolved.get().isUnknown()) {
+            ResolvedType literal = resolver.inferLiteralType(argument);
+            if (!literal.isUnknown()) {
+                resolved = Optional.of(literal);
+            }
+        }
+        return resolved.map(ResolvedType::describe).orElse(TypeResolver.UNKNOWN_TYPE);
     }
 }

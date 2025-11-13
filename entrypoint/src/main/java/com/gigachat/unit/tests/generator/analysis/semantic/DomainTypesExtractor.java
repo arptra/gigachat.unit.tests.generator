@@ -49,6 +49,7 @@ public class DomainTypesExtractor {
         if (type == null || type.isUnknown()) {
             return;
         }
+        domainTypes.add(type.describe());
         domainTypes.addAll(type.flatten());
     }
 }

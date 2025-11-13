@@ -125,10 +125,10 @@ public class TypeResolver {
         }
         ResolvedType resolved = resolveFromRegistry(ownerType.get(), expr);
         if (resolved == null || resolved.isUnknown()) {
-            resolved = ownerType.get();
+            return Optional.empty();
         }
         context.registerExpressionType(expr, resolved);
-        return Optional.ofNullable(resolved);
+        return Optional.of(resolved);
     }
 
     private ResolvedType resolveFromRegistry(ResolvedType ownerType, MethodCallExpr expr) {

@@ -108,6 +108,45 @@ class SemanticMethodAnalyzerTest {
         assertTrue(methods.get("Collaborator").stream().anyMatch(info -> "execute".equals(info.getMethodName())));
     }
 
+    @Test
+    void shouldResolveListGenericsAndChainedCalls() throws Exception {
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        registry.registerMethod("User", "String getUsername()");
+        registry.registerMethod("String", "boolean equalsIgnoreCase(String other)");
+        registry.registerMethod("List", "boolean removeIf(Object predicate)");
+        registry.registerMethod("List", "boolean add(Object element)");
+        SemanticMethodAnalyzer analyzer = new SemanticMethodAnalyzer(registry);
+        String classSource = """
+                import java.util.List;
+                class Sample {
+                    private List<User> users;
+                    public boolean process(User user) {
+                        users.add(user);
+                        return users.removeIf(existing -> existing.getUsername().equalsIgnoreCase(user.getUsername()));
+                    }
+                }
+                """;
+
+        MethodAnalysisDTO analysis = analyzeClass(classSource, "process", analyzer);
+
+        assertTrue(analysis.getDomainTypes().containsAll(Set.of("List<User>", "User", "String")));
+
+        Map<String, List<MethodInfo>> methods = analysis.getMethods();
+        assertTrue(methods.containsKey("List<User>"));
+        assertTrue(methods.get("List<User>").stream().anyMatch(info ->
+                "removeIf".equals(info.getMethodName())
+                        && info.getParameterTypes().equals(List.of("Predicate<User>"))));
+        assertTrue(methods.get("List<User>").stream().anyMatch(info ->
+                "add".equals(info.getMethodName())
+                        && info.getParameterTypes().equals(List.of("User"))));
+        assertTrue(methods.containsKey("User"));
+        assertTrue(methods.get("User").stream().anyMatch(info ->
+                "getUsername".equals(info.getMethodName()) && "String".equals(info.getReturnType())));
+        assertTrue(methods.containsKey("String"));
+        assertTrue(methods.get("String").stream().anyMatch(info ->
+                "equalsIgnoreCase".equals(info.getMethodName()) && info.getParameterTypes().equals(List.of("String"))));
+    }
+
     private MethodAnalysisDTO analyze(String methodSource, SemanticMethodAnalyzer analyzer) throws Exception {
         MethodDeclaration declaration = StaticJavaParser.parseBodyDeclaration(methodSource).asMethodDeclaration();
         String signature = declaration.getDeclarationAsString(false, false, true);
