@@ -50,6 +50,13 @@ Pass a comma-separated list to `--class` to scan several classes in one run:
 
 The entrypoint filters discovered classes to the provided set and generates DTOs only for those targets.
 
+### Cleaner Mode
+
+Pass `--clean` (or `--mode clean`) to enable the cleaner pipeline. The cleaner iterates through all
+detected tests, removes invalid imports, stray `@Test` annotations and placeholder assertions, and then
+compiles and executes the remaining tests. Methods (or entire classes) that still fail during either
+stage are deleted from the test sources.
+
 ### Using the Real GigaChat LLM
 
 By default the pipeline relies on a stubbed LLM implementation. Supply credentials to enable the official

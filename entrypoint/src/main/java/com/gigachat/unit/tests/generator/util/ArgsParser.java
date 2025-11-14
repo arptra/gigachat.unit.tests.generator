@@ -44,6 +44,7 @@ public class ArgsParser {
                 case "include-classes" -> builder.includeClasses(splitValues(readValue(args, ++i, key)));
                 case "class" -> builder.targetClasses(splitValues(readValue(args, ++i, key)));
                 case "single-file" -> builder.singleFileMode(true);
+                case "clean" -> builder.mode(AgentMode.CLEAN);
                 case "project" -> {
                     boolean value = true;
                     if (hasValue(args, i)) {
@@ -112,6 +113,7 @@ public class ArgsParser {
             case "test" -> AgentMode.TEST;
             case "repair" -> AgentMode.REPAIR;
             case "monitor" -> AgentMode.MONITOR;
+            case "clean" -> AgentMode.CLEAN;
             default -> throw new IllegalArgumentException("Unknown mode: " + value);
         };
     }

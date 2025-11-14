@@ -4,5 +4,6 @@ public enum AgentMode {
     SCAN,
     TEST,
     REPAIR,
-    MONITOR
+    MONITOR,
+    CLEAN
 }
