@@ -10,7 +10,7 @@ import java.util.Objects;
  * Represents a type discovered during semantic analysis. The implementation keeps the raw textual
  * representation but also exposes helpers to work with generics and to derive simple names.
  */
-public final class TypeName implements TypeName.TypeNameHolder {
+public final class TypeName implements TypeNameHolder {
     private static final String UNKNOWN_VALUE = "UNKNOWN";
     private static final TypeName UNKNOWN = new TypeName(UNKNOWN_VALUE);
 
@@ -23,11 +23,15 @@ public final class TypeName implements TypeName.TypeNameHolder {
         this.typeArguments = parseTypeArguments(this.name);
     }
 
-    public static TypeName of(String value) {
-        if (value instanceof TypeNameHolder holder) {
-            return holder.typeName();
+    public static TypeName of(Object value) {
+        if (value instanceof TypeNameHolder) {
+            return ((TypeNameHolder) value).typeName();
         }
-        return new TypeName(value);
+        if (value instanceof TypeName) {
+            return (TypeName) value;
+        }
+        String textual = value == null ? "" : value.toString();
+        return new TypeName(textual);
     }
 
     public static TypeName of(TypeName typeName) {
@@ -161,13 +165,6 @@ public final class TypeName implements TypeName.TypeNameHolder {
             parts.add(current.toString());
         }
         return parts;
-    }
-
-    /**
-     * Allows efficient reuse when a type name is already wrapped by another component.
-     */
-    public interface TypeNameHolder {
-        TypeName typeName();
     }
 
     @Override
