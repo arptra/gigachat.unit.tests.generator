@@ -13,13 +13,17 @@ final class TypeFilters {
             "String", "Instant", "Date"
     );
     static final Set<String> FUNCTIONAL_INTERFACES = Set.of(
-            "Function", "Predicate", "Consumer", "Supplier", "BiFunction", "BiPredicate"
+            "Function", "Predicate", "Consumer", "Supplier", "BiFunction", "BiPredicate",
+            "BiConsumer", "UnaryOperator", "BinaryOperator"
     );
     static final Set<String> CONTAINER_TYPES = Set.of(
-            "List", "Map", "Set", "Collection", "Iterable"
+            "List", "ArrayList", "LinkedList", "CopyOnWriteArrayList",
+            "Map", "HashMap", "LinkedHashMap", "TreeMap", "ConcurrentHashMap",
+            "Set", "HashSet", "LinkedHashSet", "TreeSet",
+            "Collection", "Iterable", "Queue", "Deque", "Optional"
     );
     private static final List<String> IGNORED_PACKAGES = List.of(
-            "java.", "javax.", "jakarta."
+            "java.", "javax.", "jakarta.", "kotlin."
     );
 
     private TypeFilters() {
@@ -37,6 +41,9 @@ final class TypeFilters {
             if (raw.startsWith(prefix)) {
                 return false;
             }
+        }
+        if (type.isContainer()) {
+            return false;
         }
         if (FUNCTIONAL_INTERFACES.contains(type.simpleName())) {
             return false;

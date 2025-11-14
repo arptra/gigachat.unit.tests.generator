@@ -72,7 +72,10 @@ public final class TypeName implements TypeNameHolder {
 
     public boolean isJavaType() {
         String raw = rawName();
-        return raw.startsWith("java.") || raw.startsWith("javax.");
+        return raw.startsWith("java.")
+                || raw.startsWith("javax.")
+                || raw.startsWith("jakarta.")
+                || raw.startsWith("kotlin.");
     }
 
     public boolean isBoxedPrimitive() {

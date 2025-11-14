@@ -7,16 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 class SemanticMetadataBuilder {
-    private final SignatureRegistry registry;
     private final LinkedHashSet<TypeName> domainTypes = new LinkedHashSet<>();
     private final Map<TypeName, LinkedHashSet<MethodSignature>> usedMethods = new LinkedHashMap<>();
     private final Map<TypeName, LinkedHashSet<ConstructorSignature>> usedConstructors = new LinkedHashMap<>();
     private final List<StaticInvocation> staticCalls = new ArrayList<>();
-    private final LinkedHashSet<TypeName> functionalInterfaces = new LinkedHashSet<>();
-
-    SemanticMetadataBuilder(SignatureRegistry registry) {
-        this.registry = registry;
-    }
 
     void registerDomainType(TypeName type) {
         if (TypeFilters.isDomainType(type)) {
@@ -29,7 +23,6 @@ class SemanticMetadataBuilder {
             return;
         }
         if (type.isContainer()) {
-            registerDomainType(type);
             for (TypeName argument : type.typeArguments()) {
                 registerDomainType(argument);
             }
@@ -38,28 +31,50 @@ class SemanticMetadataBuilder {
         }
     }
 
-    void registerMethodUsage(TypeName owner, MethodSignature signature) {
-        if (!TypeFilters.isDomainType(owner) || signature == null) {
+    void registerOwner(TypeName owner) {
+        if (owner == null) {
             return;
         }
-        usedMethods.computeIfAbsent(owner, ignored -> new LinkedHashSet<>()).add(signature);
+        if (owner.isContainer()) {
+            for (TypeName argument : owner.typeArguments()) {
+                registerDomainType(argument);
+            }
+            return;
+        }
+        if (!shouldTrackOwner(owner)) {
+            return;
+        }
+        registerDomainType(owner);
+    }
+
+    void registerMethodUsage(TypeName owner, MethodSignature signature) {
+        if (!shouldTrackOwner(owner) || signature == null) {
+            return;
+        }
+        if (signature.returnType().isUnknown()) {
+            return;
+        }
+        LinkedHashSet<MethodSignature> methods = usedMethods.computeIfAbsent(owner,
+                ignored -> new LinkedHashSet<>());
+        if (isDuplicate(methods, signature)) {
+            return;
+        }
+        methods.add(signature);
     }
 
     void registerFunctionalInterface(TypeName type) {
-        if (type != null && !type.isUnknown()) {
-            functionalInterfaces.add(type);
-        }
+        // functional interfaces are excluded from the final metadata
     }
 
     void registerConstructorUsage(TypeName owner, ConstructorSignature signature) {
-        if (!TypeFilters.isDomainType(owner) || signature == null) {
+        if (!shouldTrackOwner(owner) || signature == null) {
             return;
         }
         usedConstructors.computeIfAbsent(owner, ignored -> new LinkedHashSet<>()).add(signature);
     }
 
     void registerStaticInvocation(TypeName owner, MethodSignature signature) {
-        if (owner == null || signature == null) {
+        if (!shouldTrackOwner(owner) || signature == null) {
             return;
         }
         staticCalls.add(new StaticInvocation(owner, signature));
@@ -73,22 +88,38 @@ class SemanticMetadataBuilder {
             }
         }
         Map<TypeName, List<MethodSignature>> methods = new LinkedHashMap<>();
-        for (TypeName type : cleaned) {
-            LinkedHashSet<MethodSignature> aggregate = new LinkedHashSet<>();
-            aggregate.addAll(usedMethods.getOrDefault(type, new LinkedHashSet<>()));
-            registry.methodsFor(type).forEach(aggregate::add);
-            methods.put(type, List.copyOf(aggregate));
-        }
-        for (TypeName functional : functionalInterfaces) {
-            methods.putIfAbsent(functional, List.of());
+        for (Map.Entry<TypeName, LinkedHashSet<MethodSignature>> entry : usedMethods.entrySet()) {
+            if (!cleaned.contains(entry.getKey()) || entry.getValue().isEmpty()) {
+                continue;
+            }
+            methods.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
         Map<TypeName, List<ConstructorSignature>> constructors = new LinkedHashMap<>();
-        for (TypeName type : cleaned) {
-            LinkedHashSet<ConstructorSignature> aggregate = new LinkedHashSet<>();
-            aggregate.addAll(usedConstructors.getOrDefault(type, new LinkedHashSet<>()));
-            registry.constructorsFor(type).forEach(aggregate::add);
-            constructors.put(type, List.copyOf(aggregate));
+        for (Map.Entry<TypeName, LinkedHashSet<ConstructorSignature>> entry : usedConstructors.entrySet()) {
+            if (!cleaned.contains(entry.getKey()) || entry.getValue().isEmpty()) {
+                continue;
+            }
+            constructors.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
         return new SemanticMethodAnalysis(cleaned, methods, constructors, List.copyOf(staticCalls));
+    }
+
+    private boolean shouldTrackOwner(TypeName owner) {
+        if (owner == null || owner.isUnknown()) {
+            return false;
+        }
+        if ("internal_state".equalsIgnoreCase(owner.name())) {
+            return false;
+        }
+        if (owner.isJavaType() || owner.isContainer() || owner.isFunctionalInterface()) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isDuplicate(LinkedHashSet<MethodSignature> existing, MethodSignature candidate) {
+        return existing.stream().anyMatch(signature ->
+                signature.name().equals(candidate.name())
+                        && signature.parameterTypes().equals(candidate.parameterTypes()));
     }
 }

@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.analyzer.semantic;
 
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.EnclosedExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.LambdaExpr;
@@ -12,18 +13,22 @@ import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 class MethodUsageCollector extends VoidVisitorAdapter<Void> {
     private final SignatureRegistry registry;
     private final TypeResolver typeResolver;
     private final SemanticMetadataBuilder metadataBuilder;
+    private final Set<String> internalFieldNames;
 
     MethodUsageCollector(SignatureRegistry registry,
                          TypeResolver typeResolver,
-                         SemanticMetadataBuilder metadataBuilder) {
+                         SemanticMetadataBuilder metadataBuilder,
+                         Set<String> internalFieldNames) {
         this.registry = registry;
         this.typeResolver = typeResolver;
         this.metadataBuilder = metadataBuilder;
+        this.internalFieldNames = internalFieldNames == null ? Set.of() : Set.copyOf(internalFieldNames);
     }
 
     void collect(MethodDeclaration declaration) {
@@ -59,28 +64,25 @@ class MethodUsageCollector extends VoidVisitorAdapter<Void> {
         TypeName ownerType = typeResolver.resolveOwnerType(expr);
         List<TypeName> argumentTypes = resolveArguments(expr);
         MethodSignature signature = registry.resolveMethod(ownerType, expr.getNameAsString(), argumentTypes);
-        boolean collectionMethod = ownerType != null
-                && ownerType.isContainer()
-                && List.of("add", "remove", "removeIf", "map", "filter", "stream").contains(expr.getNameAsString());
-        if (signature == null && !collectionMethod) {
+        if (signature == null) {
             TypeName inferredOwner = registry.inferOwner(expr.getNameAsString(), argumentTypes);
             if (inferredOwner != null && !inferredOwner.isUnknown()) {
                 ownerType = inferredOwner;
                 signature = registry.resolveMethod(ownerType, expr.getNameAsString(), argumentTypes);
             }
         }
-        if (signature != null || collectionMethod) {
-            TypeName returnType = signature == null ? TypeName.unknown() : signature.returnType();
+        boolean internalOwner = isInternalOwner(expr.getScope());
+        if (!internalOwner) {
+            metadataBuilder.registerOwner(ownerType);
+        }
+        if (signature != null) {
+            TypeName returnType = signature.returnType();
             typeResolver.recordExpressionType(expr, returnType);
-            metadataBuilder.registerContainerType(ownerType);
-            if (signature != null) {
+            if (!internalOwner) {
                 metadataBuilder.registerMethodUsage(ownerType, signature);
                 if (signature.isStatic() || registry.isStaticCall(ownerType, expr.getNameAsString())) {
                     metadataBuilder.registerStaticInvocation(ownerType, signature);
                 }
-            } else {
-                metadataBuilder.registerMethodUsage(ownerType,
-                        new MethodSignature(expr.getNameAsString(), TypeName.unknown(), argumentTypes, false));
             }
             metadataBuilder.registerContainerType(returnType);
         }
@@ -96,9 +98,41 @@ class MethodUsageCollector extends VoidVisitorAdapter<Void> {
         if (signature == null) {
             signature = new ConstructorSignature(type, arguments);
         }
+        metadataBuilder.registerOwner(type);
         metadataBuilder.registerConstructorUsage(type, signature);
         typeResolver.recordExpressionType(expr, type);
         super.visit(expr, arg);
+    }
+
+    private boolean isInternalOwner(java.util.Optional<Expression> scope) {
+        if (scope.isEmpty()) {
+            return false;
+        }
+        return isInternalExpression(scope.get());
+    }
+
+    private boolean isInternalExpression(Expression expression) {
+        if (expression == null) {
+            return false;
+        }
+        if (expression.isNameExpr()) {
+            return internalFieldNames.contains(expression.asNameExpr().getNameAsString());
+        }
+        if (expression.isEnclosedExpr()) {
+            EnclosedExpr enclosed = expression.asEnclosedExpr();
+            return isInternalExpression(enclosed.getInner());
+        }
+        if (expression.isFieldAccessExpr()) {
+            FieldAccessExpr fieldAccess = expression.asFieldAccessExpr();
+            if (internalFieldNames.contains(fieldAccess.getNameAsString())) {
+                return true;
+            }
+            return isInternalExpression(fieldAccess.getScope());
+        }
+        if (expression.isThisExpr()) {
+            return false;
+        }
+        return internalFieldNames.contains(expression.toString());
     }
 
     @Override
