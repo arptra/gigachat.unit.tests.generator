@@ -1,6 +1,7 @@
 package com.testagent.entrypoint.pipeline.helpers.analyze;
 
 import java.util.List;
+import java.util.Map;
 import java.util.StringJoiner;
 
 /**
@@ -16,6 +17,7 @@ public class AnalysisFormatter {
         appendStaticUsages(builder, result.staticUsages());
         appendInvocations(builder, result.invocations());
         appendUnresolved(builder, result.unresolved());
+        appendSemanticAnalysis(builder, result.semanticAnalysis());
         builder.append('}');
         return builder.toString();
     }
@@ -76,7 +78,107 @@ public class AnalysisFormatter {
     private void appendUnresolved(StringBuilder builder, List<String> unresolved) {
         builder.append("  \"unresolved\": ");
         appendArray(builder, unresolved);
+        builder.append(",\n");
+    }
+
+    private void appendSemanticAnalysis(StringBuilder builder, SemanticAnalysis semanticAnalysis) {
+        builder.append("  \"semanticAnalysis\": {\n");
+        appendDomainTypes(builder, semanticAnalysis.domainTypes());
+        builder.append(",\n");
+        appendSemanticStaticCalls(builder, semanticAnalysis.staticCalls());
+        builder.append(",\n");
+        appendSemanticMethods(builder, semanticAnalysis.typeMethods());
+        builder.append(",\n");
+        appendSemanticConstructors(builder, semanticAnalysis.typeConstructors());
+        builder.append("  }\n");
+    }
+
+    private void appendDomainTypes(StringBuilder builder, List<String> domainTypes) {
+        builder.append("    \"domainTypes\": ");
+        appendArray(builder, domainTypes);
+    }
+
+    private void appendSemanticStaticCalls(StringBuilder builder, List<SemanticStaticCall> staticCalls) {
+        builder.append("    \"staticCalls\": [");
+        if (staticCalls.isEmpty()) {
+            builder.append(']');
+            return;
+        }
         builder.append('\n');
+        for (int i = 0; i < staticCalls.size(); i++) {
+            SemanticStaticCall call = staticCalls.get(i);
+            builder.append("      {\"ownerType\": \"").append(escape(call.ownerType())).append("\", ")
+                    .append("\"methodName\": \"").append(escape(call.methodName())).append("\", ")
+                    .append("\"parameterTypes\": ");
+            appendArray(builder, call.parameterTypes());
+            builder.append('}');
+            builder.append(i + 1 < staticCalls.size() ? ",\n" : "\n");
+        }
+        builder.append("    ]");
+    }
+
+    private void appendSemanticMethods(StringBuilder builder, Map<String, List<SemanticTypeMethod>> typeMethods) {
+        builder.append("    \"typeMethods\": {");
+        if (typeMethods.isEmpty()) {
+            builder.append("}\n");
+            return;
+        }
+        builder.append('\n');
+        int index = 0;
+        for (Map.Entry<String, List<SemanticTypeMethod>> entry : typeMethods.entrySet()) {
+            builder.append("      \"").append(escape(entry.getKey())).append("\": [");
+            List<SemanticTypeMethod> methods = entry.getValue();
+            if (methods.isEmpty()) {
+                builder.append(']');
+            } else {
+                builder.append('\n');
+                for (int i = 0; i < methods.size(); i++) {
+                    SemanticTypeMethod method = methods.get(i);
+                    builder.append("        {\"name\": \"").append(escape(method.name())).append("\", ")
+                            .append("\"returnType\": \"").append(escape(method.returnType())).append("\", ")
+                            .append("\"static\": ").append(method.isStatic()).append(", ")
+                            .append("\"parameterTypes\": ");
+                    appendArray(builder, method.parameterTypes());
+                    builder.append('}');
+                    builder.append(i + 1 < methods.size() ? ",\n" : "\n");
+                }
+                builder.append("      ]");
+            }
+            builder.append(++index < typeMethods.size() ? ",\n" : "\n");
+        }
+        builder.append("    }\n");
+    }
+
+    private void appendSemanticConstructors(StringBuilder builder,
+                                            Map<String, List<SemanticTypeConstructor>> typeConstructors) {
+        builder.append("    \"typeConstructors\": {");
+        if (typeConstructors.isEmpty()) {
+            builder.append("}\n");
+            return;
+        }
+        builder.append('\n');
+        int index = 0;
+        for (Map.Entry<String, List<SemanticTypeConstructor>> entry : typeConstructors.entrySet()) {
+            builder.append("      \"").append(escape(entry.getKey())).append("\": [");
+            List<SemanticTypeConstructor> constructors = entry.getValue();
+            if (constructors.isEmpty()) {
+                builder.append(']');
+            } else {
+                builder.append('\n');
+                for (int i = 0; i < constructors.size(); i++) {
+                    SemanticTypeConstructor constructor = constructors.get(i);
+                    builder.append("        {\"className\": \"").append(escape(constructor.className())).append("\", ")
+                            .append("\"signature\": \"").append(escape(constructor.signature())).append("\", ")
+                            .append("\"parameterTypes\": ");
+                    appendArray(builder, constructor.parameterTypes());
+                    builder.append('}');
+                    builder.append(i + 1 < constructors.size() ? ",\n" : "\n");
+                }
+                builder.append("      ]");
+            }
+            builder.append(++index < typeConstructors.size() ? ",\n" : "\n");
+        }
+        builder.append("    }\n");
     }
 
     private void appendArray(StringBuilder builder, List<String> values) {

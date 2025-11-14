@@ -19,6 +19,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.PromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
+import com.gigachat.unit.tests.generator.prompt.deep.DeepPromptContextBuilder;
 import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
 
 import java.io.IOException;
@@ -92,7 +93,7 @@ public class TestPipeline {
         TestClassWriter testClassWriter = new TestClassWriter(logger);
         SkeletonPromptBuilder skeletonPromptBuilder = new SkeletonPromptBuilder();
         Analyze analyze = new Analyze(logger, methodRegistry);
-        PromptBuilder promptBuilder = new PromptBuilder();
+        PromptBuilder promptBuilder = new DeepPromptContextBuilder();
         LlmClient llmClient = createLlmClient(config, logger);
         DiffEngine diffEngine = new DiffEngine(testClassWriter, logger);
         CompilerInvoker compilerInvoker = new GradleCompilerInvoker(logger);
