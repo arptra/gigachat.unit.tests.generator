@@ -185,6 +185,12 @@ public class MethodSignatureRegistry {
         return List.copyOf(methods);
     }
 
+    public Map<String, List<String>> getMethodsDetailed() {
+        LinkedHashMap<String, List<String>> snapshot = new LinkedHashMap<>();
+        classMethods.forEach((key, value) -> snapshot.put(key, List.copyOf(value)));
+        return Collections.unmodifiableMap(snapshot);
+    }
+
     public Set<String> constructorsFor(String className) {
         String key = normaliseClassName(className);
         Set<String> constructors = classConstructors.get(key);

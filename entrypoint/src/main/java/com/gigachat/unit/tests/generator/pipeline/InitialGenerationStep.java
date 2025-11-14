@@ -3,6 +3,15 @@ package com.gigachat.unit.tests.generator.pipeline;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
+import com.gigachat.unit.tests.generator.analyzer.semantic.ConstructorSignature;
+import com.gigachat.unit.tests.generator.analyzer.semantic.MethodSignature;
+import com.gigachat.unit.tests.generator.analyzer.semantic.MethodSignatureRegistryAdapter;
+import com.gigachat.unit.tests.generator.analyzer.semantic.SemanticAnalyzer;
+import com.gigachat.unit.tests.generator.analyzer.semantic.SemanticAnalyzerImpl;
+import com.gigachat.unit.tests.generator.analyzer.semantic.SemanticMethodAnalysis;
+import com.gigachat.unit.tests.generator.analyzer.semantic.SignatureRegistry;
+import com.gigachat.unit.tests.generator.analyzer.semantic.StaticInvocation;
+import com.gigachat.unit.tests.generator.analyzer.semantic.TypeName;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
 import com.gigachat.unit.tests.generator.config.ParallelMode;
@@ -79,6 +88,7 @@ public class InitialGenerationStep {
     private final ExternalCollaboratorDetector collaboratorDetector;
     private final MethodSignatureRegistry signatureRegistry;
     private final AutoCorrectionStage autoCorrectionStage;
+    private final SemanticAnalyzer semanticAnalyzer;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -104,6 +114,7 @@ public class InitialGenerationStep {
         this.collaboratorDetector = new ExternalCollaboratorDetector();
         this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
         this.autoCorrectionStage = new AutoCorrectionStage();
+        this.semanticAnalyzer = new SemanticAnalyzerImpl();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -160,7 +171,9 @@ public class InitialGenerationStep {
         }
         MockPlan plan = analysisSummary.mockPlan();
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
+        SemanticMethodAnalysis semanticAnalysis = performSemanticAnalysis(classInfo, methodInfo);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
+        appendSemanticAnalysis(contextJson, semanticAnalysis);
         GeneratedTestSnippet snippet;
         logger.info("-> DEBUG info about tested method \n" + methodInfo);
         try {
@@ -171,7 +184,8 @@ public class InitialGenerationStep {
                     plan,
                     contextJson,
                     analysisSummary,
-                    moduleConfig);
+                    moduleConfig,
+                    semanticAnalysis);
         } catch (InvalidLLMResponseException exception) {
             logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
             return;
@@ -235,7 +249,8 @@ public class InitialGenerationStep {
                                                           MockPlan plan,
                                                           JSONObject contextJson,
                                                           Analyze.AnalysisSummary analysisSummary,
-                                                          PipelineModuleConfig moduleConfig) {
+                                                          PipelineModuleConfig moduleConfig,
+                                                          SemanticMethodAnalysis semanticAnalysis) {
         try {
             return requestSnippet(config,
                     classInfo,
@@ -259,6 +274,7 @@ public class InitialGenerationStep {
                     skeletonPrompt,
                     refreshedSummary);
             JSONObject refreshedContextJson = toJsonObject(refreshedPromptJson, methodInfo);
+            appendSemanticAnalysis(refreshedContextJson, semanticAnalysis);
             if (first.getMessage() != null && first.getMessage().contains("E104")) {
                 logger.warn("Triggering constructor metadata refresh prior to retry.");
             }
@@ -302,6 +318,94 @@ public class InitialGenerationStep {
             return false;
         }
         return message.contains("E102") || message.contains("E103") || message.contains("E104");
+    }
+
+    private SemanticMethodAnalysis performSemanticAnalysis(TestClassInfo classInfo, TestMethodInfo methodInfo) {
+        if (methodInfo == null) {
+            return null;
+        }
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration == null) {
+            return null;
+        }
+        List<ClassMetadata> metadata = classInfo == null
+                ? List.of()
+                : classInfo.getClassMetadata() == null
+                        ? List.of()
+                        : List.of(classInfo.getClassMetadata());
+        SignatureRegistry registryAdapter = new MethodSignatureRegistryAdapter(signatureRegistry, metadata);
+        return semanticAnalyzer.analyze(declaration.clone(), registryAdapter);
+    }
+
+    private void appendSemanticAnalysis(JSONObject contextJson, SemanticMethodAnalysis analysis) {
+        if (contextJson == null || analysis == null) {
+            return;
+        }
+        JSONObject payload = serialiseSemanticAnalysis(analysis);
+        if (!payload.isEmpty()) {
+            contextJson.put("semanticAnalysis", payload);
+        }
+    }
+
+    private JSONObject serialiseSemanticAnalysis(SemanticMethodAnalysis analysis) {
+        JSONObject root = new JSONObject();
+        JSONArray domainTypes = new JSONArray();
+        for (TypeName type : analysis.domainTypes()) {
+            domainTypes.put(type.name());
+        }
+        root.put("domainTypes", domainTypes);
+        JSONObject typeMethods = new JSONObject();
+        analysis.typeMethods().forEach((type, signatures) -> {
+            JSONArray entries = new JSONArray();
+            for (MethodSignature signature : signatures) {
+                entries.put(serialiseMethodSignature(signature));
+            }
+            typeMethods.put(type.name(), entries);
+        });
+        root.put("typeMethods", typeMethods);
+        JSONObject typeConstructors = new JSONObject();
+        analysis.typeConstructors().forEach((type, signatures) -> {
+            JSONArray entries = new JSONArray();
+            for (ConstructorSignature signature : signatures) {
+                entries.put(serialiseConstructorSignature(signature));
+            }
+            typeConstructors.put(type.name(), entries);
+        });
+        root.put("typeConstructors", typeConstructors);
+        JSONArray staticCalls = new JSONArray();
+        for (StaticInvocation invocation : analysis.staticCalls()) {
+            JSONObject call = new JSONObject();
+            call.put("owner", invocation.owner().name());
+            call.put("method", serialiseMethodSignature(invocation.signature()));
+            staticCalls.put(call);
+        }
+        root.put("staticCalls", staticCalls);
+        return root;
+    }
+
+    private JSONObject serialiseMethodSignature(MethodSignature signature) {
+        JSONObject json = new JSONObject();
+        if (signature == null) {
+            return json;
+        }
+        json.put("name", signature.name());
+        json.put("returnType", signature.returnType().name());
+        JSONArray parameters = new JSONArray();
+        signature.parameterTypes().forEach(type -> parameters.put(type.name()));
+        json.put("parameterTypes", parameters);
+        json.put("static", signature.isStatic());
+        return json;
+    }
+
+    private JSONObject serialiseConstructorSignature(ConstructorSignature signature) {
+        JSONObject json = new JSONObject();
+        if (signature == null) {
+            return json;
+        }
+        JSONArray parameters = new JSONArray();
+        signature.parameterTypes().forEach(type -> parameters.put(type.name()));
+        json.put("parameters", parameters);
+        return json;
     }
 
     private void appendRetryHint(JSONObject contextJson) {
