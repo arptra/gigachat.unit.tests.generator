@@ -22,8 +22,8 @@ public final class DanglingTestAnnotationRule implements CleanerRule {
             String line = lines[i];
             String trimmed = line.trim();
             if (trimmed.startsWith("@Test")) {
-                int nextIndex = findNextNonEmpty(lines, i + 1);
-                if (nextIndex < 0 || lines[nextIndex].trim().equals("}")) {
+                int nextIndex = findNextSignificant(lines, i + 1);
+                if (nextIndex < 0 || shouldDropTestAnnotation(lines[nextIndex])) {
                     changed = true;
                     continue;
                 }
@@ -36,12 +36,41 @@ public final class DanglingTestAnnotationRule implements CleanerRule {
         return changed;
     }
 
-    private int findNextNonEmpty(String[] lines, int start) {
+    private int findNextSignificant(String[] lines, int start) {
         for (int i = start; i < lines.length; i++) {
-            if (!lines[i].trim().isEmpty()) {
+            String trimmed = lines[i].trim();
+            if (trimmed.isEmpty() || isComment(trimmed)) {
+                continue;
+            }
+            if (trimmed.startsWith("@")) {
+                return i;
+            }
+            if (looksLikeMethod(trimmed) || trimmed.equals("}")) {
                 return i;
             }
         }
         return -1;
+    }
+
+    private boolean shouldDropTestAnnotation(String nextLine) {
+        String trimmed = nextLine.trim();
+        if (trimmed.equals("}")) {
+            return true;
+        }
+        if (trimmed.startsWith("@Test")) {
+            return true;
+        }
+        return !looksLikeMethod(trimmed);
+    }
+
+    private boolean isComment(String line) {
+        return line.startsWith("//") || line.startsWith("/*") || line.startsWith("*") || line.startsWith("*/");
+    }
+
+    private boolean looksLikeMethod(String trimmed) {
+        if (trimmed.startsWith("class ") || trimmed.startsWith("interface ") || trimmed.startsWith("enum ")) {
+            return false;
+        }
+        return trimmed.contains("(") && !trimmed.startsWith("//");
     }
 }
