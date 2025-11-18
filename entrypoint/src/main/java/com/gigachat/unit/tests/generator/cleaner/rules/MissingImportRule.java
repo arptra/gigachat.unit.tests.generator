@@ -15,17 +15,6 @@ import java.util.Set;
  * Removes imports that reference classes that no longer exist inside the project sources.
  */
 public final class MissingImportRule implements CleanerRule {
-    private static final Set<String> WHITELISTED_PREFIXES = Set.of(
-            "java.",
-            "javax.",
-            "jakarta.",
-            "org.junit.",
-            "org.mockito.",
-            "org.assertj.",
-            "org.hamcrest.",
-            "org.springframework.",
-            "kotlin.");
-
     private final ProjectClassIndex classIndex;
 
     public MissingImportRule(ProjectClassIndex classIndex) {
@@ -71,19 +60,16 @@ public final class MissingImportRule implements CleanerRule {
         if (candidate == null || candidate.isBlank()) {
             return false;
         }
-        for (String prefix : WHITELISTED_PREFIXES) {
-            if (candidate.startsWith(prefix)) {
-                return true;
-            }
-        }
         if (classIndex.contains(candidate)) {
             return true;
         }
         try {
-            Class.forName(candidate);
+            Class.forName(candidate, false, Thread.currentThread().getContextClassLoader());
             return true;
         } catch (ClassNotFoundException ignored) {
             return false;
+        } catch (LinkageError ignored) {
+            return true;
         }
     }
 }
