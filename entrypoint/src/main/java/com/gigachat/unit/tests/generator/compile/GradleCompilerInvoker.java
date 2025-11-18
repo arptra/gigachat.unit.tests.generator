@@ -15,9 +15,9 @@ import java.util.stream.Collectors;
 
 /**
  * Invokes Gradle to compile generated tests. When the Gradle wrapper is available the invoker runs
- * the appropriate {@code test} task (scoped to a module when possible) so real compilation errors
- * are surfaced. If no wrapper is present the invoker falls back to a lightweight stub so the
- * pipeline can still progress.
+ * the appropriate {@code compileTestJava} task (scoped to a module when possible) so real
+ * compilation errors are surfaced without executing tests. If no wrapper is present the invoker
+ * falls back to a lightweight stub so the pipeline can still progress.
  */
 public class GradleCompilerInvoker implements CompilerInvoker {
     private final PipelineLogger logger;
@@ -34,9 +34,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         String command;
         if (gradleAvailable) {
             String gradleTask = determineGradleTask(projectRoot, testClassFile);
-            String testSelector = determineTestPattern(testClassFile, methodName);
-            String selectorArgument = testSelector.isBlank() ? "" : " --tests '" + testSelector + "'";
-            command = "./gradlew -q " + gradleTask + selectorArgument + " --no-build-cache --rerun-tasks";
+            command = "./gradlew -q " + gradleTask + " --no-build-cache --rerun-tasks";
             messages.add("Gradle wrapper detected. Running real compilation via task '" + gradleTask + "'.");
         } else {
             command = "echo Compilation stub executed for " + testClassFile.getFileName();
@@ -75,7 +73,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         List<String> segments = new ArrayList<>();
         Path parent = relative.getParent();
         if (parent == null) {
-            return "test";
+            return "compileTestJava";
         }
         for (Path part : parent) {
             if ("src".equals(part.toString())) {
@@ -84,16 +82,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             segments.add(part.toString());
         }
         if (segments.isEmpty()) {
-            return "test";
+            return "compileTestJava";
         }
-        return ":" + String.join(":", segments) + ":test";
-    }
-
-    private String determineTestPattern(Path testClassFile, String methodName) {
-        if (methodName == null || methodName.isBlank()) {
-            return "";
-        }
-        String className = testClassFile.getFileName().toString().replace(".java", "");
-        return className + "." + methodName;
+        return ":" + String.join(":", segments) + ":compileTestJava";
     }
 }
