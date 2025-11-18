@@ -30,11 +30,22 @@ public class ExecutionReportParser {
         Matcher matcher = LINK_PATTERN.matcher(indexContent);
         while (matcher.find()) {
             String classRelPath = matcher.group(1);
-            String methodName = matcher.group(2);
+            String methodName = normalizeMethodName(matcher.group(2));
             Path classReport = reportRoot.resolve("classes").resolve(classRelPath);
             failures.add(parseClassFailure(classReport, methodName));
         }
         return List.copyOf(failures);
+    }
+
+    private String normalizeMethodName(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        if (trimmed.endsWith("()")) {
+            return trimmed.substring(0, trimmed.length() - 2);
+        }
+        return trimmed;
     }
 
     private Path normalizeIndexPath(Path reportPath) {

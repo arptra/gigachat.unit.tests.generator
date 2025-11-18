@@ -25,8 +25,8 @@ class ExecutionReportParserTest {
         Files.writeString(index, String.join(System.lineSeparator(),
                 "<html>",
                 "<body>",
-                "<a href=\"classes/UserTest.html#shouldReturnCorrectUsername\">UserTest</a>",
-                "<a href=\"classes/LibraryComponentTest.html#testReload\">LibraryComponentTest</a>",
+                "<a href=\"classes/UserTest.html#shouldReturnCorrectUsername()\">UserTest</a>",
+                "<a href=\"classes/LibraryComponentTest.html#testReload()\">LibraryComponentTest</a>",
                 "</body>",
                 "</html>"));
 
