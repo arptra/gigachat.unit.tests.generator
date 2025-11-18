@@ -13,11 +13,12 @@ import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLocati
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLogParser;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
-import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionReportParser;
 import com.gigachat.unit.tests.generator.cleaner.parser.TestFailure;
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
+import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -149,7 +150,10 @@ public class TestCleaner {
 
         parsedLog.reportPath().ifPresent(reportPath -> {
             try {
-                failingTests.addAll(executionReportParser.parse(reportPath));
+                List<TestReportFailure> reportFailures = executionReportParser.parse(reportPath);
+                for (TestReportFailure failure : reportFailures) {
+                    failingTests.add(new TestFailure(failure.className(), failure.methodName()));
+                }
             } catch (IOException exception) {
                 logger.warn("Unable to parse execution report at " + reportPath + ": " + exception.getMessage());
             }
