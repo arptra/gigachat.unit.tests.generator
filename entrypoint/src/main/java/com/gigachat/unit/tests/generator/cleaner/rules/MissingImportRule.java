@@ -16,6 +16,8 @@ import java.util.Set;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 /**
  * Removes imports that reference classes that no longer exist inside the project sources.
@@ -105,6 +107,7 @@ public final class MissingImportRule implements CleanerRule {
         );
 
         List<URL> urls = new ArrayList<>();
+        addGradleCacheJars(root, urls);
         for (Path dir : jarDirs) {
             if (!Files.isDirectory(dir)) {
                 continue;
@@ -124,6 +127,36 @@ public final class MissingImportRule implements CleanerRule {
         }
 
         return new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
+    }
+
+    private static void addGradleCacheJars(Path projectRoot, List<URL> urls) {
+        Path userHome = Path.of(System.getProperty("user.home"));
+        String gradleHomeProperty = System.getProperty("gradle.user.home");
+        Path gradleUserHome = (gradleHomeProperty == null || gradleHomeProperty.isBlank())
+                ? userHome.resolve(".gradle")
+                : Path.of(gradleHomeProperty);
+
+        List<Path> candidates = List.of(
+                projectRoot.resolve(".gradle"),
+                gradleUserHome.resolve("caches")
+        );
+
+        for (Path candidate : candidates) {
+            if (!Files.isDirectory(candidate)) {
+                continue;
+            }
+            collectJarUrls(candidate, urls, path -> path.toString().endsWith(".jar"));
+        }
+    }
+
+    private static void collectJarUrls(Path root, List<URL> urls, Predicate<Path> matcher) {
+        try (Stream<Path> stream = Files.walk(root)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(matcher)
+                    .forEach(path -> addUrl(urls, path));
+        } catch (IOException ignored) {
+            // If we cannot walk the cache directory we simply skip it.
+        }
     }
 
     private static void addUrl(List<URL> urls, Path jar) {
