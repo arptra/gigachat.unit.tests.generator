@@ -28,8 +28,13 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         Path gradlew = projectRoot.resolve("gradlew");
         boolean gradleAvailable = Files.exists(gradlew);
         String command;
+        boolean executeWholeSuite = methodName == null || methodName.isBlank();
         if (gradleAvailable) {
-            command = "./gradlew -q test --tests '" + determineTestPattern(testClassFile, methodName) + "'";
+            if (executeWholeSuite) {
+                command = "./gradlew -q test";
+            } else {
+                command = "./gradlew -q test --tests '" + determineTestPattern(testClassFile, methodName) + "'";
+            }
         } else {
             command = "echo Execution stub for " + testClassFile.getFileName();
         }
@@ -37,7 +42,7 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         processBuilder.command("bash", "-lc", command);
         processBuilder.directory(projectRoot.toFile());
         processBuilder.redirectErrorStream(true);
-        logger.info("Starting execution stub for method " + methodName + " in " + testClassFile);
+        logger.info("Starting execution stub for " + (executeWholeSuite ? "all tests" : methodName) + " in " + testClassFile);
         try {
             Process process = processBuilder.start();
             String stdout;

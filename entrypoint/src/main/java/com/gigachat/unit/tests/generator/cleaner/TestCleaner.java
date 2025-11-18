@@ -11,6 +11,10 @@ import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLocation;
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLogParser;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionReportParser;
+import com.gigachat.unit.tests.generator.cleaner.parser.TestFailure;
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -42,6 +46,8 @@ public class TestCleaner {
     private final JavaParser javaParser = new JavaParser();
     private final Function<ProjectClassIndex, List<CleanerRule>> rulesProvider;
     private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
+    private final ExecutionFailureLogParser executionFailureLogParser = new ExecutionFailureLogParser();
+    private final ExecutionReportParser executionReportParser = new ExecutionReportParser();
 
     public TestCleaner(PipelineLogger logger,
                        CompilerInvoker compilerInvoker,
@@ -132,23 +138,29 @@ public class TestCleaner {
     }
 
     private void runExecutionStage(AgentConfig config) throws IOException {
-        List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
-        for (Path testFile : testFiles) {
-            processStage(config, testFile, "execution", (cfg, file, methods) -> {
-                List<String> failing = new ArrayList<>();
-                for (MethodDeclaration method : methods) {
-                    ExecuteResult result = executionInvoker.execute(cfg.getProjectPath(), file, method.getNameAsString());
-                    if (result.success()) {
-                        continue;
-                    }
-                    String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
-                    logger.warn("Execution failed for " + method.getNameAsString() +
-                            " in " + file + ": " + combinedOutput);
-                    failing.add(method.getNameAsString());
-                }
-                return failing;
-            });
+        ExecuteResult result = executionInvoker.execute(config.getProjectPath(), config.getProjectPath(), "");
+        if (result.success()) {
+            return;
         }
+
+        String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
+        ExecutionFailureParseResult parsedLog = executionFailureLogParser.parse(combinedOutput);
+        List<TestFailure> failingTests = new ArrayList<>(parsedLog.failures());
+
+        parsedLog.reportPath().ifPresent(reportPath -> {
+            try {
+                failingTests.addAll(executionReportParser.parse(reportPath));
+            } catch (IOException exception) {
+                logger.warn("Unable to parse execution report at " + reportPath + ": " + exception.getMessage());
+            }
+        });
+
+        if (failingTests.isEmpty()) {
+            logger.warn("Execution failed but no failing tests could be parsed. Skipping removal.");
+            return;
+        }
+
+        removeExecutionFailures(config, failingTests);
     }
 
     private void processStage(AgentConfig config,
@@ -313,6 +325,57 @@ public class TestCleaner {
             }
         }
         return removedAnything;
+    }
+
+    private void removeExecutionFailures(AgentConfig config, List<TestFailure> failingTests) throws IOException {
+        List<Path> discoveredTests = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
+        logger.info("Processing execution failures across " + discoveredTests.size() + " discovered tests");
+
+        for (TestFailure failure : failingTests) {
+            if (failure.className().isBlank()) {
+                continue;
+            }
+            Path testFile = resolveTestFileByClassName(failure.className(), discoveredTests);
+            if (testFile == null) {
+                logger.warn("Unable to resolve test class for failure " + failure.className());
+                continue;
+            }
+
+            TestFileContext context = new TestFileContext(testFile, javaParser);
+            Optional<CompilationUnit> unitOpt = context.getCompilationUnit();
+            if (unitOpt.isEmpty()) {
+                continue;
+            }
+            CompilationUnit unit = unitOpt.get();
+            List<MethodDeclaration> testMethods = findTestMethods(unit);
+            List<MethodDeclaration> matching = testMethods.stream()
+                    .filter(method -> method.getNameAsString().equals(failure.methodName()))
+                    .collect(Collectors.toList());
+
+            if (matching.isEmpty()) {
+                logger.warn("No matching method found for failure " + failure + " in " + testFile.getFileName() + ". Skipping.");
+                continue;
+            }
+
+            matching.forEach(MethodDeclaration::remove);
+            context.markAstDirty();
+
+            List<MethodDeclaration> remaining = findTestMethods(unit);
+            if (remaining.isEmpty()) {
+                context.deleteFile();
+                continue;
+            }
+
+            context.saveIfDirty();
+        }
+    }
+
+    private Path resolveTestFileByClassName(String className, List<Path> discoveredTests) {
+        String expectedName = className.endsWith(".java") ? className : className + ".java";
+        return discoveredTests.stream()
+                .filter(path -> path.getFileName().toString().equals(expectedName))
+                .findFirst()
+                .orElse(null);
     }
 
     private Path resolveTestFile(Path failingFile, List<Path> discoveredTests) {

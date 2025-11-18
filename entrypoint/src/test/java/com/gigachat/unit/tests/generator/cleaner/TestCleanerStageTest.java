@@ -5,9 +5,9 @@ import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
 import com.gigachat.unit.tests.generator.config.AgentMode;
+import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
 import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
-import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -65,8 +65,18 @@ class TestCleanerStageTest {
             }
             return new CompileResult(true, List.of(), "", "");
         };
+        Path reportPath = projectDir.resolve("build/reports/tests/test/index.html");
+        Files.createDirectories(reportPath.getParent());
+        Files.writeString(reportPath, String.join(System.lineSeparator(),
+                "SampleTest > runtimeFailure FAILED"));
+
+        String executionLog = String.join(System.lineSeparator(),
+                "SampleTest > shouldBeDropped() FAILED",
+                "SampleTest > runtimeFailure FAILED",
+                "> There were failing tests. See the report at: file://" + reportPath);
+
         ExecutionInvoker executionInvoker = (root, file, method) ->
-                new ExecuteResult(!"runtimeFailure".equals(method), List.of(), "", "runtime-error");
+                new ExecuteResult(false, List.of(), executionLog, "runtime-error");
         PipelineLogger logger = new PipelineLogger(projectDir);
         TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
 
