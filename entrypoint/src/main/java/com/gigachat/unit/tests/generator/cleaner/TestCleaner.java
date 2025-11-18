@@ -103,22 +103,28 @@ public class TestCleaner {
     }
 
     private void runCompilationStage(AgentConfig config) throws IOException {
-        List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
-        for (Path testFile : testFiles) {
-            processStage(config, testFile, "compilation", (cfg, file, methods) -> {
-                String selector = methods.isEmpty() ? "" : methods.get(0).getNameAsString();
-                CompileResult result = compilerInvoker.compile(cfg.getProjectPath(), file, selector);
-                if (result.success()) {
-                    return List.of();
-                }
-                String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
-                logger.warn("Compilation failed for " + file + ": " + combinedOutput);
-                List<String> parsed = parseFailingMethods(combinedOutput);
-                if (!parsed.isEmpty()) {
-                    return parsed;
-                }
-                return methods.stream().map(MethodDeclaration::getNameAsString).collect(Collectors.toList());
-            });
+        Path projectRoot = config.getProjectPath();
+        boolean compilationFinished = false;
+        while (!compilationFinished) {
+            CompileResult result = compilerInvoker.compile(projectRoot, projectRoot, "");
+            if (result.success()) {
+                compilationFinished = true;
+                continue;
+            }
+
+            String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
+            logger.warn("Compilation failed. Parsing log for failing tests." + (combinedOutput.isBlank() ? "" : " Output: " + combinedOutput));
+            List<FailureLocation> failing = parseFailingLocations(combinedOutput);
+            logger.info("Parsed failing locations: " + failing);
+            if (failing.isEmpty()) {
+                logger.error("Compilation failed but no failing tests could be parsed. Aborting cleaner compilation stage.");
+                return;
+            }
+            boolean removed = removeFailingTests(config, failing);
+            if (!removed) {
+                logger.error("Failed to remove any tests for parsed compilation failures. Aborting cleaner compilation stage.");
+                return;
+            }
         }
     }
 
@@ -235,36 +241,117 @@ public class TestCleaner {
                 .anyMatch(name -> name.endsWith("Test"));
     }
 
-    private List<String> parseFailingMethods(String logOutput) {
+    private List<FailureLocation> parseFailingLocations(String logOutput) {
         if (logOutput == null || logOutput.isBlank()) {
             return List.of();
         }
-        List<String> matches = new ArrayList<>();
-        List<String> lines = logOutput.lines().collect(Collectors.toList());
-        for (String line : lines) {
+        List<FailureLocation> matches = new ArrayList<>();
+        for (String line : logOutput.lines().toList()) {
             String trimmed = line.trim();
-            // Pattern: com.example.SampleTest > failsToCompile FAILED
+            if (trimmed.isBlank()) {
+                continue;
+            }
+            // Pattern: com.example.SampleTest > shouldFail FAILED
             if (trimmed.contains(">")) {
                 String[] parts = trimmed.split(">", 2);
                 if (parts.length == 2) {
+                    String className = parts[0].trim();
                     String candidate = parts[1].trim();
                     String methodName = candidate.split("\\s+")[0].replace("()", "");
-                    if (!methodName.isBlank()) {
-                        matches.add(methodName);
-                        continue;
-                    }
+                    matches.add(new FailureLocation(className, methodName));
+                    continue;
                 }
             }
-            // Pattern: com.example.SampleTest.failsToCompile FAILED
+            // Pattern: com.example.SampleTest.shouldFail FAILED
             if (trimmed.contains(".")) {
                 String[] parts = trimmed.split("\\.");
-                String methodName = parts[parts.length - 1].split("\\s+")[0].replace("()", "");
-                if (!methodName.isBlank()) {
-                    matches.add(methodName);
+                if (parts.length >= 2) {
+                    String methodName = parts[parts.length - 1].split("\\s+")[0].replace("()", "");
+                    String className = String.join(".", java.util.Arrays.asList(parts).subList(0, parts.length - 1));
+                    matches.add(new FailureLocation(className, methodName));
+                    continue;
                 }
+            }
+            // Pattern: com.example.SampleTest FAILED
+            if (trimmed.contains(" ")) {
+                String className = trimmed.split("\\s+")[0];
+                matches.add(new FailureLocation(className, ""));
             }
         }
         return matches.stream().distinct().collect(Collectors.toList());
+    }
+
+    private boolean removeFailingTests(AgentConfig config, List<FailureLocation> failing) throws IOException {
+        List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
+        logger.info("Found " + testFiles.size() + " test files while removing failures");
+        boolean removedAnything = false;
+        for (Path testFile : testFiles) {
+            TestFileContext context = new TestFileContext(testFile, javaParser);
+            Optional<CompilationUnit> unitOpt = context.getCompilationUnit();
+            if (unitOpt.isEmpty()) {
+                continue;
+            }
+            CompilationUnit unit = unitOpt.get();
+            String className = resolvePrimaryClassName(unit);
+            if (className.isBlank()) {
+                className = testFile.getFileName().toString().replace(".java", "");
+            }
+            String resolvedClassName = className;
+            logger.info("Inspecting " + testFile + " resolved class " + resolvedClassName);
+            List<FailureLocation> classFailures = failing.stream()
+                    .filter(failure -> failure.className().endsWith(resolvedClassName))
+                    .collect(Collectors.toList());
+            if (classFailures.isEmpty()) {
+                continue;
+            }
+
+            logger.info("Cleaning failing targets " + classFailures + " from " + className);
+
+            boolean removeWholeClass = classFailures.stream().anyMatch(location -> location.methodName().isBlank());
+            if (removeWholeClass) {
+                context.deleteFile();
+                removedAnything = true;
+                continue;
+            }
+
+            List<String> failingMethods = classFailures.stream()
+                    .map(FailureLocation::methodName)
+                    .collect(Collectors.toList());
+            List<MethodDeclaration> testMethods = findTestMethods(unit);
+            List<MethodDeclaration> toRemove = testMethods.stream()
+                    .filter(method -> failingMethods.contains(method.getNameAsString()))
+                    .collect(Collectors.toList());
+            if (toRemove.isEmpty()) {
+                continue;
+            }
+            toRemove.forEach(MethodDeclaration::remove);
+            context.markAstDirty();
+            List<MethodDeclaration> remaining = findTestMethods(unit);
+            if (remaining.isEmpty()) {
+                context.deleteFile();
+            } else {
+                context.saveIfDirty();
+            }
+            removedAnything = true;
+        }
+        return removedAnything;
+    }
+
+    private String resolvePrimaryClassName(CompilationUnit unit) {
+        String packageName = unit.getPackageDeclaration()
+                .map(pkg -> pkg.getName().asString())
+                .orElse("");
+        String typeName = unit.getPrimaryTypeName().orElse("");
+        if (typeName.isBlank()) {
+            return "";
+        }
+        if (packageName.isBlank()) {
+            return typeName;
+        }
+        return packageName + "." + typeName;
+    }
+
+    private record FailureLocation(String className, String methodName) {
     }
 
     @FunctionalInterface

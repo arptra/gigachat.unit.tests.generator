@@ -35,7 +35,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         if (gradleAvailable) {
             String gradleTask = determineGradleTask(projectRoot, testClassFile);
             String testSelector = determineTestPattern(testClassFile, methodName);
-            command = "./gradlew -q " + gradleTask + " --tests '" + testSelector + "' --no-build-cache --rerun-tasks";
+            String selectorArgument = testSelector.isBlank() ? "" : " --tests '" + testSelector + "'";
+            command = "./gradlew -q " + gradleTask + selectorArgument + " --no-build-cache --rerun-tasks";
             messages.add("Gradle wrapper detected. Running real compilation via task '" + gradleTask + "'.");
         } else {
             command = "echo Compilation stub executed for " + testClassFile.getFileName();
@@ -89,6 +90,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private String determineTestPattern(Path testClassFile, String methodName) {
+        if (methodName == null || methodName.isBlank()) {
+            return "";
+        }
         String className = testClassFile.getFileName().toString().replace(".java", "");
         return className + "." + methodName;
     }

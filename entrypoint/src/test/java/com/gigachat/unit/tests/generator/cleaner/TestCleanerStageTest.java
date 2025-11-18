@@ -50,9 +50,12 @@ class TestCleanerStageTest {
 
         AtomicInteger compileCalls = new AtomicInteger();
         CompilerInvoker compilerInvoker = (root, file, method) -> {
-            compileCalls.incrementAndGet();
-            String stdout = "com.example.SampleTest > shouldBeDropped FAILED";
-            return new CompileResult(false, List.of(), stdout, "compile-error");
+            int call = compileCalls.incrementAndGet();
+            if (call == 1) {
+                String stdout = "com.example.SampleTest > shouldBeDropped FAILED";
+                return new CompileResult(false, List.of(), stdout, "compile-error");
+            }
+            return new CompileResult(true, List.of(), "", "");
         };
         ExecutionInvoker executionInvoker = (root, file, method) ->
                 new ExecuteResult(!"runtimeFailure".equals(method), List.of(), "", "runtime-error");
@@ -66,7 +69,8 @@ class TestCleanerStageTest {
 
         cleaner.clean(config);
 
-        assertEquals(1, compileCalls.get(), "Compilation should be invoked once per file");
+        int calls = compileCalls.get();
+        assertEquals(2, calls, "Compilation should repeat until clean but was " + calls);
         String updated = Files.readString(testFile);
         assertTrue(updated.contains("shouldStay"));
         assertFalse(updated.contains("shouldBeDropped"));
