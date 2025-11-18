@@ -1,8 +1,13 @@
 package com.gigachat.unit.tests.generator;
 
+import com.gigachat.unit.tests.generator.cleaner.TestCleaner;
+import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.config.AgentMode;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.pipeline.TestPipeline;
+import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
+import com.gigachat.unit.tests.generator.execute.JUnitExecutionInvoker;
 import com.gigachat.unit.tests.generator.util.ArgsParser;
 
 import java.io.IOException;
@@ -28,6 +33,10 @@ public class MainAgentEntry {
         try {
             AgentConfig config = argsParser.parse(args);
             System.out.println("Launching TestRepairAgent with configuration:\n" + config.toYaml());
+            if (config.getMode() == AgentMode.CLEAN) {
+                runCleaner(config);
+                return;
+            }
             List<TestClassInfo> classes = pipeline.execute(config);
             List<TestClassInfo> filtered = filterTargetClass(config, classes);
             report(filtered);
@@ -106,11 +115,19 @@ public class MainAgentEntry {
     }
 
     private void printUsage() {
-        System.out.println("Usage: --mode <scan|test|repair|monitor> [--path <projectDir>] [--project] [--class <fqcn>]" +
+        System.out.println("Usage: --mode <scan|test|repair|monitor|clean> [--clean] [--path <projectDir>] [--project] [--class <fqcn>]" +
                 " [--include-modules <names>] [--include-classes <names>] [--parallel]" +
                 " [--single-file] [--compile] [--execute]" +
                 " [--token <gigachatToken> | --cert <clientCert> --rootCert <rootCert> --key <privateKey>]" +
                 " [--endpoint <uri>]");
         System.out.println("Defaults: mode=scan, path=current working directory, project=false, parallel=false");
+    }
+
+    private void runCleaner(AgentConfig config) throws IOException {
+        PipelineLogger logger = new PipelineLogger(config.getProjectPath());
+        TestCleaner cleaner = new TestCleaner(logger,
+                new GradleCompilerInvoker(logger),
+                new JUnitExecutionInvoker(logger));
+        cleaner.clean(config);
     }
 }
