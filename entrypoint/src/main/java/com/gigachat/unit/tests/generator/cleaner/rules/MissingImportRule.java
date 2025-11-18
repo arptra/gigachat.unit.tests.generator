@@ -75,7 +75,7 @@ public final class MissingImportRule implements CleanerRule {
         if (classIndex.contains(candidate)) {
             return true;
         }
-        ClassLoader loader = projectClassLoader == null ? Thread.currentThread().getContextClassLoader() : projectClassLoader;
+        ClassLoader loader = projectClassLoader;
         try {
             Class.forName(candidate, false, loader);
             return true;
@@ -89,13 +89,21 @@ public final class MissingImportRule implements CleanerRule {
     private static ClassLoader buildProjectClassLoader(ProjectClassIndex index) {
         Path root = index.getProjectRoot();
         if (root == null) {
-            return Thread.currentThread().getContextClassLoader();
+            return new URLClassLoader(new URL[0], ClassLoader.getPlatformClassLoader());
         }
+
         List<Path> jarDirs = List.of(
                 root.resolve("libs"),
                 root.resolve("lib"),
                 root.resolve("build/libs")
         );
+        List<Path> classDirs = List.of(
+                root.resolve("build/classes/java/main"),
+                root.resolve("build/classes/java/test"),
+                root.resolve("build/resources/main"),
+                root.resolve("build/resources/test")
+        );
+
         List<URL> urls = new ArrayList<>();
         for (Path dir : jarDirs) {
             if (!Files.isDirectory(dir)) {
@@ -108,10 +116,14 @@ public final class MissingImportRule implements CleanerRule {
                 // ignore and continue with other directories
             }
         }
-        if (urls.isEmpty()) {
-            return Thread.currentThread().getContextClassLoader();
+
+        for (Path dir : classDirs) {
+            if (Files.isDirectory(dir)) {
+                addUrl(urls, dir);
+            }
         }
-        return new URLClassLoader(urls.toArray(URL[]::new), Thread.currentThread().getContextClassLoader());
+
+        return new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
     }
 
     private static void addUrl(List<URL> urls, Path jar) {
