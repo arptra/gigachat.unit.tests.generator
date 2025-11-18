@@ -13,13 +13,19 @@ import java.util.stream.Stream;
  */
 public final class ProjectClassIndex {
     private final Set<String> classNames = new LinkedHashSet<>();
+    private final Path projectRoot;
 
     public ProjectClassIndex(Path projectRoot) {
+        this.projectRoot = projectRoot;
         try {
             index(projectRoot);
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to index project classes under " + projectRoot, exception);
         }
+    }
+
+    public Path getProjectRoot() {
+        return projectRoot;
     }
 
     public boolean contains(String fullyQualifiedClass) {

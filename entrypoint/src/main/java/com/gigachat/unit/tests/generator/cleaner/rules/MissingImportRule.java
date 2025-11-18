@@ -7,18 +7,30 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 
 /**
  * Removes imports that reference classes that no longer exist inside the project sources.
  */
 public final class MissingImportRule implements CleanerRule {
     private final ProjectClassIndex classIndex;
+    private final ClassLoader projectClassLoader;
 
     public MissingImportRule(ProjectClassIndex classIndex) {
+        this(classIndex, buildProjectClassLoader(classIndex));
+    }
+
+    MissingImportRule(ProjectClassIndex classIndex, ClassLoader projectClassLoader) {
         this.classIndex = classIndex;
+        this.projectClassLoader = projectClassLoader;
     }
 
     @Override
@@ -63,13 +75,50 @@ public final class MissingImportRule implements CleanerRule {
         if (classIndex.contains(candidate)) {
             return true;
         }
+        ClassLoader loader = projectClassLoader == null ? Thread.currentThread().getContextClassLoader() : projectClassLoader;
         try {
-            Class.forName(candidate, false, Thread.currentThread().getContextClassLoader());
+            Class.forName(candidate, false, loader);
             return true;
         } catch (ClassNotFoundException ignored) {
             return false;
         } catch (LinkageError ignored) {
             return true;
+        }
+    }
+
+    private static ClassLoader buildProjectClassLoader(ProjectClassIndex index) {
+        Path root = index.getProjectRoot();
+        if (root == null) {
+            return Thread.currentThread().getContextClassLoader();
+        }
+        List<Path> jarDirs = List.of(
+                root.resolve("libs"),
+                root.resolve("lib"),
+                root.resolve("build/libs")
+        );
+        List<URL> urls = new ArrayList<>();
+        for (Path dir : jarDirs) {
+            if (!Files.isDirectory(dir)) {
+                continue;
+            }
+            try (var stream = Files.list(dir)) {
+                stream.filter(path -> path.toString().endsWith(".jar"))
+                        .forEach(path -> addUrl(urls, path));
+            } catch (IOException ignored) {
+                // ignore and continue with other directories
+            }
+        }
+        if (urls.isEmpty()) {
+            return Thread.currentThread().getContextClassLoader();
+        }
+        return new URLClassLoader(urls.toArray(URL[]::new), Thread.currentThread().getContextClassLoader());
+    }
+
+    private static void addUrl(List<URL> urls, Path jar) {
+        try {
+            urls.add(jar.toUri().toURL());
+        } catch (MalformedURLException ignored) {
+            // ignore invalid jar URLs
         }
     }
 }
