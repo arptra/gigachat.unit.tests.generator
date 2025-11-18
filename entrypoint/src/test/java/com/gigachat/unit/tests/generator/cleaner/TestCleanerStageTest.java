@@ -14,8 +14,10 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,10 +48,11 @@ class TestCleanerStageTest {
                 "    }",
                 "}"));
 
+        AtomicInteger compileCalls = new AtomicInteger();
         CompilerInvoker compilerInvoker = (root, file, method) -> {
-            boolean isFailure = method.startsWith("should");
-            String stdout = isFailure ? "com.example.SampleTest > shouldBeDropped FAILED" : "";
-            return new CompileResult(!isFailure, List.of(), stdout, isFailure ? "compile-error" : "");
+            compileCalls.incrementAndGet();
+            String stdout = "com.example.SampleTest > shouldBeDropped FAILED";
+            return new CompileResult(false, List.of(), stdout, "compile-error");
         };
         ExecutionInvoker executionInvoker = (root, file, method) ->
                 new ExecuteResult(!"runtimeFailure".equals(method), List.of(), "", "runtime-error");
@@ -63,6 +66,7 @@ class TestCleanerStageTest {
 
         cleaner.clean(config);
 
+        assertEquals(1, compileCalls.get(), "Compilation should be invoked once per file");
         String updated = Files.readString(testFile);
         assertTrue(updated.contains("shouldStay"));
         assertFalse(updated.contains("shouldBeDropped"));

@@ -105,16 +105,19 @@ public class TestCleaner {
     private void runCompilationStage(AgentConfig config) throws IOException {
         List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
         for (Path testFile : testFiles) {
-            processStage(config, testFile, "compilation", (cfg, file, method) -> {
-                CompileResult result = compilerInvoker.compile(cfg.getProjectPath(), file, method.getNameAsString());
+            processStage(config, testFile, "compilation", (cfg, file, methods) -> {
+                String selector = methods.isEmpty() ? "" : methods.get(0).getNameAsString();
+                CompileResult result = compilerInvoker.compile(cfg.getProjectPath(), file, selector);
                 if (result.success()) {
                     return List.of();
                 }
                 String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
-                logger.warn("Compilation failed for " + method.getNameAsString() +
-                        " in " + file + ": " + combinedOutput);
+                logger.warn("Compilation failed for " + file + ": " + combinedOutput);
                 List<String> parsed = parseFailingMethods(combinedOutput);
-                return parsed.isEmpty() ? List.of(method.getNameAsString()) : parsed;
+                if (!parsed.isEmpty()) {
+                    return parsed;
+                }
+                return methods.stream().map(MethodDeclaration::getNameAsString).collect(Collectors.toList());
             });
         }
     }
@@ -122,15 +125,19 @@ public class TestCleaner {
     private void runExecutionStage(AgentConfig config) throws IOException {
         List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
         for (Path testFile : testFiles) {
-            processStage(config, testFile, "execution", (cfg, file, method) -> {
-                ExecuteResult result = executionInvoker.execute(cfg.getProjectPath(), file, method.getNameAsString());
-                if (result.success()) {
-                    return List.of();
+            processStage(config, testFile, "execution", (cfg, file, methods) -> {
+                List<String> failing = new ArrayList<>();
+                for (MethodDeclaration method : methods) {
+                    ExecuteResult result = executionInvoker.execute(cfg.getProjectPath(), file, method.getNameAsString());
+                    if (result.success()) {
+                        continue;
+                    }
+                    String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
+                    logger.warn("Execution failed for " + method.getNameAsString() +
+                            " in " + file + ": " + combinedOutput);
+                    failing.add(method.getNameAsString());
                 }
-                String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
-                logger.warn("Execution failed for " + method.getNameAsString() +
-                        " in " + file + ": " + combinedOutput);
-                return List.of(method.getNameAsString());
+                return failing;
             });
         }
     }
@@ -159,10 +166,7 @@ public class TestCleaner {
         if (testMethods.isEmpty()) {
             return;
         }
-        List<String> failingMethodNames = new ArrayList<>();
-        for (MethodDeclaration method : testMethods) {
-            failingMethodNames.addAll(evaluator.failingMethods(config, testFile, method));
-        }
+        List<String> failingMethodNames = evaluator.failingMethods(config, testFile, testMethods);
         if (failingMethodNames.isEmpty()) {
             return;
         }
@@ -265,6 +269,6 @@ public class TestCleaner {
 
     @FunctionalInterface
     private interface StageEvaluator {
-        List<String> failingMethods(AgentConfig config, Path testFile, MethodDeclaration method);
+        List<String> failingMethods(AgentConfig config, Path testFile, List<MethodDeclaration> methods);
     }
 }
