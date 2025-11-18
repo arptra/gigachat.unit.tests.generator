@@ -9,6 +9,8 @@ import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
 import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
+import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLocation;
+import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLogParser;
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -39,6 +41,7 @@ public class TestCleaner {
     private final ExecutionInvoker executionInvoker;
     private final JavaParser javaParser = new JavaParser();
     private final Function<ProjectClassIndex, List<CleanerRule>> rulesProvider;
+    private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
 
     public TestCleaner(PipelineLogger logger,
                        CompilerInvoker compilerInvoker,
@@ -114,7 +117,7 @@ public class TestCleaner {
 
             String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
             logger.warn("Compilation failed. Parsing log for failing tests." + (combinedOutput.isBlank() ? "" : " Output: " + combinedOutput));
-            List<FailureLocation> failing = parseFailingLocations(combinedOutput);
+            List<CompilationFailureLocation> failing = failureLogParser.parse(combinedOutput);
             logger.info("Parsed failing locations: " + failing);
             if (failing.isEmpty()) {
                 logger.error("Compilation failed but no failing tests could be parsed. Aborting cleaner compilation stage.");
@@ -241,47 +244,7 @@ public class TestCleaner {
                 .anyMatch(name -> name.endsWith("Test"));
     }
 
-    private List<FailureLocation> parseFailingLocations(String logOutput) {
-        if (logOutput == null || logOutput.isBlank()) {
-            return List.of();
-        }
-        List<FailureLocation> matches = new ArrayList<>();
-        for (String line : logOutput.lines().toList()) {
-            String trimmed = line.trim();
-            if (trimmed.isBlank()) {
-                continue;
-            }
-            // Pattern: com.example.SampleTest > shouldFail FAILED
-            if (trimmed.contains(">")) {
-                String[] parts = trimmed.split(">", 2);
-                if (parts.length == 2) {
-                    String className = parts[0].trim();
-                    String candidate = parts[1].trim();
-                    String methodName = candidate.split("\\s+")[0].replace("()", "");
-                    matches.add(new FailureLocation(className, methodName));
-                    continue;
-                }
-            }
-            // Pattern: com.example.SampleTest.shouldFail FAILED
-            if (trimmed.contains(".")) {
-                String[] parts = trimmed.split("\\.");
-                if (parts.length >= 2) {
-                    String methodName = parts[parts.length - 1].split("\\s+")[0].replace("()", "");
-                    String className = String.join(".", java.util.Arrays.asList(parts).subList(0, parts.length - 1));
-                    matches.add(new FailureLocation(className, methodName));
-                    continue;
-                }
-            }
-            // Pattern: com.example.SampleTest FAILED
-            if (trimmed.contains(" ")) {
-                String className = trimmed.split("\\s+")[0];
-                matches.add(new FailureLocation(className, ""));
-            }
-        }
-        return matches.stream().distinct().collect(Collectors.toList());
-    }
-
-    private boolean removeFailingTests(AgentConfig config, List<FailureLocation> failing) throws IOException {
+    private boolean removeFailingTests(AgentConfig config, List<CompilationFailureLocation> failing) throws IOException {
         List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
         logger.info("Found " + testFiles.size() + " test files while removing failures");
         boolean removedAnything = false;
@@ -292,66 +255,64 @@ public class TestCleaner {
                 continue;
             }
             CompilationUnit unit = unitOpt.get();
-            String className = resolvePrimaryClassName(unit);
-            if (className.isBlank()) {
-                className = testFile.getFileName().toString().replace(".java", "");
-            }
-            String resolvedClassName = className;
-            logger.info("Inspecting " + testFile + " resolved class " + resolvedClassName);
-            List<FailureLocation> classFailures = failing.stream()
-                    .filter(failure -> failure.className().endsWith(resolvedClassName))
+            Path normalizedTestPath = testFile.toAbsolutePath().normalize();
+            List<CompilationFailureLocation> fileFailures = failing.stream()
+                    .filter(failure -> pathsMatch(normalizedTestPath, failure.filePath()))
                     .collect(Collectors.toList());
-            if (classFailures.isEmpty()) {
+            if (fileFailures.isEmpty()) {
                 continue;
             }
 
-            logger.info("Cleaning failing targets " + classFailures + " from " + className);
+            logger.info("Cleaning failing targets " + fileFailures + " from " + testFile.getFileName());
 
-            boolean removeWholeClass = classFailures.stream().anyMatch(location -> location.methodName().isBlank());
-            if (removeWholeClass) {
+            List<MethodDeclaration> testMethods = findTestMethods(unit);
+            List<MethodDeclaration> methodsToRemove = new ArrayList<>();
+            boolean removeWholeClass = false;
+            for (CompilationFailureLocation failure : fileFailures) {
+                boolean matchedMethod = false;
+                for (MethodDeclaration method : testMethods) {
+                    if (method.getRange().isEmpty()) {
+                        continue;
+                    }
+                    int beginLine = method.getRange().get().begin.line;
+                    int endLine = method.getRange().get().end.line;
+                    if (failure.lineNumber() >= beginLine && failure.lineNumber() <= endLine) {
+                        methodsToRemove.add(method);
+                        matchedMethod = true;
+                    }
+                }
+                if (!matchedMethod) {
+                    removeWholeClass = true;
+                }
+            }
+
+            if (removeWholeClass || methodsToRemove.size() == testMethods.size()) {
                 context.deleteFile();
                 removedAnything = true;
                 continue;
             }
 
-            List<String> failingMethods = classFailures.stream()
-                    .map(FailureLocation::methodName)
-                    .collect(Collectors.toList());
-            List<MethodDeclaration> testMethods = findTestMethods(unit);
-            List<MethodDeclaration> toRemove = testMethods.stream()
-                    .filter(method -> failingMethods.contains(method.getNameAsString()))
-                    .collect(Collectors.toList());
-            if (toRemove.isEmpty()) {
-                continue;
-            }
-            toRemove.forEach(MethodDeclaration::remove);
-            context.markAstDirty();
-            List<MethodDeclaration> remaining = findTestMethods(unit);
-            if (remaining.isEmpty()) {
-                context.deleteFile();
-            } else {
+            if (!methodsToRemove.isEmpty()) {
+                methodsToRemove.stream().distinct().forEach(MethodDeclaration::remove);
+                context.markAstDirty();
                 context.saveIfDirty();
+                removedAnything = true;
             }
-            removedAnything = true;
         }
         return removedAnything;
     }
 
-    private String resolvePrimaryClassName(CompilationUnit unit) {
-        String packageName = unit.getPackageDeclaration()
-                .map(pkg -> pkg.getName().asString())
-                .orElse("");
-        String typeName = unit.getPrimaryTypeName().orElse("");
-        if (typeName.isBlank()) {
-            return "";
+    private boolean pathsMatch(Path testPath, Path failurePath) {
+        if (failurePath == null) {
+            return false;
         }
-        if (packageName.isBlank()) {
-            return typeName;
+        Path normalizedFailure = failurePath.toAbsolutePath().normalize();
+        if (normalizedFailure.equals(testPath)) {
+            return true;
         }
-        return packageName + "." + typeName;
-    }
-
-    private record FailureLocation(String className, String methodName) {
+        return normalizedFailure.getFileName() != null
+                && normalizedFailure.getFileName().equals(testPath.getFileName())
+                && normalizedFailure.toString().endsWith(testPath.getFileName().toString());
     }
 
     @FunctionalInterface

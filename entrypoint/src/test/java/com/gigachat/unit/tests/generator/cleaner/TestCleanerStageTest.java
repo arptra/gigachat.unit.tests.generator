@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -48,11 +49,18 @@ class TestCleanerStageTest {
                 "    }",
                 "}"));
 
+        List<String> lines = Files.readAllLines(testFile);
+        int failingLine = IntStream.range(0, lines.size())
+                .filter(i -> lines.get(i).contains("shouldBeDropped"))
+                .map(i -> i + 1)
+                .findFirst()
+                .orElse(0);
+
         AtomicInteger compileCalls = new AtomicInteger();
         CompilerInvoker compilerInvoker = (root, file, method) -> {
             int call = compileCalls.incrementAndGet();
             if (call == 1) {
-                String stdout = "com.example.SampleTest > shouldBeDropped FAILED";
+                String stdout = testFile + ":" + failingLine + ": error: cannot find symbol";
                 return new CompileResult(false, List.of(), stdout, "compile-error");
             }
             return new CompileResult(true, List.of(), "", "");
