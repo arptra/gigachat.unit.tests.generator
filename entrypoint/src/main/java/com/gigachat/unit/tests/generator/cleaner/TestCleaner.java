@@ -245,19 +245,32 @@ public class TestCleaner {
     }
 
     private boolean removeFailingTests(AgentConfig config, List<CompilationFailureLocation> failing) throws IOException {
-        List<Path> testFiles = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
-        logger.info("Found " + testFiles.size() + " test files while removing failures");
+        List<Path> discoveredTests = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
+        logger.info("Found " + discoveredTests.size() + " test files while removing failures");
+
+        List<Path> failingFiles = failing.stream()
+                .map(CompilationFailureLocation::filePath)
+                .filter(Objects::nonNull)
+                .map(path -> path.toAbsolutePath().normalize())
+                .distinct()
+                .collect(Collectors.toList());
+
         boolean removedAnything = false;
-        for (Path testFile : testFiles) {
+        for (Path failingFile : failingFiles) {
+            Path testFile = resolveTestFile(failingFile, discoveredTests);
+            if (testFile == null) {
+                logger.warn("Unable to resolve failing test file " + failingFile + " against discovered tests");
+                continue;
+            }
+
             TestFileContext context = new TestFileContext(testFile, javaParser);
             Optional<CompilationUnit> unitOpt = context.getCompilationUnit();
             if (unitOpt.isEmpty()) {
                 continue;
             }
             CompilationUnit unit = unitOpt.get();
-            Path normalizedTestPath = testFile.toAbsolutePath().normalize();
             List<CompilationFailureLocation> fileFailures = failing.stream()
-                    .filter(failure -> pathsMatch(normalizedTestPath, failure.filePath()))
+                    .filter(failure -> pathsMatch(testFile, failure.filePath()))
                     .collect(Collectors.toList());
             if (fileFailures.isEmpty()) {
                 continue;
@@ -300,6 +313,17 @@ public class TestCleaner {
             }
         }
         return removedAnything;
+    }
+
+    private Path resolveTestFile(Path failingFile, List<Path> discoveredTests) {
+        Path normalizedFailing = failingFile.toAbsolutePath().normalize();
+        if (Files.exists(normalizedFailing)) {
+            return normalizedFailing;
+        }
+        return discoveredTests.stream()
+                .filter(testPath -> pathsMatch(testPath, normalizedFailing))
+                .findFirst()
+                .orElse(null);
     }
 
     private boolean pathsMatch(Path testPath, Path failurePath) {
