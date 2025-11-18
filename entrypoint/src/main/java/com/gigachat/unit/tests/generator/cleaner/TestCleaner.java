@@ -375,7 +375,25 @@ public class TestCleaner {
     }
 
     private Path resolveTestFileByClassName(String className, List<Path> discoveredTests) {
-        String expectedName = className.endsWith(".java") ? className : className + ".java";
+        if (className == null || className.isBlank()) {
+            return null;
+        }
+
+        String trimmed = className.trim();
+        String relativePath = trimmed.replace('.', '/') + (trimmed.endsWith(".java") ? "" : ".java");
+        String normalizedRelative = relativePath.replace('\\', '/');
+
+        Optional<Path> fqcnMatch = discoveredTests.stream()
+                .filter(path -> path.toString().replace('\\', '/').endsWith(normalizedRelative))
+                .findFirst();
+        if (fqcnMatch.isPresent()) {
+            return fqcnMatch.get();
+        }
+
+        String simpleName = trimmed.contains(".")
+                ? trimmed.substring(trimmed.lastIndexOf('.') + 1)
+                : trimmed;
+        String expectedName = simpleName.endsWith(".java") ? simpleName : simpleName + ".java";
         return discoveredTests.stream()
                 .filter(path -> path.getFileName().toString().equals(expectedName))
                 .findFirst()

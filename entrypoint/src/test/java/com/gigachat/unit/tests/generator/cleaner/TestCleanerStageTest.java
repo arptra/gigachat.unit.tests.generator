@@ -94,4 +94,42 @@ class TestCleanerStageTest {
         assertFalse(updated.contains("shouldBeDropped"));
         assertFalse(updated.contains("runtimeFailure"));
     }
+
+    @Test
+    void resolvesFullyQualifiedClassNamesDuringExecutionCleanup() throws IOException {
+        Path testFile = projectDir.resolve("src/test/java/com/example/app/model/UserTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, String.join(System.lineSeparator(),
+                "package com.example.app.model;",
+                "import org.junit.jupiter.api.Test;",
+                "class UserTest {",
+                "    @Test",
+                "    void shouldStay() {",
+                "        org.junit.jupiter.api.Assertions.assertTrue(true);",
+                "    }",
+                "    @Test",
+                "    void shouldBeRemoved() {",
+                "        org.junit.jupiter.api.Assertions.assertTrue(true);",
+                "    }",
+                "}"));
+
+        CompilerInvoker compilerInvoker = (root, file, method) -> new CompileResult(true, List.of(), "", "");
+        String executionLog = String.join(System.lineSeparator(),
+                "com.example.app.model.UserTest > shouldBeRemoved FAILED",
+                "48 tests completed, 1 failed");
+        ExecutionInvoker executionInvoker = (root, file, method) -> new ExecuteResult(false, List.of(), executionLog, "runtime-error");
+        PipelineLogger logger = new PipelineLogger(projectDir);
+        TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.CLEAN)
+                .projectPath(projectDir)
+                .build();
+
+        cleaner.clean(config);
+
+        String updated = Files.readString(testFile);
+        assertTrue(updated.contains("shouldStay"));
+        assertFalse(updated.contains("shouldBeRemoved"));
+    }
 }
