@@ -25,7 +25,7 @@ class TestCleanerStageTest {
     Path projectDir;
 
     @Test
-    void removesMethodsThatFailCompilationOrExecution() throws IOException {
+    void removesMethodsReportedInLogs() throws IOException {
         Path testFile = projectDir.resolve("src/test/java/com/example/SampleTest.java");
         Files.createDirectories(testFile.getParent());
         Files.writeString(testFile, String.join(System.lineSeparator(),
@@ -33,23 +33,26 @@ class TestCleanerStageTest {
                 "import org.junit.jupiter.api.Test;",
                 "class SampleTest {",
                 "    @Test",
-                "    void shouldPass() {",
+                "    void shouldStay() {",
                 "        org.junit.jupiter.api.Assertions.assertTrue(true);",
                 "    }",
                 "    @Test",
-                "    void failsToCompile() {",
+                "    void shouldBeDropped() {",
                 "        org.junit.jupiter.api.Assertions.assertTrue(true);",
                 "    }",
                 "    @Test",
-                "    void failsAtRuntime() {",
+                "    void runtimeFailure() {",
                 "        org.junit.jupiter.api.Assertions.assertTrue(true);",
                 "    }",
                 "}"));
 
-        CompilerInvoker compilerInvoker = (root, file, method) ->
-                new CompileResult(!"failsToCompile".equals(method), List.of(), "", "compile-error");
+        CompilerInvoker compilerInvoker = (root, file, method) -> {
+            boolean isFailure = method.startsWith("should");
+            String stdout = isFailure ? "com.example.SampleTest > shouldBeDropped FAILED" : "";
+            return new CompileResult(!isFailure, List.of(), stdout, isFailure ? "compile-error" : "");
+        };
         ExecutionInvoker executionInvoker = (root, file, method) ->
-                new ExecuteResult(!"failsAtRuntime".equals(method), List.of(), "", "runtime-error");
+                new ExecuteResult(!"runtimeFailure".equals(method), List.of(), "", "runtime-error");
         PipelineLogger logger = new PipelineLogger(projectDir);
         TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
 
@@ -61,8 +64,8 @@ class TestCleanerStageTest {
         cleaner.clean(config);
 
         String updated = Files.readString(testFile);
-        assertTrue(updated.contains("shouldPass"));
-        assertFalse(updated.contains("failsToCompile"));
-        assertFalse(updated.contains("failsAtRuntime"));
+        assertTrue(updated.contains("shouldStay"));
+        assertFalse(updated.contains("shouldBeDropped"));
+        assertFalse(updated.contains("runtimeFailure"));
     }
 }

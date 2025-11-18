@@ -107,12 +107,14 @@ public class TestCleaner {
         for (Path testFile : testFiles) {
             processStage(config, testFile, "compilation", (cfg, file, method) -> {
                 CompileResult result = compilerInvoker.compile(cfg.getProjectPath(), file, method.getNameAsString());
-                if (!result.success()) {
-                    logger.warn("Compilation failed for " + method.getNameAsString() +
-                            " in " + file + ": " + result.stderr());
-                    return true;
+                if (result.success()) {
+                    return List.of();
                 }
-                return false;
+                String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
+                logger.warn("Compilation failed for " + method.getNameAsString() +
+                        " in " + file + ": " + combinedOutput);
+                List<String> parsed = parseFailingMethods(combinedOutput);
+                return parsed.isEmpty() ? List.of(method.getNameAsString()) : parsed;
             });
         }
     }
@@ -122,12 +124,13 @@ public class TestCleaner {
         for (Path testFile : testFiles) {
             processStage(config, testFile, "execution", (cfg, file, method) -> {
                 ExecuteResult result = executionInvoker.execute(cfg.getProjectPath(), file, method.getNameAsString());
-                if (!result.success()) {
-                    logger.warn("Execution failed for " + method.getNameAsString() +
-                            " in " + file + ": " + result.stderr());
-                    return true;
+                if (result.success()) {
+                    return List.of();
                 }
-                return false;
+                String combinedOutput = (result.stdout() + System.lineSeparator() + result.stderr()).trim();
+                logger.warn("Execution failed for " + method.getNameAsString() +
+                        " in " + file + ": " + combinedOutput);
+                return List.of(method.getNameAsString());
             });
         }
     }
@@ -156,16 +159,16 @@ public class TestCleaner {
         if (testMethods.isEmpty()) {
             return;
         }
-        List<MethodDeclaration> toRemove = new ArrayList<>();
+        List<String> failingMethodNames = new ArrayList<>();
         for (MethodDeclaration method : testMethods) {
-            boolean failed = evaluator.hasError(config, testFile, method);
-            if (failed) {
-                toRemove.add(method);
-            }
+            failingMethodNames.addAll(evaluator.failingMethods(config, testFile, method));
         }
-        if (toRemove.isEmpty()) {
+        if (failingMethodNames.isEmpty()) {
             return;
         }
+        List<MethodDeclaration> toRemove = testMethods.stream()
+                .filter(method -> failingMethodNames.contains(method.getNameAsString()))
+                .collect(Collectors.toList());
         toRemove.forEach(MethodDeclaration::remove);
         context.markAstDirty();
         List<MethodDeclaration> remaining = findTestMethods(unit);
@@ -228,8 +231,40 @@ public class TestCleaner {
                 .anyMatch(name -> name.endsWith("Test"));
     }
 
+    private List<String> parseFailingMethods(String logOutput) {
+        if (logOutput == null || logOutput.isBlank()) {
+            return List.of();
+        }
+        List<String> matches = new ArrayList<>();
+        List<String> lines = logOutput.lines().collect(Collectors.toList());
+        for (String line : lines) {
+            String trimmed = line.trim();
+            // Pattern: com.example.SampleTest > failsToCompile FAILED
+            if (trimmed.contains(">")) {
+                String[] parts = trimmed.split(">", 2);
+                if (parts.length == 2) {
+                    String candidate = parts[1].trim();
+                    String methodName = candidate.split("\\s+")[0].replace("()", "");
+                    if (!methodName.isBlank()) {
+                        matches.add(methodName);
+                        continue;
+                    }
+                }
+            }
+            // Pattern: com.example.SampleTest.failsToCompile FAILED
+            if (trimmed.contains(".")) {
+                String[] parts = trimmed.split("\\.");
+                String methodName = parts[parts.length - 1].split("\\s+")[0].replace("()", "");
+                if (!methodName.isBlank()) {
+                    matches.add(methodName);
+                }
+            }
+        }
+        return matches.stream().distinct().collect(Collectors.toList());
+    }
+
     @FunctionalInterface
     private interface StageEvaluator {
-        boolean hasError(AgentConfig config, Path testFile, MethodDeclaration method);
+        List<String> failingMethods(AgentConfig config, Path testFile, MethodDeclaration method);
     }
 }
