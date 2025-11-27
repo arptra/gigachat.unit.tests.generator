@@ -35,7 +35,7 @@ public final class MissingImportRule implements CleanerRule {
     private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
 
     public MissingImportRule(ProjectClassIndex classIndex) {
-        this(classIndex, new GradleCompilerInvoker(new PipelineLogger(classIndex.getProjectRoot())));
+        this(classIndex, new GradleCompilerInvoker(new PipelineLogger(classIndex.getProjectRoot()), true));
     }
 
     public MissingImportRule(ProjectClassIndex classIndex, CompilerInvoker compilerInvoker) {

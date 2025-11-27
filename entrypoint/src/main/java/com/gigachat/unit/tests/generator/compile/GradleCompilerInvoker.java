@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Comparator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -33,9 +34,15 @@ import java.util.stream.Stream;
  */
 public class GradleCompilerInvoker implements CompilerInvoker {
     private final PipelineLogger logger;
+    private final boolean cleanupOutputs;
 
     public GradleCompilerInvoker(PipelineLogger logger) {
+        this(logger, false);
+    }
+
+    public GradleCompilerInvoker(PipelineLogger logger, boolean cleanupOutputs) {
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.cleanupOutputs = cleanupOutputs;
     }
 
     @Override
@@ -72,6 +79,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
 
+        boolean outputDirPreexisted = Files.exists(outputDir);
         try {
             Files.createDirectories(outputDir);
 
@@ -118,6 +126,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
             return new CompileResult(false, messages, "", exception.getMessage());
+        } finally {
+            if (cleanupOutputs && !outputDirPreexisted) {
+                try {
+                    deleteDirectory(outputDir);
+                } catch (IOException cleanupError) {
+                    logger.warn("Failed to clean compilation outputs at " + outputDir + ": " + cleanupError.getMessage());
+                }
+            }
         }
     }
 
@@ -240,6 +256,22 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             }
         }
         return entries;
+    }
+
+    private void deleteDirectory(Path directory) throws IOException {
+        if (!Files.exists(directory)) {
+            return;
+        }
+        try (Stream<Path> stream = Files.walk(directory)) {
+            stream.sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // best-effort cleanup
+                        }
+                    });
+        }
     }
 
     private static String formatDiagnostic(Diagnostic<? extends JavaFileObject> diagnostic) {
