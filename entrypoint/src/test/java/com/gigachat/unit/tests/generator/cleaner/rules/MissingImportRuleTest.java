@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -108,5 +109,27 @@ class MissingImportRuleTest {
         boolean changed = rule.apply(context);
 
         assertFalse(changed, "Syntax error unrelated to imports should not trigger removal");
+    }
+
+    @Test
+    void doesNotLeaveCompilationArtifacts() throws IOException {
+        Path testFile = projectDir.resolve("src/test/java/com/example/app/UserServiceTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, String.join(System.lineSeparator(),
+                "package com.example.app;",
+                "import java.util.List;",
+                "class UserServiceTest { List<String> values; }"));
+
+        MissingImportRule rule = new MissingImportRule(new ProjectClassIndex(projectDir));
+        TestFileContext context = new TestFileContext(testFile, new JavaParser());
+
+        boolean changed = rule.apply(context);
+
+        assertFalse(changed, "Valid imports should remain untouched");
+
+        try (Stream<Path> stream = Files.walk(projectDir)) {
+            assertTrue(stream.noneMatch(path -> path.toString().endsWith(".class")),
+                    "Compilation artifacts should not remain inside the project directory");
+        }
     }
 }

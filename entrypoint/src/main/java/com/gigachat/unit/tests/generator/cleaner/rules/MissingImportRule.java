@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -66,6 +67,7 @@ public final class MissingImportRule implements CleanerRule {
             return Collections.emptySet();
         }
 
+        Path tempOutput = Files.createTempDirectory("missing-import-rule-classes");
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null)) {
             List<Path> classpath = buildClasspathEntries();
@@ -73,8 +75,13 @@ public final class MissingImportRule implements CleanerRule {
                 fileManager.setLocation(StandardLocation.CLASS_PATH, classpath.stream().map(Path::toFile).toList());
             }
 
+            fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(tempOutput.toFile()));
+            fileManager.setLocation(StandardLocation.SOURCE_OUTPUT, List.of(tempOutput.toFile()));
+
             Iterable<? extends JavaFileObject> sources = fileManager.getJavaFileObjectsFromPaths(List.of(file));
             compiler.getTask(null, fileManager, diagnostics, null, null, sources).call();
+        } finally {
+            deleteQuietly(tempOutput);
         }
 
         if (diagnostics.getDiagnostics().isEmpty()) {
@@ -175,6 +182,25 @@ public final class MissingImportRule implements CleanerRule {
                     .forEach(paths::add);
         } catch (IOException ignored) {
             // If we cannot walk the cache directory we simply skip it.
+        }
+    }
+
+    private static void deleteQuietly(Path root) {
+        if (root == null) {
+            return;
+        }
+
+        try (Stream<Path> stream = Files.walk(root)) {
+            stream.sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // best-effort cleanup
+                        }
+                    });
+        } catch (IOException ignored) {
+            // ignore cleanup issues
         }
     }
 }
