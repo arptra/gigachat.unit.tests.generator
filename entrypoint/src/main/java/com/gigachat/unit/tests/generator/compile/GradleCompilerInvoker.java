@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -70,53 +71,62 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         Path representative = compilationTargets.getFirst();
         String modulePath = determineGradlePath(projectRoot, representative);
         Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
-        Path outputDir = moduleRoot.resolve("build/classes/java/test");
+        Path outputDir;
         try {
-            Files.createDirectories(outputDir);
+            outputDir = Files.createTempDirectory("gradle-compiler-invoker-classes");
         } catch (IOException exception) {
-            logger.error("Unable to create output directory " + outputDir, exception);
+            logger.error("Unable to create temporary output directory for compilation", exception);
             return new CompileResult(false, List.of(), "", exception.getMessage());
         }
 
-        Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
-        classpathEntries.add(outputDir);
-        classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
-        classpathEntries.add(moduleRoot.resolve("build/resources/test"));
-        classpathEntries.add(moduleRoot.resolve("build/resources/main"));
+        try {
+            Files.createDirectories(outputDir);
 
-        List<Path> existingClasspath = classpathEntries.stream()
-                .filter(Files::exists)
-                .collect(Collectors.toCollection(ArrayList::new));
+            Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
+            classpathEntries.add(outputDir);
+            classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
+            classpathEntries.add(moduleRoot.resolve("build/resources/test"));
+            classpathEntries.add(moduleRoot.resolve("build/resources/main"));
 
-        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        StringWriter compilerOutput = new StringWriter();
-        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.getDefault(), StandardCharsets.UTF_8)) {
-            if (!existingClasspath.isEmpty()) {
-                fileManager.setLocationFromPaths(StandardLocation.CLASS_PATH, existingClasspath);
+            List<Path> existingClasspath = classpathEntries.stream()
+                    .filter(Files::exists)
+                    .collect(Collectors.toCollection(ArrayList::new));
+
+            DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+            StringWriter compilerOutput = new StringWriter();
+            try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.getDefault(), StandardCharsets.UTF_8)) {
+                if (!existingClasspath.isEmpty()) {
+                    fileManager.setLocationFromPaths(StandardLocation.CLASS_PATH, existingClasspath);
+                }
+                fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(outputDir));
+
+                Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjectsFromPaths(compilationTargets);
+                List<String> options = new ArrayList<>();
+                options.add("--release");
+                options.add(String.valueOf(Runtime.version().feature()));
+                options.add("-g");
+
+                logger.info("Compiling " + compilationTargets.size() + " test source(s) starting at " + testClassFile
+                        + " for method " + methodName);
+                Boolean success = compiler.getTask(compilerOutput, fileManager, diagnostics, options, null, units).call();
+                String stdout = compilerOutput.toString();
+                String stderr = diagnostics.getDiagnostics().stream()
+                        .map(GradleCompilerInvoker::formatDiagnostic)
+                        .collect(Collectors.joining(System.lineSeparator()));
+                boolean compilationSucceeded = Boolean.TRUE.equals(success);
+                if (!compilationSucceeded) {
+                    logger.warn("Compilation failed for " + testClassFile);
+                }
+                return new CompileResult(compilationSucceeded, messages, stdout, stderr);
+            } catch (IOException exception) {
+                logger.error("Compilation failed for " + testClassFile, exception);
+                return new CompileResult(false, messages, "", exception.getMessage());
             }
-            fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(outputDir));
-
-            Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjectsFromPaths(compilationTargets);
-            List<String> options = new ArrayList<>();
-            options.add("--release");
-            options.add(String.valueOf(Runtime.version().feature()));
-            options.add("-g");
-
-            logger.info("Compiling " + compilationTargets.size() + " test source(s) starting at " + testClassFile
-                    + " for method " + methodName);
-            Boolean success = compiler.getTask(compilerOutput, fileManager, diagnostics, options, null, units).call();
-            String stdout = compilerOutput.toString();
-            String stderr = diagnostics.getDiagnostics().stream()
-                    .map(GradleCompilerInvoker::formatDiagnostic)
-                    .collect(Collectors.joining(System.lineSeparator()));
-            boolean compilationSucceeded = Boolean.TRUE.equals(success);
-            if (!compilationSucceeded) {
-                logger.warn("Compilation failed for " + testClassFile);
-            }
-            return new CompileResult(compilationSucceeded, messages, stdout, stderr);
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
             return new CompileResult(false, messages, "", exception.getMessage());
+        } finally {
+            deleteQuietly(outputDir);
         }
     }
 
@@ -243,6 +253,24 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     private static String formatDiagnostic(Diagnostic<? extends JavaFileObject> diagnostic) {
         String source = diagnostic.getSource() == null ? "" : diagnostic.getSource().getName();
-        return source + ":" + diagnostic.getLineNumber() + " " + diagnostic.getKind() + ": " + diagnostic.getMessage(Locale.getDefault());
+        return source + ":" + diagnostic.getLineNumber() + ": error: " + diagnostic.getMessage(Locale.getDefault());
+    }
+
+    private void deleteQuietly(Path root) {
+        if (root == null) {
+            return;
+        }
+        try (Stream<Path> stream = Files.walk(root)) {
+            stream.sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // best-effort cleanup
+                        }
+                    });
+        } catch (IOException ignored) {
+            // ignore cleanup issues
+        }
     }
 }
