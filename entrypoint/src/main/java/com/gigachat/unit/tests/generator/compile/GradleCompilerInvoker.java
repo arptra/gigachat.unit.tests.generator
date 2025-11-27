@@ -17,7 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -71,13 +70,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         Path representative = compilationTargets.getFirst();
         String modulePath = determineGradlePath(projectRoot, representative);
         Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
-        Path outputDir;
-        try {
-            outputDir = Files.createTempDirectory("gradle-compiler-invoker-classes");
-        } catch (IOException exception) {
-            logger.error("Unable to create temporary output directory for compilation", exception);
-            return new CompileResult(false, List.of(), "", exception.getMessage());
-        }
+        Path outputDir = moduleRoot.resolve("build/classes/java/test");
 
         try {
             Files.createDirectories(outputDir);
@@ -125,8 +118,6 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
             return new CompileResult(false, messages, "", exception.getMessage());
-        } finally {
-            deleteQuietly(outputDir);
         }
     }
 
@@ -256,21 +247,4 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return source + ":" + diagnostic.getLineNumber() + ": error: " + diagnostic.getMessage(Locale.getDefault());
     }
 
-    private void deleteQuietly(Path root) {
-        if (root == null) {
-            return;
-        }
-        try (Stream<Path> stream = Files.walk(root)) {
-            stream.sorted(Comparator.reverseOrder())
-                    .forEach(path -> {
-                        try {
-                            Files.deleteIfExists(path);
-                        } catch (IOException ignored) {
-                            // best-effort cleanup
-                        }
-                    });
-        } catch (IOException ignored) {
-            // ignore cleanup issues
-        }
-    }
 }
