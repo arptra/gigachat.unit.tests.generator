@@ -53,7 +53,7 @@ public class TestCleaner {
     public TestCleaner(PipelineLogger logger,
                        CompilerInvoker compilerInvoker,
                        ExecutionInvoker executionInvoker) {
-        this(logger, compilerInvoker, executionInvoker, TestCleaner::defaultRules);
+        this(logger, compilerInvoker, executionInvoker, index -> defaultRules(index, compilerInvoker));
     }
 
     TestCleaner(PipelineLogger logger,
@@ -87,9 +87,9 @@ public class TestCleaner {
         logger.info("Cleaner mode finished.");
     }
 
-    private static List<CleanerRule> defaultRules(ProjectClassIndex index) {
+    private static List<CleanerRule> defaultRules(ProjectClassIndex index, CompilerInvoker compilerInvoker) {
         return List.of(
-                new MissingImportRule(index),
+                new MissingImportRule(index, compilerInvoker),
                 new DanglingTestAnnotationRule(),
                 new StubAssertionRemovalRule()
         );
