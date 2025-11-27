@@ -5,34 +5,37 @@ import com.gigachat.unit.tests.generator.cleaner.ProjectClassIndex;
 import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
+import com.github.javaparser.ast.Node;
 
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
+import javax.tools.ToolProvider;
 import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
- * Removes imports that reference classes that no longer exist inside the project sources.
+ * Removes imports that fail real compilation. The rule compiles the target test file with a
+ * classpath built from the provided project root (including Gradle caches and local libraries).
+ * Any compilation errors that point at import statements cause the corresponding imports to be
+ * removed.
  */
 public final class MissingImportRule implements CleanerRule {
     private final ProjectClassIndex classIndex;
-    private final ClassLoader projectClassLoader;
 
     public MissingImportRule(ProjectClassIndex classIndex) {
-        this(classIndex, buildProjectClassLoader(classIndex));
-    }
-
-    MissingImportRule(ProjectClassIndex classIndex, ClassLoader projectClassLoader) {
         this.classIndex = classIndex;
-        this.projectClassLoader = projectClassLoader;
     }
 
     @Override
@@ -41,58 +44,75 @@ public final class MissingImportRule implements CleanerRule {
         if (unit == null) {
             return false;
         }
+
         List<ImportDeclaration> imports = unit.getImports();
         if (imports == null || imports.isEmpty()) {
             return false;
         }
-        Set<ImportDeclaration> toRemove = new HashSet<>();
-        for (ImportDeclaration declaration : imports) {
-            if (declaration.isAsterisk()) {
-                continue;
-            }
-            String candidate = declaration.getName().asString();
-            if (declaration.isStatic()) {
-                int lastDot = candidate.lastIndexOf('.');
-                if (lastDot > 0) {
-                    candidate = candidate.substring(0, lastDot);
-                }
-            }
-            if (exists(candidate)) {
-                continue;
-            }
-            toRemove.add(declaration);
-        }
+
+        Set<ImportDeclaration> toRemove = detectInvalidImports(context.getFile(), imports);
         if (toRemove.isEmpty()) {
             return false;
         }
-        toRemove.forEach(ImportDeclaration::remove);
+
+        toRemove.forEach(Node::remove);
         context.markAstDirty();
         return true;
     }
 
-    private boolean exists(String candidate) {
-        if (candidate == null || candidate.isBlank()) {
-            return false;
+    private Set<ImportDeclaration> detectInvalidImports(Path file, List<ImportDeclaration> imports) throws IOException {
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            return Collections.emptySet();
         }
-        if (classIndex.contains(candidate)) {
-            return true;
+
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null)) {
+            List<Path> classpath = buildClasspathEntries();
+            if (!classpath.isEmpty()) {
+                fileManager.setLocation(StandardLocation.CLASS_PATH, classpath.stream().map(Path::toFile).toList());
+            }
+
+            Iterable<? extends JavaFileObject> sources = fileManager.getJavaFileObjectsFromPaths(List.of(file));
+            compiler.getTask(null, fileManager, diagnostics, null, null, sources).call();
         }
-        ClassLoader loader = projectClassLoader;
-        try {
-            Class.forName(candidate, false, loader);
-            return true;
-        } catch (ClassNotFoundException ignored) {
-            return false;
-        } catch (LinkageError ignored) {
-            return true;
+
+        if (diagnostics.getDiagnostics().isEmpty()) {
+            return Collections.emptySet();
         }
+
+        Set<Long> importLines = new HashSet<>();
+        for (ImportDeclaration declaration : imports) {
+            declaration.getBegin().ifPresent(position -> importLines.add((long) position.line));
+        }
+
+        Set<ImportDeclaration> toRemove = new HashSet<>();
+        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+            if (diagnostic.getKind() != Diagnostic.Kind.ERROR) {
+                continue;
+            }
+            if (diagnostic.getSource() == null || !file.equals(Path.of(diagnostic.getSource().toUri()))) {
+                continue;
+            }
+            long line = diagnostic.getLineNumber();
+            if (!importLines.contains(line)) {
+                continue;
+            }
+            imports.stream()
+                    .filter(importDecl -> importDecl.getBegin().map(pos -> pos.line == line).orElse(false))
+                    .forEach(toRemove::add);
+        }
+
+        return toRemove;
     }
 
-    private static ClassLoader buildProjectClassLoader(ProjectClassIndex index) {
-        Path root = index.getProjectRoot();
+    private List<Path> buildClasspathEntries() {
+        Path root = classIndex.getProjectRoot();
         if (root == null) {
-            return new URLClassLoader(new URL[0], ClassLoader.getPlatformClassLoader());
+            return Collections.emptyList();
         }
+
+        List<Path> entries = new ArrayList<>();
 
         List<Path> jarDirs = List.of(
                 root.resolve("libs"),
@@ -106,15 +126,14 @@ public final class MissingImportRule implements CleanerRule {
                 root.resolve("build/resources/test")
         );
 
-        List<URL> urls = new ArrayList<>();
-        addGradleCacheJars(root, urls);
+        addGradleCacheJars(root, entries);
         for (Path dir : jarDirs) {
             if (!Files.isDirectory(dir)) {
                 continue;
             }
-            try (var stream = Files.list(dir)) {
+            try (Stream<Path> stream = Files.list(dir)) {
                 stream.filter(path -> path.toString().endsWith(".jar"))
-                        .forEach(path -> addUrl(urls, path));
+                        .forEach(entries::add);
             } catch (IOException ignored) {
                 // ignore and continue with other directories
             }
@@ -122,14 +141,14 @@ public final class MissingImportRule implements CleanerRule {
 
         for (Path dir : classDirs) {
             if (Files.isDirectory(dir)) {
-                addUrl(urls, dir);
+                entries.add(dir);
             }
         }
 
-        return new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
+        return entries;
     }
 
-    private static void addGradleCacheJars(Path projectRoot, List<URL> urls) {
+    private static void addGradleCacheJars(Path projectRoot, List<Path> paths) {
         Path userHome = Path.of(System.getProperty("user.home"));
         String gradleHomeProperty = System.getProperty("gradle.user.home");
         Path gradleUserHome = (gradleHomeProperty == null || gradleHomeProperty.isBlank())
@@ -145,25 +164,17 @@ public final class MissingImportRule implements CleanerRule {
             if (!Files.isDirectory(candidate)) {
                 continue;
             }
-            collectJarUrls(candidate, urls, path -> path.toString().endsWith(".jar"));
+            collectJarPaths(candidate, paths, path -> path.toString().endsWith(".jar"));
         }
     }
 
-    private static void collectJarUrls(Path root, List<URL> urls, Predicate<Path> matcher) {
+    private static void collectJarPaths(Path root, List<Path> paths, Predicate<Path> matcher) {
         try (Stream<Path> stream = Files.walk(root)) {
             stream.filter(Files::isRegularFile)
                     .filter(matcher)
-                    .forEach(path -> addUrl(urls, path));
+                    .forEach(paths::add);
         } catch (IOException ignored) {
             // If we cannot walk the cache directory we simply skip it.
-        }
-    }
-
-    private static void addUrl(List<URL> urls, Path jar) {
-        try {
-            urls.add(jar.toUri().toURL());
-        } catch (MalformedURLException ignored) {
-            // ignore invalid jar URLs
         }
     }
 }
