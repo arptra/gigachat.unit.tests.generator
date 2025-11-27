@@ -40,6 +40,7 @@ public class User {
     public void markLoggedIn() {
         this.lastLogin = Instant.now();
         this.loginAttempts = 0;
+        this.active = true;
     }
 
     public void incrementAttempts() {
