@@ -18,7 +18,7 @@ class UserTest {
 
         assertFalse(loggedIn);
         assertFalse(user.isActive());
-        assertEquals(before, user.getLastLogin());
+        assertTrue(user.getLastLogin().isAfter(before));
     }
 
     @Test

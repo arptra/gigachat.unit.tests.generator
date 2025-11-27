@@ -38,11 +38,14 @@ public class User {
     }
 
     public boolean markLoggedIn() {
+        Instant now = Instant.now();
+
         if (!active) {
+            this.lastLogin = now;
             return false;
         }
 
-        this.lastLogin = Instant.now();
+        this.lastLogin = now;
         this.loginAttempts = 0;
         return true;
     }
