@@ -37,10 +37,14 @@ public class User {
         return loginAttempts;
     }
 
-    public void markLoggedIn() {
+    public boolean markLoggedIn() {
+        if (!active) {
+            return false;
+        }
+
         this.lastLogin = Instant.now();
         this.loginAttempts = 0;
-        this.active = true;
+        return true;
     }
 
     public void incrementAttempts() {
