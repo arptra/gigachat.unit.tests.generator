@@ -11,8 +11,10 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 import java.io.IOException;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumSet;
 import java.util.Collections;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -83,6 +85,8 @@ class MissingImportRuleTest {
                 "import com.external.lib.Utility;",
                 "class UserServiceTest { Utility utility; }"));
 
+        writeGradleWrapper(projectDir, jarPath.toString());
+
         MissingImportRule rule = new MissingImportRule(new ProjectClassIndex(projectDir));
         TestFileContext context = new TestFileContext(testFile, new JavaParser());
 
@@ -130,6 +134,21 @@ class MissingImportRuleTest {
         try (Stream<Path> stream = Files.walk(projectDir)) {
             assertTrue(stream.noneMatch(path -> path.toString().endsWith(".class")),
                     "Compilation artifacts should not remain inside the project directory");
+        }
+    }
+
+    private void writeGradleWrapper(Path projectRoot, String classpath) throws IOException {
+        Path gradleWrapper = projectRoot.resolve("gradlew");
+        Files.writeString(gradleWrapper, String.join(System.lineSeparator(),
+                "#!/bin/bash",
+                "echo \"" + classpath + "\""));
+        try {
+            Files.setPosixFilePermissions(gradleWrapper,
+                    EnumSet.of(PosixFilePermission.OWNER_READ,
+                            PosixFilePermission.OWNER_WRITE,
+                            PosixFilePermission.OWNER_EXECUTE));
+        } catch (UnsupportedOperationException ignored) {
+            gradleWrapper.toFile().setExecutable(true, true);
         }
     }
 }

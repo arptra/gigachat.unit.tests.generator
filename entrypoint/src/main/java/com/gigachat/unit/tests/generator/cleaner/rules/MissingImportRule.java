@@ -7,10 +7,11 @@ import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLocati
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLogParser;
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
-import com.gigachat.unit.tests.generator.compile.InProcessCompilerInvoker;
+import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.Node;
+import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -34,7 +35,7 @@ public final class MissingImportRule implements CleanerRule {
     private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
 
     public MissingImportRule(ProjectClassIndex classIndex) {
-        this(classIndex, new InProcessCompilerInvoker());
+        this(classIndex, new GradleCompilerInvoker(new PipelineLogger(classIndex.getProjectRoot()), true));
     }
 
     public MissingImportRule(ProjectClassIndex classIndex, CompilerInvoker compilerInvoker) {
