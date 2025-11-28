@@ -23,6 +23,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Comparator;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -35,6 +37,7 @@ import java.util.stream.Stream;
 public class GradleCompilerInvoker implements CompilerInvoker {
     private final PipelineLogger logger;
     private final boolean cleanupOutputs;
+    private final Map<Path, CompilationCacheEntry> compilationCache = new ConcurrentHashMap<>();
 
     public GradleCompilerInvoker(PipelineLogger logger) {
         this(logger, false);
@@ -47,6 +50,18 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     @Override
     public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+        Path cacheKey = testClassFile.toAbsolutePath().normalize();
+        CompilationCacheEntry cachedEntry = compilationCache.get(cacheKey);
+        if (cachedEntry != null) {
+            if (cachedEntry.isStale(cacheKey)) {
+                logger.info("Cached compilation result for " + cacheKey + " is stale; recompiling.");
+                compilationCache.remove(cacheKey);
+            } else {
+                logger.info("Returning cached compilation result for " + cacheKey);
+                return cachedEntry.result();
+            }
+        }
+
         List<String> messages = new ArrayList<>();
         if (!Files.exists(testClassFile)) {
             String message = "Target test path does not exist: " + testClassFile;
@@ -118,14 +133,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 if (!compilationSucceeded) {
                     logger.warn("Compilation failed for " + testClassFile);
                 }
-                return new CompileResult(compilationSucceeded, messages, stdout, stderr);
+                return cacheResult(cacheKey, testClassFile, new CompileResult(compilationSucceeded, messages, stdout, stderr));
             } catch (IOException exception) {
                 logger.error("Compilation failed for " + testClassFile, exception);
-                return new CompileResult(false, messages, "", exception.getMessage());
+                return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
             }
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
-            return new CompileResult(false, messages, "", exception.getMessage());
+            return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
         } finally {
             if (cleanupOutputs && !outputDirPreexisted) {
                 try {
@@ -135,6 +150,15 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 }
             }
         }
+    }
+
+    private CompileResult cacheResult(Path cacheKey, Path sourcePath, CompileResult result) {
+        try {
+            compilationCache.put(cacheKey, CompilationCacheEntry.from(sourcePath, result));
+        } catch (IOException exception) {
+            logger.warn("Failed to cache compilation result for " + sourcePath + ": " + exception.getMessage());
+        }
+        return result;
     }
 
     private String determineGradlePath(Path projectRoot, Path testClassFile) {
