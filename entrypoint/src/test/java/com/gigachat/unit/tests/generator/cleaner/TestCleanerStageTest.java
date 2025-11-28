@@ -1,7 +1,7 @@
 package com.gigachat.unit.tests.generator.cleaner;
 
 import com.gigachat.unit.tests.generator.compile.CompileResult;
-import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
+import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
 import com.gigachat.unit.tests.generator.config.AgentMode;
@@ -14,7 +14,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -56,15 +55,14 @@ class TestCleanerStageTest {
                 .findFirst()
                 .orElse(0);
 
-        AtomicInteger compileCalls = new AtomicInteger();
-        CompilerInvoker compilerInvoker = (root, file, method) -> {
-            int call = compileCalls.incrementAndGet();
+        PipelineLogger logger = new PipelineLogger(projectDir);
+        StubGradleCompilerInvoker compilerInvoker = new StubGradleCompilerInvoker(logger, call -> {
             if (call == 1) {
                 String stdout = testFile + ":" + failingLine + ": error: cannot find symbol";
                 return new CompileResult(false, List.of(), stdout, "compile-error");
             }
             return new CompileResult(true, List.of(), "", "");
-        };
+        });
         Path reportPath = projectDir.resolve("build/reports/tests/test/index.html");
         Files.createDirectories(reportPath.getParent());
         Files.writeString(reportPath, String.join(System.lineSeparator(),
@@ -77,7 +75,6 @@ class TestCleanerStageTest {
 
         ExecutionInvoker executionInvoker = (root, file, method) ->
                 new ExecuteResult(false, List.of(), executionLog, "runtime-error");
-        PipelineLogger logger = new PipelineLogger(projectDir);
         TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
 
         AgentConfig config = new AgentConfigBuilder()
@@ -87,7 +84,7 @@ class TestCleanerStageTest {
 
         cleaner.clean(config);
 
-        int calls = compileCalls.get();
+        int calls = compilerInvoker.getCalls();
         assertEquals(2, calls, "Compilation should repeat until clean but was " + calls);
         String updated = Files.readString(testFile);
         assertTrue(updated.contains("shouldStay"));
@@ -113,12 +110,12 @@ class TestCleanerStageTest {
                 "    }",
                 "}"));
 
-        CompilerInvoker compilerInvoker = (root, file, method) -> new CompileResult(true, List.of(), "", "");
+        PipelineLogger logger = new PipelineLogger(projectDir);
+        StubGradleCompilerInvoker compilerInvoker = new StubGradleCompilerInvoker(logger, call -> new CompileResult(true, List.of(), "", ""));
         String executionLog = String.join(System.lineSeparator(),
                 "com.example.app.model.UserTest > shouldBeRemoved FAILED",
                 "48 tests completed, 1 failed");
         ExecutionInvoker executionInvoker = (root, file, method) -> new ExecuteResult(false, List.of(), executionLog, "runtime-error");
-        PipelineLogger logger = new PipelineLogger(projectDir);
         TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
 
         AgentConfig config = new AgentConfigBuilder()
@@ -131,5 +128,24 @@ class TestCleanerStageTest {
         String updated = Files.readString(testFile);
         assertTrue(updated.contains("shouldStay"));
         assertFalse(updated.contains("shouldBeRemoved"));
+    }
+    private static final class StubGradleCompilerInvoker extends GradleCompilerInvoker {
+        private final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.function.Function<Integer, CompileResult> behavior;
+
+        StubGradleCompilerInvoker(PipelineLogger logger, java.util.function.Function<Integer, CompileResult> behavior) {
+            super(logger);
+            this.behavior = behavior;
+        }
+
+        @Override
+        public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+            int invocation = calls.incrementAndGet();
+            return behavior.apply(invocation);
+        }
+
+        int getCalls() {
+            return calls.get();
+        }
     }
 }
