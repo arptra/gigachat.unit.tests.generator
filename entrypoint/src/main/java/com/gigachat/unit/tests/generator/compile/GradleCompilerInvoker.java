@@ -24,6 +24,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -51,15 +54,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     @Override
     public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
         Path cacheKey = testClassFile.toAbsolutePath().normalize();
-        CompilationCacheEntry cachedEntry = COMPILATION_CACHE.get(cacheKey);
-        if (cachedEntry != null) {
-            if (cachedEntry.isStale(cacheKey)) {
-                logger.info("Cached compilation result for " + cacheKey + " is stale; recompiling.");
-                COMPILATION_CACHE.remove(cacheKey);
-            } else {
-                logger.info("Returning cached compilation result for " + cacheKey);
-                return cachedEntry.result();
-            }
+        CompileResult cachedResult = getCachedResult(cacheKey);
+        if (cachedResult != null) {
+            return cachedResult;
         }
 
         List<String> messages = new ArrayList<>();
@@ -150,6 +147,146 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 }
             }
         }
+    }
+
+    @Override
+    public List<CompileResult> compileParallel(Path projectRoot, List<Path> testClassFiles, String methodName) {
+        Objects.requireNonNull(projectRoot, "projectRoot");
+        Objects.requireNonNull(testClassFiles, "testClassFiles");
+        if (testClassFiles.isEmpty()) {
+            return List.of();
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(
+                Math.min(Math.max(1, Runtime.getRuntime().availableProcessors()), testClassFiles.size()));
+        try {
+            List<CompletableFuture<CompileResult>> futures = testClassFiles.stream()
+                    .map(file -> CompletableFuture.supplyAsync(
+                            () -> compileInForkedJvm(projectRoot, file, methodName), executor))
+                    .toList();
+
+            return futures.stream()
+                    .map(CompletableFuture::join)
+                    .toList();
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    private CompileResult compileInForkedJvm(Path projectRoot, Path testClassFile, String methodName) {
+        Path cacheKey = testClassFile.toAbsolutePath().normalize();
+        CompileResult cachedResult = getCachedResult(cacheKey);
+        if (cachedResult != null) {
+            return cachedResult;
+        }
+
+        List<String> messages = new ArrayList<>();
+        if (!Files.exists(testClassFile)) {
+            String message = "Target test path does not exist: " + testClassFile;
+            logger.warn(message);
+            return new CompileResult(false, List.of(message), "", message);
+        }
+
+        List<Path> compilationTargets;
+        try {
+            compilationTargets = resolveCompilationTargets(testClassFile);
+        } catch (IOException exception) {
+            logger.error("Unable to read compilation targets from " + testClassFile, exception);
+            return new CompileResult(false, List.of(), "", exception.getMessage());
+        }
+        if (compilationTargets.isEmpty()) {
+            String message = "No Java sources found under " + testClassFile;
+            logger.warn(message);
+            return new CompileResult(false, List.of(message), "", message);
+        }
+
+        Path representative = compilationTargets.getFirst();
+        String modulePath = determineGradlePath(projectRoot, representative);
+        Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
+        Path outputDir = moduleRoot.resolve("build/classes/java/test");
+
+        boolean outputDirPreexisted = Files.exists(outputDir);
+        try {
+            Files.createDirectories(outputDir);
+
+            Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
+            classpathEntries.add(outputDir);
+            classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
+            classpathEntries.add(moduleRoot.resolve("build/resources/test"));
+            classpathEntries.add(moduleRoot.resolve("build/resources/main"));
+
+            List<Path> existingClasspath = classpathEntries.stream()
+                    .filter(Files::exists)
+                    .collect(Collectors.toCollection(ArrayList::new));
+
+            String classpath = existingClasspath.stream()
+                    .map(Path::toString)
+                    .collect(Collectors.joining(java.io.File.pathSeparator));
+
+            List<String> command = new ArrayList<>();
+            command.add("javac");
+            command.add("--release");
+            command.add(String.valueOf(Runtime.version().feature()));
+            command.add("-g");
+            command.add("-d");
+            command.add(outputDir.toString());
+            if (!classpath.isBlank()) {
+                command.add("-cp");
+                command.add(classpath);
+            }
+            compilationTargets.forEach(path -> command.add(path.toString()));
+
+            ProcessBuilder builder = new ProcessBuilder(command);
+            builder.directory(moduleRoot.toFile());
+            try {
+                Process process = builder.start();
+                logger.info("Forking javac process (pid=" + process.pid() + ") for " + testClassFile);
+                String stdout;
+                String stderr;
+                try (BufferedReader outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+                     BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+                    stdout = outReader.lines().collect(Collectors.joining(System.lineSeparator()));
+                    stderr = errReader.lines().collect(Collectors.joining(System.lineSeparator()));
+                }
+                int exitCode = process.waitFor();
+                boolean compilationSucceeded = exitCode == 0;
+                if (!compilationSucceeded) {
+                    logger.warn("javac exited with code " + exitCode + " for " + testClassFile);
+                }
+                return cacheResult(cacheKey, testClassFile, new CompileResult(compilationSucceeded, messages, stdout, stderr));
+            } catch (IOException | InterruptedException exception) {
+                if (exception instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                logger.error("Forked compilation failed for " + testClassFile, exception);
+                return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
+            }
+        } catch (IOException exception) {
+            logger.error("Forked compilation failed for " + testClassFile, exception);
+            return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
+        } finally {
+            if (cleanupOutputs && !outputDirPreexisted) {
+                try {
+                    deleteDirectory(outputDir);
+                } catch (IOException cleanupError) {
+                    logger.warn("Failed to clean compilation outputs at " + outputDir + ": " + cleanupError.getMessage());
+                }
+            }
+        }
+    }
+
+    private CompileResult getCachedResult(Path cacheKey) {
+        CompilationCacheEntry cachedEntry = COMPILATION_CACHE.get(cacheKey);
+        if (cachedEntry == null) {
+            return null;
+        }
+        if (cachedEntry.isStale(cacheKey)) {
+            logger.info("Cached compilation result for " + cacheKey + " is stale; recompiling.");
+            COMPILATION_CACHE.remove(cacheKey);
+            return null;
+        }
+        logger.info("Returning cached compilation result for " + cacheKey);
+        return cachedEntry.result();
     }
 
     private CompileResult cacheResult(Path cacheKey, Path sourcePath, CompileResult result) {

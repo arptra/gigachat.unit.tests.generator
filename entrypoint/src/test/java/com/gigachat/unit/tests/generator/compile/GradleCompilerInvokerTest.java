@@ -8,8 +8,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -124,5 +130,113 @@ class GradleCompilerInvokerTest {
 
         assertFalse(secondResult.success());
         assertNotSame(firstResult, secondResult);
+    }
+
+    @Test
+    void compilesMultipleFilesInParallel(@TempDir Path projectRoot) throws IOException {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path firstTest = testsDir.resolve("FirstParallelTest.java");
+        Files.writeString(firstTest,
+                "package sample;\n" +
+                        "public class FirstParallelTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path secondTest = testsDir.resolve("SecondParallelTest.java");
+        Files.writeString(secondTest,
+                "package sample;\n" +
+                        "public class SecondParallelTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+
+        List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(firstTest, secondTest), "parallel");
+
+        assertEquals(2, results.size());
+        assertTrue(results.getFirst().success());
+        assertTrue(results.getLast().success());
+
+        Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
+        assertTrue(Files.exists(outputDir.resolve("FirstParallelTest.class")));
+        assertTrue(Files.exists(outputDir.resolve("SecondParallelTest.class")));
+    }
+
+    @Test
+    void reportsIsolatedFailuresWhenCompilingInParallel(@TempDir Path projectRoot) throws IOException {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path validTest = testsDir.resolve("ValidParallelTest.java");
+        Files.writeString(validTest,
+                "package sample;\n" +
+                        "public class ValidParallelTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path invalidTest = testsDir.resolve("InvalidParallelTest.java");
+        Files.writeString(invalidTest,
+                "package sample;\n" +
+                        "public class InvalidParallelTest {\n" +
+                        "    public void oops(\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+
+        List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(validTest, invalidTest), "parallel");
+
+        assertEquals(2, results.size());
+        assertTrue(results.getFirst().success());
+        assertFalse(results.getLast().success());
+
+        Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
+        assertTrue(Files.exists(outputDir.resolve("ValidParallelTest.class")));
+        assertFalse(Files.exists(outputDir.resolve("InvalidParallelTest.class")));
+    }
+
+    @Test
+    void forksSeparateJvmForEachParallelCompilation(@TempDir Path projectRoot) throws IOException {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path firstTest = testsDir.resolve("ForkedFirstTest.java");
+        Files.writeString(firstTest,
+                "package sample;\n" +
+                        "public class ForkedFirstTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path secondTest = testsDir.resolve("ForkedSecondTest.java");
+        Files.writeString(secondTest,
+                "package sample;\n" +
+                        "public class ForkedSecondTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(firstTest, secondTest), "forked");
+
+        assertTrue(results.getFirst().success());
+        assertTrue(results.getLast().success());
+
+        Path logFile = projectRoot.resolve(".agent/logs/pipeline.log");
+        Set<String> pids = Files.readAllLines(logFile).stream()
+                .filter(line -> line.contains("Forking javac process (pid="))
+                .map(line -> {
+                    Matcher matcher = Pattern.compile("pid=(\\d+)").matcher(line);
+                    return matcher.find() ? matcher.group(1) : "";
+                })
+                .filter(pid -> !pid.isBlank())
+                .collect(Collectors.toSet());
+
+        assertEquals(2, pids.size());
     }
 }
