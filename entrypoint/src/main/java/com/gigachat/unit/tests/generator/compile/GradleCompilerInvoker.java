@@ -17,14 +17,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
-import java.util.Comparator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
  * Compiles a single generated test file. The invoker resolves the test runtime classpath via a
@@ -35,6 +37,7 @@ import java.util.stream.Stream;
 public class GradleCompilerInvoker implements CompilerInvoker {
     private final PipelineLogger logger;
     private final boolean cleanupOutputs;
+    private static final CompilationCache COMPILATION_CACHE = CompilationCache.getInstance();
 
     public GradleCompilerInvoker(PipelineLogger logger) {
         this(logger, false);
@@ -47,6 +50,18 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     @Override
     public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+        Path cacheKey = testClassFile.toAbsolutePath().normalize();
+        CompilationCacheEntry cachedEntry = COMPILATION_CACHE.get(cacheKey);
+        if (cachedEntry != null) {
+            if (cachedEntry.isStale(cacheKey)) {
+                logger.info("Cached compilation result for " + cacheKey + " is stale; recompiling.");
+                COMPILATION_CACHE.remove(cacheKey);
+            } else {
+                logger.info("Returning cached compilation result for " + cacheKey);
+                return cachedEntry.result();
+            }
+        }
+
         List<String> messages = new ArrayList<>();
         if (!Files.exists(testClassFile)) {
             String message = "Target test path does not exist: " + testClassFile;
@@ -118,14 +133,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 if (!compilationSucceeded) {
                     logger.warn("Compilation failed for " + testClassFile);
                 }
-                return new CompileResult(compilationSucceeded, messages, stdout, stderr);
+                return cacheResult(cacheKey, testClassFile, new CompileResult(compilationSucceeded, messages, stdout, stderr));
             } catch (IOException exception) {
                 logger.error("Compilation failed for " + testClassFile, exception);
-                return new CompileResult(false, messages, "", exception.getMessage());
+                return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
             }
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
-            return new CompileResult(false, messages, "", exception.getMessage());
+            return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
         } finally {
             if (cleanupOutputs && !outputDirPreexisted) {
                 try {
@@ -137,19 +152,25 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
     }
 
+    private CompileResult cacheResult(Path cacheKey, Path sourcePath, CompileResult result) {
+        try {
+            COMPILATION_CACHE.put(cacheKey, CompilationCacheEntry.from(sourcePath, result));
+        } catch (IOException exception) {
+            logger.warn("Failed to cache compilation result for " + sourcePath + ": " + exception.getMessage());
+        }
+        return result;
+    }
+
     private String determineGradlePath(Path projectRoot, Path testClassFile) {
         Path relative = projectRoot.relativize(testClassFile);
-        List<String> segments = new ArrayList<>();
         Path parent = relative.getParent();
         if (parent == null) {
             return "";
         }
-        for (Path part : parent) {
-            if ("src".equals(part.toString())) {
-                break;
-            }
-            segments.add(part.toString());
-        }
+        List<String> segments = StreamSupport.stream(parent.spliterator(), false)
+                .takeWhile(part -> !"src".equals(part.toString()))
+                .map(Path::toString)
+                .toList();
         if (segments.isEmpty()) {
             return "";
         }
@@ -211,11 +232,11 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 entries.addAll(defaultClasspath());
                 return entries;
             }
-            for (String path : classpathLine.split(java.io.File.pathSeparator)) {
-                if (!path.isBlank()) {
-                    entries.add(Path.of(path));
-                }
-            }
+            entries.addAll(Arrays.stream(classpathLine.split(java.io.File.pathSeparator))
+                    .parallel()
+                    .filter(path -> !path.isBlank())
+                    .map(Path::of)
+                    .collect(Collectors.toCollection(LinkedHashSet::new)));
             messages.add("Gradle wrapper detected. Resolved test classpath via printTestClasspath task.");
             return entries;
         } catch (IOException | InterruptedException exception) {
@@ -249,13 +270,11 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     private static Set<Path> defaultClasspath() {
         String jvmClasspath = System.getProperty("java.class.path", "");
-        Set<Path> entries = new LinkedHashSet<>();
-        for (String part : jvmClasspath.split(java.io.File.pathSeparator)) {
-            if (!part.isBlank()) {
-                entries.add(Path.of(part));
-            }
-        }
-        return entries;
+        return Arrays.stream(jvmClasspath.split(java.io.File.pathSeparator))
+                .parallel()
+                .filter(part -> !part.isBlank())
+                .map(Path::of)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     private void deleteDirectory(Path directory) throws IOException {

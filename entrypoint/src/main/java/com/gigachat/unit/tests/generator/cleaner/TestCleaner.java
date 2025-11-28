@@ -5,6 +5,7 @@ import com.gigachat.unit.tests.generator.cleaner.rules.MissingImportRule;
 import com.gigachat.unit.tests.generator.cleaner.rules.StubAssertionRemovalRule;
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
+import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
 import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
@@ -114,9 +115,15 @@ public class TestCleaner {
 
     private void runCompilationStage(AgentConfig config) throws IOException {
         Path projectRoot = config.getProjectPath();
+        Path compilationTarget = resolveCompilationTarget(config);
+        GradleCompilerInvoker gradleCompiler = compilerInvoker instanceof GradleCompilerInvoker
+                ? (GradleCompilerInvoker) compilerInvoker
+                : new GradleCompilerInvoker(logger);
+
         boolean compilationFinished = false;
         while (!compilationFinished) {
-            CompileResult result = compilerInvoker.compile(projectRoot, projectRoot, "");
+            CompileResult result = gradleCompiler.compile(projectRoot, compilationTarget, "");
+            result.messages().forEach(logger::info);
             if (result.success()) {
                 compilationFinished = true;
                 continue;
@@ -136,6 +143,17 @@ public class TestCleaner {
                 return;
             }
         }
+    }
+
+    private Path resolveCompilationTarget(AgentConfig config) throws IOException {
+        Path projectRoot = config.getProjectPath();
+        for (Path moduleRoot : determineModuleRoots(projectRoot, config.getIncludeModules())) {
+            Path testRoot = moduleRoot.resolve(Path.of("src", "test", "java"));
+            if (Files.exists(testRoot)) {
+                return testRoot;
+            }
+        }
+        return projectRoot;
     }
 
     private void runExecutionStage(AgentConfig config) throws IOException {
