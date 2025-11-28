@@ -70,6 +70,29 @@ class GradleCompilerInvokerTest {
     }
 
     @Test
+    void sharesCacheAcrossInvokerInstances(@TempDir Path projectRoot) throws IOException {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path testFile = testsDir.resolve("SharedCacheTest.java");
+        Files.writeString(testFile,
+                "package sample;\n" +
+                        "public class SharedCacheTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker firstInvoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        CompileResult firstResult = firstInvoker.compile(projectRoot, testFile, "ok");
+
+        GradleCompilerInvoker secondInvoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        CompileResult cachedResult = secondInvoker.compile(projectRoot, testFile, "ok");
+
+        assertTrue(firstResult.success());
+        assertSame(firstResult, cachedResult);
+    }
+
+    @Test
     void invalidatesCacheWhenSourceChanges(@TempDir Path projectRoot) throws Exception {
         Path testsDir = projectRoot.resolve("src/test/java/sample");
         Files.createDirectories(testsDir);

@@ -23,8 +23,6 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Comparator;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -37,7 +35,7 @@ import java.util.stream.Stream;
 public class GradleCompilerInvoker implements CompilerInvoker {
     private final PipelineLogger logger;
     private final boolean cleanupOutputs;
-    private final Map<Path, CompilationCacheEntry> compilationCache = new ConcurrentHashMap<>();
+    private static final CompilationCache COMPILATION_CACHE = CompilationCache.getInstance();
 
     public GradleCompilerInvoker(PipelineLogger logger) {
         this(logger, false);
@@ -51,11 +49,11 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     @Override
     public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
         Path cacheKey = testClassFile.toAbsolutePath().normalize();
-        CompilationCacheEntry cachedEntry = compilationCache.get(cacheKey);
+        CompilationCacheEntry cachedEntry = COMPILATION_CACHE.get(cacheKey);
         if (cachedEntry != null) {
             if (cachedEntry.isStale(cacheKey)) {
                 logger.info("Cached compilation result for " + cacheKey + " is stale; recompiling.");
-                compilationCache.remove(cacheKey);
+                COMPILATION_CACHE.remove(cacheKey);
             } else {
                 logger.info("Returning cached compilation result for " + cacheKey);
                 return cachedEntry.result();
@@ -154,7 +152,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     private CompileResult cacheResult(Path cacheKey, Path sourcePath, CompileResult result) {
         try {
-            compilationCache.put(cacheKey, CompilationCacheEntry.from(sourcePath, result));
+            COMPILATION_CACHE.put(cacheKey, CompilationCacheEntry.from(sourcePath, result));
         } catch (IOException exception) {
             logger.warn("Failed to cache compilation result for " + sourcePath + ": " + exception.getMessage());
         }
