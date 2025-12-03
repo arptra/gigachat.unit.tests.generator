@@ -426,4 +426,44 @@ class GradleCompilerInvokerTest {
         assertTrue(brokenCacheResult.stderr().contains("BrokenTest.java"));
         assertTrue(failureResult.messages().stream().anyMatch(message -> message.contains("BrokenTest")));
     }
+
+    @Test
+    void compileAllTestsAccumulatesAllDiagnosticsAndCachesPerFile(@TempDir Path projectRoot) throws Exception {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path firstBroken = testsDir.resolve("FirstBroken.java");
+        Files.writeString(firstBroken,
+                "package sample;\n" +
+                        "public class FirstBroken {\n" +
+                        "    public void bad(\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path secondBroken = testsDir.resolve("SecondBroken.java");
+        Files.writeString(secondBroken,
+                "package sample;\n" +
+                        "public class SecondBroken {\n" +
+                        "    public void alsoBad(\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+
+        CompileResult result = invoker.compileAllTests(projectRoot, "all-tests");
+
+        assertFalse(result.success());
+        assertTrue(result.stderr().contains("FirstBroken.java"));
+        assertTrue(result.stderr().contains("SecondBroken.java"));
+
+        CompileResult firstCache = CompilationCache.getInstance().get(firstBroken).result();
+        CompileResult secondCache = CompilationCache.getInstance().get(secondBroken).result();
+
+        assertFalse(firstCache.success());
+        assertFalse(secondCache.success());
+        assertTrue(firstCache.stderr().contains("FirstBroken.java"));
+        assertTrue(secondCache.stderr().contains("SecondBroken.java"));
+        assertFalse(firstCache.stderr().contains("SecondBroken.java"));
+        assertFalse(secondCache.stderr().contains("FirstBroken.java"));
+    }
 }

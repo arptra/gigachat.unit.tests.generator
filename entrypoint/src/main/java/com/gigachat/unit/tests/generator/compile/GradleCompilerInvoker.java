@@ -87,12 +87,21 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             String modulePath = entry.getKey();
             List<Path> moduleTargets = entry.getValue();
 
+            List<CompileResult> cachedResults = moduleTargets.stream()
+                    .map(target -> getCachedResult(deriveCacheKey(List.of(target), target)))
+                    .filter(Objects::nonNull)
+                    .toList();
+
             List<Path> staleTargets = moduleTargets.stream()
                     .filter(target -> getCachedResult(deriveCacheKey(List.of(target), target)) == null)
                     .toList();
 
             if (staleTargets.isEmpty()) {
                 moduleTargets.forEach(target -> messages.add("Using cached compilation result for " + target.toAbsolutePath().normalize()));
+                for (CompileResult cachedResult : cachedResults) {
+                    overallSuccess &= cachedResult.success();
+                    appendOutputs(stdout, stderr, cachedResult);
+                }
                 continue;
             }
 
@@ -100,18 +109,17 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     ? projectRoot
                     : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
 
-            CompileResult moduleResult = compileModuleTests(projectRoot, modulePath, moduleRoot, moduleTargets, methodName, messages);
+            ModuleCompilationOutcome moduleOutcome = compileModuleTests(projectRoot, modulePath, moduleRoot, moduleTargets, methodName, messages);
+            CompileResult moduleResult = moduleOutcome.result();
             overallSuccess &= moduleResult.success();
-            stdout.append(moduleResult.stdout());
-            if (!moduleResult.stdout().isBlank()) {
-                stdout.append(System.lineSeparator());
-            }
-            stderr.append(moduleResult.stderr());
-            if (!moduleResult.stderr().isBlank()) {
-                stderr.append(System.lineSeparator());
+            appendOutputs(stdout, stderr, moduleResult);
+
+            for (CompileResult cachedResult : cachedResults) {
+                overallSuccess &= cachedResult.success();
+                appendOutputs(stdout, stderr, cachedResult);
             }
 
-            moduleTargets.forEach(target -> cacheResultForTestSource(target, moduleResult, messages));
+            moduleTargets.forEach(target -> cacheResultForTestSource(target, moduleOutcome, messages));
         }
 
         return new CompileResult(overallSuccess, messages, stdout.toString(), stderr.toString());
@@ -217,13 +225,13 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
     }
 
-    private CompileResult compileModuleTests(Path projectRoot, String modulePath, Path moduleRoot,
-                                             List<Path> compilationTargets, String methodName, List<String> messages) {
+    private ModuleCompilationOutcome compileModuleTests(Path projectRoot, String modulePath, Path moduleRoot,
+                                                        List<Path> compilationTargets, String methodName, List<String> messages) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             String message = "No system Java compiler available. Ensure a JDK is installed.";
             logger.error(message);
-            return new CompileResult(false, List.of(message), "", message);
+            return new ModuleCompilationOutcome(new CompileResult(false, List.of(message), "", message), List.of());
         }
 
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
@@ -260,21 +268,22 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                         + " for method " + methodName);
                 Boolean success = compiler.getTask(compilerOutput, fileManager, diagnostics, options, null, units).call();
                 String stdout = compilerOutput.toString();
-                String stderr = diagnostics.getDiagnostics().stream()
+                List<Diagnostic<? extends JavaFileObject>> diagnosticList = diagnostics.getDiagnostics();
+                String stderr = diagnosticList.stream()
                         .map(GradleCompilerInvoker::formatDiagnostic)
                         .collect(Collectors.joining(System.lineSeparator()));
                 boolean compilationSucceeded = Boolean.TRUE.equals(success);
                 if (!compilationSucceeded) {
                     logger.warn("Compilation failed for module rooted at " + moduleRoot);
                 }
-                return new CompileResult(compilationSucceeded, messages, stdout, stderr);
+                return new ModuleCompilationOutcome(new CompileResult(compilationSucceeded, messages, stdout, stderr), diagnosticList);
             } catch (IOException exception) {
                 logger.error("Compilation failed for module rooted at " + moduleRoot, exception);
-                return new CompileResult(false, messages, "", exception.getMessage());
+                return new ModuleCompilationOutcome(new CompileResult(false, messages, "", exception.getMessage()), List.of());
             }
         } catch (IOException exception) {
             logger.error("Compilation failed for module rooted at " + moduleRoot, exception);
-            return new CompileResult(false, messages, "", exception.getMessage());
+            return new ModuleCompilationOutcome(new CompileResult(false, messages, "", exception.getMessage()), List.of());
         } finally {
             if (cleanupOutputs && !outputDirPreexisted) {
                 try {
@@ -486,7 +495,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
     }
 
-    private void cacheResultForTestSource(Path target, CompileResult result, List<String> messages) {
+    private void cacheResultForTestSource(Path target, ModuleCompilationOutcome moduleOutcome, List<String> messages) {
         String normalized = target.toAbsolutePath().normalize().toString();
         String sentinel = File.separator + "src" + File.separator + "test" + File.separator + "java" + File.separator;
         if (!normalized.contains(sentinel)) {
@@ -494,8 +503,46 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
 
         Path cacheKey = deriveCacheKey(List.of(target), target);
-        cacheResult(cacheKey, result);
+        CompileResult perFileResult = buildPerFileResult(target, moduleOutcome);
+        cacheResult(cacheKey, perFileResult);
         messages.add("Cached compilation result for " + cacheKey);
+    }
+
+    private void appendOutputs(StringBuilder stdout, StringBuilder stderr, CompileResult result) {
+        stdout.append(result.stdout());
+        if (!result.stdout().isBlank()) {
+            stdout.append(System.lineSeparator());
+        }
+        stderr.append(result.stderr());
+        if (!result.stderr().isBlank()) {
+            stderr.append(System.lineSeparator());
+        }
+    }
+
+    private CompileResult buildPerFileResult(Path target, ModuleCompilationOutcome moduleOutcome) {
+        List<Diagnostic<? extends JavaFileObject>> perFileDiagnostics = moduleOutcome.diagnostics().stream()
+                .filter(diagnostic -> {
+                    JavaFileObject source = diagnostic.getSource();
+                    if (source == null) {
+                        return false;
+                    }
+                    return Path.of(source.toUri()).toAbsolutePath().normalize().equals(target.toAbsolutePath().normalize());
+                })
+                .toList();
+
+        String perFileStdErr = perFileDiagnostics.stream()
+                .map(GradleCompilerInvoker::formatDiagnostic)
+                .collect(Collectors.joining(System.lineSeparator()));
+
+        CompileResult moduleResult = moduleOutcome.result();
+        if (perFileDiagnostics.isEmpty()) {
+            return moduleResult;
+        }
+
+        return new CompileResult(moduleResult.success(), moduleResult.messages(), moduleResult.stdout(), perFileStdErr);
+    }
+
+    private record ModuleCompilationOutcome(CompileResult result, List<Diagnostic<? extends JavaFileObject>> diagnostics) {
     }
 
     private Set<Path> resolveTestClasspath(Path projectRoot, String modulePath, List<String> messages) {
