@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.compile;
 
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
+import com.gigachat.unit.tests.generator.compile.CompilationCache;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -282,7 +283,7 @@ class GradleCompilerInvokerTest {
 
         GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
 
-        CompileResult result = invoker.compileAllTests(projectRoot, testsDir, "all-tests");
+        CompileResult result = invoker.compileAllTests(projectRoot, "all-tests");
 
         assertTrue(result.success());
         Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
@@ -290,24 +291,44 @@ class GradleCompilerInvokerTest {
     }
 
     @Test
-    void cachesDirectoryRequestsPerCompiledFile(@TempDir Path projectRoot) throws Exception {
+    void cachesOnlySrcTestJavaEntriesAndLogsResults(@TempDir Path projectRoot) throws Exception {
         Path testsDir = projectRoot.resolve("src/test/java/sample");
         Files.createDirectories(testsDir);
 
-        Path testFile = testsDir.resolve("DirectoryCacheTest.java");
-        Files.writeString(testFile,
+        Path firstTest = testsDir.resolve("DirectoryCacheFirstTest.java");
+        Files.writeString(firstTest,
                 "package sample;\n" +
-                        "public class DirectoryCacheTest {\n" +
+                        "public class DirectoryCacheFirstTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path secondTest = testsDir.resolve("DirectoryCacheSecondTest.java");
+        Files.writeString(secondTest,
+                "package sample;\n" +
+                        "public class DirectoryCacheSecondTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path otherSource = projectRoot.resolve("src/integrationTest/java/OtherTest.java");
+        Files.createDirectories(otherSource.getParent());
+        Files.writeString(otherSource,
+                "package sample;\n" +
+                        "public class OtherTest {\n" +
                         "    public void ok() {}\n" +
                         "}\n",
                 StandardCharsets.UTF_8);
 
         GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
 
-        CompileResult result = invoker.compileAllTests(projectRoot, testsDir, "all-tests");
+        CompileResult result = invoker.compileAllTests(projectRoot, "all-tests");
 
         assertTrue(result.success());
-        assertNotNull(CompilationCache.getInstance().get(testFile));
-        assertNull(CompilationCache.getInstance().get(testsDir));
+        assertNotNull(CompilationCache.getInstance().get(firstTest));
+        assertNotNull(CompilationCache.getInstance().get(secondTest));
+        assertNull(CompilationCache.getInstance().get(otherSource));
+        assertTrue(result.messages().stream().anyMatch(message -> message.contains(firstTest.getFileName().toString())));
+        assertTrue(result.messages().stream().anyMatch(message -> message.contains(secondTest.getFileName().toString())));
     }
 }
