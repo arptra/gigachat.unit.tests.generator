@@ -61,12 +61,6 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private CompileResult compile(Path projectRoot, Path testClassFile, String methodName, boolean includeAllTestClasses) {
-        Path cacheKey = testClassFile.toAbsolutePath().normalize();
-        CompileResult cachedResult = getCachedResult(cacheKey);
-        if (cachedResult != null) {
-            return cachedResult;
-        }
-
         List<String> messages = new ArrayList<>();
         if (!Files.exists(testClassFile)) {
             String message = "Target test path does not exist: " + testClassFile;
@@ -92,6 +86,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             String message = "No Java sources found under " + testClassFile;
             logger.warn(message);
             return new CompileResult(false, List.of(message), "", message);
+        }
+
+        Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
+        CompileResult cachedResult = getCachedResult(cacheKey);
+        if (cachedResult != null) {
+            return cachedResult;
         }
 
         Path representative = compilationTargets.getFirst();
@@ -141,14 +141,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 if (!compilationSucceeded) {
                     logger.warn("Compilation failed for " + testClassFile);
                 }
-                return cacheResult(cacheKey, testClassFile, new CompileResult(compilationSucceeded, messages, stdout, stderr));
+                return cacheResult(cacheKey, new CompileResult(compilationSucceeded, messages, stdout, stderr));
             } catch (IOException exception) {
                 logger.error("Compilation failed for " + testClassFile, exception);
-                return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
+                return cacheResult(cacheKey, new CompileResult(false, messages, "", exception.getMessage()));
             }
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
-            return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
+            return cacheResult(cacheKey, new CompileResult(false, messages, "", exception.getMessage()));
         } finally {
             if (cleanupOutputs && !outputDirPreexisted) {
                 try {
@@ -185,12 +185,6 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private CompileResult compileInForkedJvm(Path projectRoot, Path testClassFile, String methodName) {
-        Path cacheKey = testClassFile.toAbsolutePath().normalize();
-        CompileResult cachedResult = getCachedResult(cacheKey);
-        if (cachedResult != null) {
-            return cachedResult;
-        }
-
         List<String> messages = new ArrayList<>();
         if (!Files.exists(testClassFile)) {
             String message = "Target test path does not exist: " + testClassFile;
@@ -209,6 +203,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             String message = "No Java sources found under " + testClassFile;
             logger.warn(message);
             return new CompileResult(false, List.of(message), "", message);
+        }
+
+        Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
+        CompileResult cachedResult = getCachedResult(cacheKey);
+        if (cachedResult != null) {
+            return cachedResult;
         }
 
         Path representative = compilationTargets.getFirst();
@@ -264,17 +264,17 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 if (!compilationSucceeded) {
                     logger.warn("javac exited with code " + exitCode + " for " + testClassFile);
                 }
-                return cacheResult(cacheKey, testClassFile, new CompileResult(compilationSucceeded, messages, stdout, stderr));
+                return cacheResult(cacheKey, new CompileResult(compilationSucceeded, messages, stdout, stderr));
             } catch (IOException | InterruptedException exception) {
                 if (exception instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
                 }
                 logger.error("Forked compilation failed for " + testClassFile, exception);
-                return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
+                return cacheResult(cacheKey, new CompileResult(false, messages, "", exception.getMessage()));
             }
         } catch (IOException exception) {
             logger.error("Forked compilation failed for " + testClassFile, exception);
-            return cacheResult(cacheKey, testClassFile, new CompileResult(false, messages, "", exception.getMessage()));
+            return cacheResult(cacheKey, new CompileResult(false, messages, "", exception.getMessage()));
         } finally {
             if (cleanupOutputs && !outputDirPreexisted) {
                 try {
@@ -300,11 +300,17 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return cachedEntry.result();
     }
 
-    private CompileResult cacheResult(Path cacheKey, Path sourcePath, CompileResult result) {
+    private Path deriveCacheKey(List<Path> compilationTargets, Path requestedPath) {
+        return compilationTargets.isEmpty()
+                ? requestedPath.toAbsolutePath().normalize()
+                : compilationTargets.getFirst().toAbsolutePath().normalize();
+    }
+
+    private CompileResult cacheResult(Path cacheKey, CompileResult result) {
         try {
-            COMPILATION_CACHE.put(cacheKey, CompilationCacheEntry.from(sourcePath, result));
+            COMPILATION_CACHE.put(cacheKey, CompilationCacheEntry.from(cacheKey, result));
         } catch (IOException exception) {
-            logger.warn("Failed to cache compilation result for " + sourcePath + ": " + exception.getMessage());
+            logger.warn("Failed to cache compilation result for " + cacheKey + ": " + exception.getMessage());
         }
         return result;
     }

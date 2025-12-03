@@ -22,7 +22,9 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -285,5 +287,27 @@ class GradleCompilerInvokerTest {
         assertTrue(result.success());
         Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
         assertTrue(Files.exists(outputDir.resolve("DependentOnExistingTest.class")));
+    }
+
+    @Test
+    void cachesDirectoryRequestsPerCompiledFile(@TempDir Path projectRoot) throws Exception {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path testFile = testsDir.resolve("DirectoryCacheTest.java");
+        Files.writeString(testFile,
+                "package sample;\n" +
+                        "public class DirectoryCacheTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+
+        CompileResult result = invoker.compileAllTests(projectRoot, testsDir, "all-tests");
+
+        assertTrue(result.success());
+        assertNotNull(CompilationCache.getInstance().get(testFile));
+        assertNull(CompilationCache.getInstance().get(testsDir));
     }
 }
