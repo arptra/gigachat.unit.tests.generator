@@ -105,7 +105,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
             Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
             if (includeAllTestClasses) {
-                classpathEntries.addAll(resolveAllTestOutputs(projectRoot));
+                classpathEntries.addAll(resolveAllTestOutputs(projectRoot, messages));
             }
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
@@ -416,16 +416,85 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return tempScript;
     }
 
-    private Set<Path> resolveAllTestOutputs(Path projectRoot) {
+    private Set<Path> resolveAllTestOutputs(Path projectRoot, List<String> messages) {
+        Path gradlew = projectRoot.resolve("gradlew");
+        if (Files.exists(gradlew)) {
+            Path initScript = null;
+            try {
+                initScript = createAllTestOutputsInitScript();
+                String command = "./gradlew -q printAllTestOutputs --init-script " + initScript.toAbsolutePath();
+                ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
+                builder.directory(projectRoot.toFile());
+                builder.redirectErrorStream(true);
+                Process process = builder.start();
+                String stdout;
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    stdout = reader.lines().collect(Collectors.joining(System.lineSeparator()));
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0) {
+                    String outputsLine = stdout.lines()
+                            .filter(line -> !line.isBlank())
+                            .reduce((first, second) -> second)
+                            .orElse("");
+                    if (!outputsLine.isBlank()) {
+                        messages.add("Gradle returned aggregated test outputs via printAllTestOutputs task.");
+                        return Arrays.stream(outputsLine.split(java.io.File.pathSeparator))
+                                .parallel()
+                                .filter(entry -> !entry.isBlank())
+                                .map(Path::of)
+                                .collect(Collectors.toCollection(LinkedHashSet::new));
+                    }
+                    messages.add("Gradle did not report any compiled test outputs; falling back to filesystem scan.");
+                } else {
+                    messages.add("Gradle test output task exited with code " + exitCode + "; falling back to filesystem scan.");
+                }
+            } catch (IOException | InterruptedException exception) {
+                if (exception instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                messages.add("Failed to resolve aggregated test outputs via Gradle: " + exception.getMessage());
+            } finally {
+                if (initScript != null) {
+                    try {
+                        Files.deleteIfExists(initScript);
+                    } catch (IOException ignored) {
+                        // best-effort cleanup
+                    }
+                }
+            }
+        }
+
         try (Stream<Path> stream = Files.walk(projectRoot)) {
             return stream
                     .filter(Files::isDirectory)
-                    .filter(path -> path.endsWith(Path.of("build", "classes", "java", "test")))
+                    .filter(this::isCompiledTestOutput)
                     .collect(Collectors.toCollection(LinkedHashSet::new));
         } catch (IOException exception) {
             logger.warn("Failed to collect test output directories: " + exception.getMessage());
             return Set.of();
         }
+    }
+
+    private Path createAllTestOutputsInitScript() throws IOException {
+        String script = "gradle.projectsEvaluated {\n" +
+                "    def outputs = rootProject.allprojects\n" +
+                "        .findAll { it.plugins.hasPlugin('java') }\n" +
+                "        .collectMany { it.sourceSets.test.output.classesDirs.files }\n" +
+                "        .collect { it.absolutePath }\n" +
+                "    rootProject.tasks.register('printAllTestOutputs') {\n" +
+                "        doLast { println outputs.join(File.pathSeparator) }\n" +
+                "    }\n" +
+                "}\n";
+        Path tempScript = Files.createTempFile("print-all-test-outputs", ".gradle");
+        Files.writeString(tempScript, script, StandardCharsets.UTF_8);
+        return tempScript;
+    }
+
+    private boolean isCompiledTestOutput(Path path) {
+        Path javaOutput = Path.of("build", "classes", "java", "test");
+        Path kotlinOutput = Path.of("build", "classes", "kotlin", "test");
+        return path.endsWith(javaOutput) || path.endsWith(kotlinOutput);
     }
 
     private static Set<Path> defaultClasspath() {
