@@ -331,4 +331,99 @@ class GradleCompilerInvokerTest {
         assertTrue(result.messages().stream().anyMatch(message -> message.contains(firstTest.getFileName().toString())));
         assertTrue(result.messages().stream().anyMatch(message -> message.contains(secondTest.getFileName().toString())));
     }
+
+    @Test
+    void compileAllTestsAggregatesClasspathAndCachesEachFileWithErrors(@TempDir Path projectRoot) throws Exception {
+        Path helpersDir = projectRoot.resolve("tmp-helpers");
+        Files.createDirectories(helpersDir);
+
+        Path helperOneSource = helpersDir.resolve("helpers/HelperOne.java");
+        Files.createDirectories(helperOneSource.getParent());
+        Files.writeString(helperOneSource,
+                "package helpers;\n" +
+                        "public class HelperOne {\n" +
+                        "    public String name() { return \"one\"; }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path helperTwoSource = helpersDir.resolve("helpers/HelperTwo.java");
+        Files.createDirectories(helperTwoSource.getParent());
+        Files.writeString(helperTwoSource,
+                "package helpers;\n" +
+                        "public class HelperTwo {\n" +
+                        "    public String name() { return \"two\"; }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path helperOneOutput = projectRoot.resolve("module-one/build/classes/java/test");
+        Path helperTwoOutput = projectRoot.resolve("module-two/build/classes/java/test");
+        Files.createDirectories(helperOneOutput);
+        Files.createDirectories(helperTwoOutput);
+
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
+            fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(helperOneOutput));
+            Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjectsFromPaths(List.of(helperOneSource));
+            compiler.getTask(null, fileManager, null, null, null, units).call();
+        }
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
+            fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(helperTwoOutput));
+            Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjectsFromPaths(List.of(helperTwoSource));
+            compiler.getTask(null, fileManager, null, null, null, units).call();
+        }
+
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path aggregatedTest = testsDir.resolve("AggregatedClasspathTest.java");
+        Files.writeString(aggregatedTest,
+                "package sample;\n" +
+                        "import helpers.HelperOne;\n" +
+                        "import helpers.HelperTwo;\n" +
+                        "public class AggregatedClasspathTest {\n" +
+                        "    public void ok() {\n" +
+                        "        new HelperOne().name();\n" +
+                        "        new HelperTwo().name();\n" +
+                        "    }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path secondTest = testsDir.resolve("CachedPerFileTest.java");
+        Files.writeString(secondTest,
+                "package sample;\n" +
+                        "public class CachedPerFileTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        CompileResult initialResult = invoker.compileAllTests(projectRoot, "all-tests");
+
+        assertTrue(initialResult.success());
+        Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
+        assertTrue(Files.exists(outputDir.resolve("AggregatedClasspathTest.class")));
+        assertTrue(Files.exists(outputDir.resolve("CachedPerFileTest.class")));
+        assertNotNull(CompilationCache.getInstance().get(aggregatedTest));
+        assertNotNull(CompilationCache.getInstance().get(secondTest));
+        assertTrue(initialResult.messages().stream().anyMatch(message -> message.contains("AggregatedClasspathTest")));
+        assertTrue(initialResult.messages().stream().anyMatch(message -> message.contains("CachedPerFileTest")));
+
+        Path brokenTest = projectRoot.resolve("second-module/src/test/java/broken/BrokenTest.java");
+        Files.createDirectories(brokenTest.getParent());
+        Files.writeString(brokenTest,
+                "package broken;\n" +
+                        "public class BrokenTest {\n" +
+                        "    public void broken(\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        CompileResult failureResult = invoker.compileAllTests(projectRoot, "all-tests");
+
+        assertFalse(failureResult.success());
+        assertTrue(CompilationCache.getInstance().get(aggregatedTest).result().success());
+        CompileResult brokenCacheResult = CompilationCache.getInstance().get(brokenTest).result();
+        assertFalse(brokenCacheResult.success());
+        assertTrue(brokenCacheResult.stderr().contains("BrokenTest.java"));
+        assertTrue(failureResult.messages().stream().anyMatch(message -> message.contains("BrokenTest")));
+    }
 }
