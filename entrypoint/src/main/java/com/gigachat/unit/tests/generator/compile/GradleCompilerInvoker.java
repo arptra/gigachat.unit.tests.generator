@@ -53,6 +53,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     @Override
     public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+        return compile(projectRoot, testClassFile, methodName, false);
+    }
+
+    public CompileResult compileAllTests(Path projectRoot, Path testClassFile, String methodName) {
+        return compile(projectRoot, testClassFile, methodName, true);
+    }
+
+    private CompileResult compile(Path projectRoot, Path testClassFile, String methodName, boolean includeAllTestClasses) {
         Path cacheKey = testClassFile.toAbsolutePath().normalize();
         CompileResult cachedResult = getCachedResult(cacheKey);
         if (cachedResult != null) {
@@ -96,6 +104,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             Files.createDirectories(outputDir);
 
             Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
+            if (includeAllTestClasses) {
+                classpathEntries.addAll(resolveAllTestOutputs(projectRoot));
+            }
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
             classpathEntries.add(moduleRoot.resolve("build/resources/test"));
@@ -403,6 +414,18 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         Path tempScript = Files.createTempFile("print-test-classpath", ".gradle");
         Files.writeString(tempScript, script, StandardCharsets.UTF_8);
         return tempScript;
+    }
+
+    private Set<Path> resolveAllTestOutputs(Path projectRoot) {
+        try (Stream<Path> stream = Files.walk(projectRoot)) {
+            return stream
+                    .filter(Files::isDirectory)
+                    .filter(path -> path.endsWith(Path.of("build", "classes", "java", "test")))
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        } catch (IOException exception) {
+            logger.warn("Failed to collect test output directories: " + exception.getMessage());
+            return Set.of();
+        }
     }
 
     private static Set<Path> defaultClasspath() {

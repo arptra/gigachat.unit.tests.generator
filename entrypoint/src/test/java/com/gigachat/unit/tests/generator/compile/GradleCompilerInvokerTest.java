@@ -5,6 +5,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
+import javax.tools.ToolProvider;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -238,5 +243,47 @@ class GradleCompilerInvokerTest {
                 .collect(Collectors.toSet());
 
         assertEquals(2, pids.size());
+    }
+
+    @Test
+    void compileAllTestsIncludesPrecompiledTestClasses(@TempDir Path projectRoot) throws Exception {
+        Path existingOutput = projectRoot.resolve("another-module/build/classes/java/test");
+        Files.createDirectories(existingOutput);
+
+        Path existingSource = projectRoot.resolve("ExistingTest.java");
+        Files.writeString(existingSource,
+                "package existing;\n" +
+                        "public class ExistingTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
+            fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(existingOutput));
+            Iterable<? extends JavaFileObject> sources =
+                    fileManager.getJavaFileObjectsFromPaths(List.of(existingSource));
+            compiler.getTask(null, fileManager, null, null, null, sources).call();
+        }
+
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path dependentTest = testsDir.resolve("DependentOnExistingTest.java");
+        Files.writeString(dependentTest,
+                "package sample;\n" +
+                        "import existing.ExistingTest;\n" +
+                        "public class DependentOnExistingTest {\n" +
+                        "    public void ok() { new ExistingTest().ok(); }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+
+        CompileResult result = invoker.compileAllTests(projectRoot, testsDir, "all-tests");
+
+        assertTrue(result.success());
+        Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
+        assertTrue(Files.exists(outputDir.resolve("DependentOnExistingTest.class")));
     }
 }
