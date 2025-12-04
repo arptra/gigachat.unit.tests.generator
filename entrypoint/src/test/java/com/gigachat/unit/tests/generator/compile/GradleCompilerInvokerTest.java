@@ -14,6 +14,7 @@ import javax.tools.ToolProvider;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -465,5 +466,38 @@ class GradleCompilerInvokerTest {
         assertTrue(secondCache.stderr().contains("SecondBroken.java"));
         assertFalse(firstCache.stderr().contains("SecondBroken.java"));
         assertFalse(secondCache.stderr().contains("FirstBroken.java"));
+    }
+
+    @Test
+    void compileAllTestsReportsDiagnosticsForManyFailingFiles(@TempDir Path projectRoot) throws Exception {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        List<Path> failingSources = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            Path source = testsDir.resolve("Broken" + i + ".java");
+            Files.writeString(source,
+                    "package sample;\n" +
+                            "public class Broken" + i + " {\n" +
+                            "    public void missingParen(\n" +
+                            "}\n",
+                    StandardCharsets.UTF_8);
+            failingSources.add(source);
+        }
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+
+        CompileResult result = invoker.compileAllTests(projectRoot, "all-tests");
+
+        assertFalse(result.success());
+        for (Path failingSource : failingSources) {
+            String fileName = failingSource.getFileName().toString();
+            assertTrue(result.stderr().contains(fileName), "Missing diagnostics for " + fileName);
+
+            CompileResult cachedResult = CompilationCache.getInstance().get(failingSource).result();
+            assertNotNull(cachedResult, "Cache missing entry for " + fileName);
+            assertFalse(cachedResult.success(), "Cached result should fail for " + fileName);
+            assertTrue(cachedResult.stderr().contains(fileName), "Cached diagnostics should reference " + fileName);
+        }
     }
 }
