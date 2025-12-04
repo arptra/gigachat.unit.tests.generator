@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.cleaner;
 
 import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.DanglingTestAnnotationRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.InvalidImportCleanupRule;
 import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.StubAssertionRemovalRule;
 import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.api.TestClassCleanerRule;
 import com.gigachat.unit.tests.generator.cleaner.rules.packagelevel.MissingImportRule;
@@ -97,6 +98,7 @@ public class TestCleaner {
         return new CleanerRules(
                 List.of(
                         new DanglingTestAnnotationRule(),
+                        new InvalidImportCleanupRule(),
                         new StubAssertionRemovalRule()
                 ),
                 List.of(new MissingImportRule(index, compilerInvoker))
