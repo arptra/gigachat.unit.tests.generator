@@ -65,6 +65,58 @@ public class InProcessCompilerInvoker implements CompilerInvoker {
         }
     }
 
+    @Override
+    public CompileResult compileAllTests(Path projectRoot, String methodName) {
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            String message = "System compiler is not available";
+            return new CompileResult(false, List.of(message), "", message);
+        }
+
+        List<Path> testSources;
+        try {
+            testSources = findJavaTestSources(projectRoot);
+        } catch (IOException exception) {
+            String message = "Unable to enumerate test sources: " + exception.getMessage();
+            return new CompileResult(false, List.of(message), "", message);
+        }
+
+        if (testSources.isEmpty()) {
+            String message = "No Java tests discovered under src/test/java";
+            return new CompileResult(false, List.of(message), "", message);
+        }
+
+        Path tempOutput;
+        try {
+            tempOutput = Files.createTempDirectory("missing-import-rule-classes");
+        } catch (IOException exception) {
+            String message = "Unable to create temporary output directory: " + exception.getMessage();
+            return new CompileResult(false, List.of(message), "", message);
+        }
+
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        List<String> messages = new ArrayList<>();
+        StringWriter stdout = new StringWriter();
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null)) {
+            List<Path> classpath = buildClasspathEntries(projectRoot);
+            if (!classpath.isEmpty()) {
+                fileManager.setLocation(StandardLocation.CLASS_PATH, classpath.stream().map(Path::toFile).toList());
+                messages.add("Configured in-process compiler classpath with " + classpath.size() + " entries.");
+            }
+            fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(tempOutput.toFile()));
+            fileManager.setLocation(StandardLocation.SOURCE_OUTPUT, List.of(tempOutput.toFile()));
+
+            Iterable<? extends JavaFileObject> sources = fileManager.getJavaFileObjectsFromPaths(testSources);
+            boolean success = Boolean.TRUE.equals(compiler.getTask(stdout, fileManager, diagnostics, null, null, sources).call());
+            return new CompileResult(success, messages, stdout.toString(), formatDiagnostics(diagnostics));
+        } catch (IOException exception) {
+            String message = "Compilation failed: " + exception.getMessage();
+            return new CompileResult(false, messages, stdout.toString(), message);
+        } finally {
+            deleteQuietly(tempOutput);
+        }
+    }
+
     private static String formatDiagnostics(DiagnosticCollector<JavaFileObject> diagnostics) {
         return diagnostics.getDiagnostics().stream()
                 .map(diagnostic -> formatDiagnostic(diagnostic))
@@ -142,6 +194,28 @@ public class InProcessCompilerInvoker implements CompilerInvoker {
                 continue;
             }
             collectJarPaths(candidate, paths, path -> path.toString().endsWith(".jar"));
+        }
+    }
+
+    private List<Path> findJavaTestSources(Path projectRoot) throws IOException {
+        if (projectRoot == null) {
+            return List.of();
+        }
+
+        try (Stream<Path> stream = Files.walk(projectRoot)) {
+            List<Path> testRoots = stream
+                    .filter(Files::isDirectory)
+                    .filter(path -> path.endsWith(Path.of("src", "test", "java")))
+                    .toList();
+
+            List<Path> testSources = new ArrayList<>();
+            for (Path root : testRoots) {
+                try (Stream<Path> sources = Files.walk(root)) {
+                    sources.filter(file -> file.toString().endsWith(".java"))
+                            .forEach(testSources::add);
+                }
+            }
+            return testSources;
         }
     }
 

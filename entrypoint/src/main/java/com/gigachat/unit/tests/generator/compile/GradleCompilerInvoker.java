@@ -58,6 +58,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return compile(projectRoot, testClassFile, methodName, false);
     }
 
+    @Override
     public CompileResult compileAllTests(Path projectRoot, String methodName) {
         Objects.requireNonNull(projectRoot, "projectRoot");
 

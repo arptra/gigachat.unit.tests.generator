@@ -16,16 +16,19 @@ import com.github.javaparser.ast.Node;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Removes imports that fail real compilation. The rule compiles the target test file with a
+ * Removes imports that fail real compilation. The rule compiles all discovered test sources with a
  * classpath built from the provided project root (including Gradle caches and local libraries).
  * Any compilation errors that point at import statements cause the corresponding imports to be
  * removed.
@@ -46,45 +49,63 @@ public final class MissingImportRule implements TestPackageCleanerRule {
 
     @Override
     public boolean apply(Path projectRoot, List<Path> testFiles) throws IOException {
-        boolean changed = false;
-        for (Path testFile : testFiles) {
-            changed |= applyToFile(projectRoot, testFile);
+        Path root = projectRoot != null ? projectRoot : classIndex.getProjectRoot();
+        if (root == null) {
+            return false;
         }
+
+        Map<Path, TestFileContext> contextsByFile = new HashMap<>();
+        Map<Path, List<ImportDeclaration>> importsByFile = new HashMap<>();
+
+        for (Path testFile : testFiles) {
+            TestFileContext context = new TestFileContext(testFile, new JavaParser());
+            CompilationUnit unit = context.getCompilationUnit().orElse(null);
+            if (unit == null) {
+                continue;
+            }
+
+            List<ImportDeclaration> imports = unit.getImports();
+            if (imports == null || imports.isEmpty()) {
+                continue;
+            }
+
+            Path normalized = testFile.toAbsolutePath().normalize();
+            contextsByFile.put(normalized, context);
+            importsByFile.put(normalized, new ArrayList<>(imports));
+        }
+
+        if (importsByFile.isEmpty()) {
+            return false;
+        }
+
+        Map<Path, Set<ImportDeclaration>> toRemoveByFile = detectInvalidImports(root, importsByFile);
+        if (toRemoveByFile.isEmpty()) {
+            return false;
+        }
+
+        boolean changed = false;
+        for (Map.Entry<Path, Set<ImportDeclaration>> entry : toRemoveByFile.entrySet()) {
+            TestFileContext context = contextsByFile.get(entry.getKey());
+            if (context == null) {
+                continue;
+            }
+            entry.getValue().forEach(Node::remove);
+            context.markAstDirty();
+            context.saveIfDirty();
+            changed = true;
+        }
+
         return changed;
     }
 
-    private boolean applyToFile(Path projectRoot, Path testFile) throws IOException {
-        TestFileContext context = new TestFileContext(testFile, new JavaParser());
-        CompilationUnit unit = context.getCompilationUnit().orElse(null);
-        if (unit == null) {
-            return false;
+    private Map<Path, Set<ImportDeclaration>> detectInvalidImports(Path projectRoot, Map<Path, List<ImportDeclaration>> importsByFile) {
+        if (projectRoot == null) {
+            return Collections.emptyMap();
         }
 
-        List<ImportDeclaration> imports = unit.getImports();
-        if (imports == null || imports.isEmpty()) {
-            return false;
-        }
-
-        Set<ImportDeclaration> toRemove = detectInvalidImports(projectRoot, context.getFile(), imports);
-        if (toRemove.isEmpty()) {
-            return false;
-        }
-
-        toRemove.forEach(Node::remove);
-        context.markAstDirty();
-        context.saveIfDirty();
-        return true;
-    }
-
-    private Set<ImportDeclaration> detectInvalidImports(Path projectRoot, Path file, List<ImportDeclaration> imports) {
-        Path root = projectRoot != null ? projectRoot : classIndex.getProjectRoot();
-        if (root == null) {
-            return Collections.emptySet();
-        }
-
-        CompileResult result = compilerInvoker.compile(root, file, "missing-import-rule");
+        CompileResult result = compilerInvoker.compileAllTests(projectRoot, "missing-import-rule");
         if (result.success()) {
-            return Collections.emptySet();
+            return Collections.emptyMap();
         }
 
         String logOutput = Stream.of(result.stdout(), result.stderr())
@@ -92,30 +113,33 @@ public final class MissingImportRule implements TestPackageCleanerRule {
                 .collect(Collectors.joining(System.lineSeparator()));
         List<CompilationFailureLocation> failures = failureLogParser.parse(logOutput);
         if (failures.isEmpty()) {
-            return Collections.emptySet();
+            return Collections.emptyMap();
         }
 
-        Set<Integer> importLines = imports.stream()
-                .map(importDecl -> importDecl.getBegin().map(position -> position.line).orElse(-1))
-                .filter(line -> line >= 0)
-                .collect(Collectors.toSet());
+        Map<Path, Set<ImportDeclaration>> toRemoveByFile = new HashMap<>();
+        Map<Path, Set<Integer>> importLinesByFile = importsByFile.entrySet().stream()
+                .collect(Collectors.toMap(entry -> entry.getKey().toAbsolutePath().normalize(), entry -> entry.getValue()
+                        .stream()
+                        .map(importDecl -> importDecl.getBegin().map(position -> position.line).orElse(-1))
+                        .filter(line -> line >= 0)
+                        .collect(Collectors.toSet())));
 
-        Path normalizedFile = file.toAbsolutePath().normalize();
-        Set<ImportDeclaration> toRemove = new HashSet<>();
         for (CompilationFailureLocation failure : failures) {
-            if (!normalizedFile.equals(failure.filePath().toAbsolutePath().normalize())) {
+            Path normalizedFile = failure.filePath().toAbsolutePath().normalize();
+            Set<Integer> importLines = importLinesByFile.get(normalizedFile);
+            if (importLines == null || !importLines.contains(failure.lineNumber())) {
                 continue;
             }
-            if (!importLines.contains(failure.lineNumber())) {
-                continue;
-            }
-            imports.stream()
+
+            importsByFile.getOrDefault(normalizedFile, List.of()).stream()
                     .filter(importDecl -> importDecl.getBegin()
                             .map(position -> position.line == failure.lineNumber())
                             .orElse(false))
-                    .forEach(toRemove::add);
+                    .forEach(importDecl -> toRemoveByFile
+                            .computeIfAbsent(normalizedFile, ignored -> new HashSet<>())
+                            .add(importDecl));
         }
 
-        return toRemove;
+        return toRemoveByFile;
     }
 }

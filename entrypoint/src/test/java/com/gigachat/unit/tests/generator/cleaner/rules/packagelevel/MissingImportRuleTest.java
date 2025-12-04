@@ -1,6 +1,8 @@
 package com.gigachat.unit.tests.generator.cleaner.rules.packagelevel;
 
 import com.gigachat.unit.tests.generator.cleaner.ProjectClassIndex;
+import com.gigachat.unit.tests.generator.compile.CompileResult;
+import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,6 +21,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -127,6 +130,54 @@ class MissingImportRuleTest {
         try (Stream<Path> stream = Files.walk(projectDir)) {
             assertTrue(stream.noneMatch(path -> path.toString().endsWith(".class")),
                     "Compilation artifacts should not remain inside the project directory");
+        }
+    }
+
+    @Test
+    void compilesAllTestsOnceAcrossPackage() throws IOException {
+        Path failingTest = projectDir.resolve("src/test/java/com/example/app/UserServiceTest.java");
+        Files.createDirectories(failingTest.getParent());
+        Files.writeString(failingTest, String.join(System.lineSeparator(),
+                "package com.example.app;",
+                "import com.example.missing.DoesNotExist;",
+                "class UserServiceTest { }"));
+
+        Path passingTest = projectDir.resolve("src/test/java/com/example/app/UserProfileTest.java");
+        Files.createDirectories(passingTest.getParent());
+        Files.writeString(passingTest, String.join(System.lineSeparator(),
+                "package com.example.app;",
+                "import java.util.List;",
+                "class UserProfileTest { List<String> values; }"));
+
+        RecordingCompilerInvoker compilerInvoker = new RecordingCompilerInvoker(failingTest);
+        MissingImportRule rule = new MissingImportRule(new ProjectClassIndex(projectDir), compilerInvoker);
+
+        boolean changed = rule.apply(projectDir, List.of(failingTest, passingTest));
+
+        assertTrue(changed, "Missing import should be removed based on a package-wide compilation");
+        assertEquals(1, compilerInvoker.compileAllInvocationCount, "compileAllTests should run once for the package");
+        assertFalse(Files.readString(failingTest).contains("com.example.missing"));
+        assertTrue(Files.readString(passingTest).contains("java.util.List"));
+    }
+
+    private static final class RecordingCompilerInvoker implements CompilerInvoker {
+        private final Path failingFile;
+        private int compileAllInvocationCount;
+
+        RecordingCompilerInvoker(Path failingFile) {
+            this.failingFile = failingFile.toAbsolutePath().normalize();
+        }
+
+        @Override
+        public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+            throw new AssertionError("compile should not be invoked for MissingImportRule");
+        }
+
+        @Override
+        public CompileResult compileAllTests(Path projectRoot, String methodName) {
+            compileAllInvocationCount++;
+            String log = failingFile + ":2: error: cannot find symbol";
+            return new CompileResult(false, List.of(), "", log);
         }
     }
 

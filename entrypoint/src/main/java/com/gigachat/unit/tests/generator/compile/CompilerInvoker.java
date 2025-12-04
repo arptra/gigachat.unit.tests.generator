@@ -14,6 +14,17 @@ public interface CompilerInvoker {
 
     CompileResult compile(Path projectRoot, Path testClassFile, String methodName);
 
+    /**
+     * Compiles all discovered test sources under the given project root.
+     *
+     * @param projectRoot the root of the project containing tests
+     * @param methodName  a name used for logging/diagnostics
+     * @return aggregated compilation output
+     */
+    default CompileResult compileAllTests(Path projectRoot, String methodName) {
+        throw new UnsupportedOperationException("compileAllTests is not implemented");
+    }
+
     default List<CompileResult> compileParallel(Path projectRoot, List<Path> testClassFiles, String methodName) {
         Objects.requireNonNull(projectRoot, "projectRoot");
         Objects.requireNonNull(testClassFiles, "testClassFiles");
