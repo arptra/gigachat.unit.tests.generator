@@ -1,5 +1,11 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
+import com.gigachat.unit.tests.generator.analysis.api.ConstructorInfo;
+import com.gigachat.unit.tests.generator.analysis.api.MethodAnalysisDTO;
+import com.gigachat.unit.tests.generator.analysis.api.MethodAnalyzer;
+import com.gigachat.unit.tests.generator.analysis.api.MethodInfo;
+import com.gigachat.unit.tests.generator.analysis.api.StaticDependency;
+import com.gigachat.unit.tests.generator.analysis.semantic.SemanticMethodAnalyzer;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
@@ -79,6 +85,7 @@ public class InitialGenerationStep {
     private final ExternalCollaboratorDetector collaboratorDetector;
     private final MethodSignatureRegistry signatureRegistry;
     private final AutoCorrectionStage autoCorrectionStage;
+    private final MethodAnalyzer semanticMethodAnalyzer;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -104,6 +111,7 @@ public class InitialGenerationStep {
         this.collaboratorDetector = new ExternalCollaboratorDetector();
         this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
         this.autoCorrectionStage = new AutoCorrectionStage();
+        this.semanticMethodAnalyzer = new SemanticMethodAnalyzer(signatureRegistry);
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -150,6 +158,10 @@ public class InitialGenerationStep {
                                PipelineModuleConfig moduleConfig,
                                ErrorsReport report) {
         logger.info("Processing method " + methodInfo.getSignature() + " for class " + classInfo.getClassName());
+        MethodAnalysisDTO semanticAnalysis = semanticMethodAnalyzer.analyze(methodInfo);
+        if (logger != null) {
+            logger.info("Semantic analyzer summary: " + semanticAnalysis);
+        }
         String skeletonPrompt = skeletonPromptBuilder.build(classInfo, methodInfo);
         Analyze.AnalysisSummary analysisSummary = analyze.analyze(config, classInfo, methodInfo);
         if (!analysisSummary.invalidCalls().isEmpty()) {
@@ -161,6 +173,7 @@ public class InitialGenerationStep {
         MockPlan plan = analysisSummary.mockPlan();
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
+        contextJson.put("semanticAnalysis", buildSemanticContext(semanticAnalysis));
         GeneratedTestSnippet snippet;
         logger.info("-> DEBUG info about tested method \n" + methodInfo);
         try {
@@ -226,6 +239,50 @@ public class InitialGenerationStep {
             logger.warn("Failed to parse prompt JSON for method " + methodInfo.getSignature() + ": " + exception.getMessage());
             return new JSONObject();
         }
+    }
+
+    private JSONObject buildSemanticContext(MethodAnalysisDTO semanticAnalysis) {
+        JSONObject semanticJson = new JSONObject();
+        JSONObject constructors = new JSONObject();
+        for (Map.Entry<String, List<ConstructorInfo>> entry : semanticAnalysis.getTypeConstructors().entrySet()) {
+            JSONArray constructorArray = new JSONArray();
+            for (ConstructorInfo constructor : entry.getValue()) {
+                JSONObject ctorJson = new JSONObject();
+                ctorJson.put("className", constructor.getClassName());
+                ctorJson.put("parameterTypes", constructor.getParameterTypes());
+                ctorJson.put("signature", constructor.getSignature());
+                constructorArray.put(ctorJson);
+            }
+            constructors.put(entry.getKey(), constructorArray);
+        }
+        semanticJson.put("typeConstructors", constructors);
+
+        JSONObject methods = new JSONObject();
+        for (Map.Entry<String, List<MethodInfo>> entry : semanticAnalysis.getTypeMethods().entrySet()) {
+            JSONArray methodArray = new JSONArray();
+            for (MethodInfo method : entry.getValue()) {
+                JSONObject methodJson = new JSONObject();
+                methodJson.put("name", method.getMethodName());
+                methodJson.put("parameterTypes", method.getParameterTypes());
+                methodJson.put("returnType", method.getReturnType());
+                methodArray.put(methodJson);
+            }
+            methods.put(entry.getKey(), methodArray);
+        }
+        semanticJson.put("typeMethods", methods);
+
+        JSONArray staticCalls = new JSONArray();
+        for (StaticDependency dependency : semanticAnalysis.getStaticDependencies()) {
+            JSONObject dependencyJson = new JSONObject();
+            dependencyJson.put("owner", dependency.getOwner());
+            dependencyJson.put("methodName", dependency.getMethodName());
+            dependencyJson.put("strategy", dependency.getStrategy().name());
+            dependencyJson.put("replacement", dependency.getReplacement());
+            staticCalls.put(dependencyJson);
+        }
+        semanticJson.put("staticCalls", staticCalls);
+        semanticJson.put("domainTypes", new JSONArray(semanticAnalysis.getDomainTypes()));
+        return semanticJson;
     }
 
     private GeneratedTestSnippet generateSnippetWithRetry(AgentConfig config,
