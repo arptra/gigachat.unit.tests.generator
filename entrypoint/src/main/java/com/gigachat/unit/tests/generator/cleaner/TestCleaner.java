@@ -1,8 +1,10 @@
 package com.gigachat.unit.tests.generator.cleaner;
 
-import com.gigachat.unit.tests.generator.cleaner.rules.DanglingTestAnnotationRule;
-import com.gigachat.unit.tests.generator.cleaner.rules.MissingImportRule;
-import com.gigachat.unit.tests.generator.cleaner.rules.StubAssertionRemovalRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.DanglingTestAnnotationRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.StubAssertionRemovalRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.api.TestClassCleanerRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.packagelevel.MissingImportRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.packagelevel.api.TestPackageCleanerRule;
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
 import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
@@ -35,7 +37,8 @@ import java.util.stream.Stream;
 /**
  * Coordinates the cleaner mode. The cleaner performs the following steps:
  * <ol>
- *     <li>Applies a configurable list of {@link CleanerRule rules} to every discovered test class.</li>
+ *     <li>Applies a configurable list of class-level cleaner rules to every discovered test class.</li>
+ *     <li>Applies package-level rules that consider the whole collection of discovered tests.</li>
  *     <li>Compiles each remaining test method individually and removes tests that fail to compile.</li>
  *     <li>Executes the surviving tests and removes flaky methods, deleting a class entirely when all
  *     test methods fail.</li>
@@ -46,7 +49,7 @@ public class TestCleaner {
     private final CompilerInvoker compilerInvoker;
     private final ExecutionInvoker executionInvoker;
     private final JavaParser javaParser = new JavaParser();
-    private final Function<ProjectClassIndex, List<CleanerRule>> rulesProvider;
+    private final Function<ProjectClassIndex, CleanerRules> rulesProvider;
     private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
     private final ExecutionFailureLogParser executionFailureLogParser = new ExecutionFailureLogParser();
     private final ExecutionReportParser executionReportParser = new ExecutionReportParser();
@@ -60,7 +63,7 @@ public class TestCleaner {
     TestCleaner(PipelineLogger logger,
                 CompilerInvoker compilerInvoker,
                 ExecutionInvoker executionInvoker,
-                Function<ProjectClassIndex, List<CleanerRule>> rulesProvider) {
+                Function<ProjectClassIndex, CleanerRules> rulesProvider) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.compilerInvoker = Objects.requireNonNull(compilerInvoker, "compilerInvoker");
         this.executionInvoker = Objects.requireNonNull(executionInvoker, "executionInvoker");
@@ -76,11 +79,13 @@ public class TestCleaner {
             return;
         }
         ProjectClassIndex classIndex = new ProjectClassIndex(projectRoot);
-        List<CleanerRule> rules = rulesProvider.apply(classIndex);
-        logger.info("Applying " + rules.size() + " cleaner rules to " + testFiles.size() + " test files.");
+        CleanerRules rules = rulesProvider.apply(classIndex);
+        logger.info("Applying " + rules.getClassRules().size() + " class cleaner rules to " + testFiles.size() + " test files.");
         for (Path testFile : testFiles) {
-            applyRules(testFile, rules);
+            applyClassRules(testFile, rules.getClassRules());
         }
+        logger.info("Applying " + rules.getPackageRules().size() + " package cleaner rules across discovered tests.");
+        applyPackageRules(projectRoot, testFiles, rules.getPackageRules());
         logger.info("Cleaner rules applied. Starting compilation pass.");
         runCompilationStage(config);
         logger.info("Compilation pass finished. Starting execution pass.");
@@ -88,17 +93,19 @@ public class TestCleaner {
         logger.info("Cleaner mode finished.");
     }
 
-    private static List<CleanerRule> defaultRules(ProjectClassIndex index, CompilerInvoker compilerInvoker) {
-        return List.of(
-                new MissingImportRule(index, compilerInvoker),
-                new DanglingTestAnnotationRule(),
-                new StubAssertionRemovalRule()
+    private static CleanerRules defaultRules(ProjectClassIndex index, CompilerInvoker compilerInvoker) {
+        return new CleanerRules(
+                List.of(
+                        new DanglingTestAnnotationRule(),
+                        new StubAssertionRemovalRule()
+                ),
+                List.of(new MissingImportRule(index, compilerInvoker))
         );
     }
 
-    private void applyRules(Path testFile, List<CleanerRule> rules) {
+    private void applyClassRules(Path testFile, List<TestClassCleanerRule> rules) {
         TestFileContext context = new TestFileContext(testFile, javaParser);
-        for (CleanerRule rule : rules) {
+        for (TestClassCleanerRule rule : rules) {
             try {
                 rule.apply(context);
             } catch (IOException exception) {
@@ -110,6 +117,17 @@ public class TestCleaner {
             context.saveIfDirty();
         } catch (IOException exception) {
             logger.error("Unable to persist changes for " + testFile + ": " + exception.getMessage());
+        }
+    }
+
+    private void applyPackageRules(Path projectRoot, List<Path> testFiles, List<TestPackageCleanerRule> rules) {
+        for (TestPackageCleanerRule rule : rules) {
+            try {
+                rule.apply(projectRoot, testFiles);
+            } catch (IOException exception) {
+                logger.error("Failed to apply package rule " + rule.getClass().getSimpleName() +
+                        " to " + projectRoot + ": " + exception.getMessage());
+            }
         }
     }
 

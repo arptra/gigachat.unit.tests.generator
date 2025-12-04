@@ -1,4 +1,4 @@
-package com.gigachat.unit.tests.generator.cleaner.rules;
+package com.gigachat.unit.tests.generator.cleaner.rules.classlevel;
 
 import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
 import com.github.javaparser.JavaParser;

@@ -1,13 +1,13 @@
-package com.gigachat.unit.tests.generator.cleaner;
+package com.gigachat.unit.tests.generator.cleaner.rules.classlevel.api;
+
+import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
 
 import java.io.IOException;
 
 /**
- * Represents a single clean-up rule that can mutate a test file. Rules are intentionally
- * small and composable so that new validations can be plugged in without modifying the
- * cleaner orchestration logic.
+ * Represents a clean-up rule that targets a single test class file.
  */
-public interface CleanerRule {
+public interface TestClassCleanerRule {
     /**
      * Applies the rule to the provided test file context.
      *

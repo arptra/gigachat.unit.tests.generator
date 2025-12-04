@@ -1,17 +1,18 @@
-package com.gigachat.unit.tests.generator.cleaner.rules;
+package com.gigachat.unit.tests.generator.cleaner.rules.packagelevel;
 
-import com.gigachat.unit.tests.generator.cleaner.CleanerRule;
 import com.gigachat.unit.tests.generator.cleaner.ProjectClassIndex;
 import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLocation;
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLogParser;
+import com.gigachat.unit.tests.generator.cleaner.rules.packagelevel.api.TestPackageCleanerRule;
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
 import com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker;
+import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
+import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.Node;
-import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -20,8 +21,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Stream;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Removes imports that fail real compilation. The rule compiles the target test file with a
@@ -29,7 +30,7 @@ import java.util.stream.Collectors;
  * Any compilation errors that point at import statements cause the corresponding imports to be
  * removed.
  */
-public final class MissingImportRule implements CleanerRule {
+public final class MissingImportRule implements TestPackageCleanerRule {
     private final ProjectClassIndex classIndex;
     private final CompilerInvoker compilerInvoker;
     private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
@@ -44,7 +45,16 @@ public final class MissingImportRule implements CleanerRule {
     }
 
     @Override
-    public boolean apply(TestFileContext context) throws IOException {
+    public boolean apply(Path projectRoot, List<Path> testFiles) throws IOException {
+        boolean changed = false;
+        for (Path testFile : testFiles) {
+            changed |= applyToFile(projectRoot, testFile);
+        }
+        return changed;
+    }
+
+    private boolean applyToFile(Path projectRoot, Path testFile) throws IOException {
+        TestFileContext context = new TestFileContext(testFile, new JavaParser());
         CompilationUnit unit = context.getCompilationUnit().orElse(null);
         if (unit == null) {
             return false;
@@ -55,23 +65,24 @@ public final class MissingImportRule implements CleanerRule {
             return false;
         }
 
-        Set<ImportDeclaration> toRemove = detectInvalidImports(context.getFile(), imports);
+        Set<ImportDeclaration> toRemove = detectInvalidImports(projectRoot, context.getFile(), imports);
         if (toRemove.isEmpty()) {
             return false;
         }
 
         toRemove.forEach(Node::remove);
         context.markAstDirty();
+        context.saveIfDirty();
         return true;
     }
 
-    private Set<ImportDeclaration> detectInvalidImports(Path file, List<ImportDeclaration> imports) {
-        Path projectRoot = classIndex.getProjectRoot();
-        if (projectRoot == null) {
+    private Set<ImportDeclaration> detectInvalidImports(Path projectRoot, Path file, List<ImportDeclaration> imports) {
+        Path root = projectRoot != null ? projectRoot : classIndex.getProjectRoot();
+        if (root == null) {
             return Collections.emptySet();
         }
 
-        CompileResult result = compilerInvoker.compile(projectRoot, file, "missing-import-rule");
+        CompileResult result = compilerInvoker.compile(root, file, "missing-import-rule");
         if (result.success()) {
             return Collections.emptySet();
         }
