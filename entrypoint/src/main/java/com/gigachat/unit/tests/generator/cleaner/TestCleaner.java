@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.cleaner;
 
 import com.gigachat.unit.tests.generator.cleaner.rules.DanglingTestAnnotationRule;
+import com.gigachat.unit.tests.generator.cleaner.rules.ImportAnalyzerCleanerRule;
 import com.gigachat.unit.tests.generator.cleaner.rules.MissingImportRule;
 import com.gigachat.unit.tests.generator.cleaner.rules.StubAssertionRemovalRule;
 import com.gigachat.unit.tests.generator.compile.CompileResult;
@@ -10,6 +11,8 @@ import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
 import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
+import com.example.importanalyzer.core.AsyncImportAnalyzerService;
+import com.example.importanalyzer.core.ImportAnalyzerBuilder;
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLocation;
 import com.gigachat.unit.tests.generator.cleaner.parser.CompilationFailureLogParser;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
@@ -28,7 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -46,7 +49,7 @@ public class TestCleaner {
     private final CompilerInvoker compilerInvoker;
     private final ExecutionInvoker executionInvoker;
     private final JavaParser javaParser = new JavaParser();
-    private final Function<ProjectClassIndex, List<CleanerRule>> rulesProvider;
+    private final BiFunction<ProjectClassIndex, AsyncImportAnalyzerService, List<CleanerRule>> rulesProvider;
     private final CompilationFailureLogParser failureLogParser = new CompilationFailureLogParser();
     private final ExecutionFailureLogParser executionFailureLogParser = new ExecutionFailureLogParser();
     private final ExecutionReportParser executionReportParser = new ExecutionReportParser();
@@ -54,13 +57,14 @@ public class TestCleaner {
     public TestCleaner(PipelineLogger logger,
                        CompilerInvoker compilerInvoker,
                        ExecutionInvoker executionInvoker) {
-        this(logger, compilerInvoker, executionInvoker, index -> defaultRules(index, compilerInvoker));
+        this(logger, compilerInvoker, executionInvoker,
+                (index, service) -> defaultRules(index, compilerInvoker, service, logger));
     }
 
     TestCleaner(PipelineLogger logger,
                 CompilerInvoker compilerInvoker,
                 ExecutionInvoker executionInvoker,
-                Function<ProjectClassIndex, List<CleanerRule>> rulesProvider) {
+                BiFunction<ProjectClassIndex, AsyncImportAnalyzerService, List<CleanerRule>> rulesProvider) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.compilerInvoker = Objects.requireNonNull(compilerInvoker, "compilerInvoker");
         this.executionInvoker = Objects.requireNonNull(executionInvoker, "executionInvoker");
@@ -70,13 +74,15 @@ public class TestCleaner {
     public void clean(AgentConfig config) throws IOException {
         Path projectRoot = config.getProjectPath();
         logger.info("Starting cleaner mode for project " + projectRoot);
-        List<Path> testFiles = discoverTestFiles(projectRoot, config.getIncludeModules());
+        List<Path> moduleRoots = determineModuleRoots(projectRoot, config.getIncludeModules());
+        List<Path> testFiles = discoverTestFiles(moduleRoots);
         if (testFiles.isEmpty()) {
             logger.warn("No tests discovered under " + projectRoot + ". Nothing to clean.");
             return;
         }
         ProjectClassIndex classIndex = new ProjectClassIndex(projectRoot);
-        List<CleanerRule> rules = rulesProvider.apply(classIndex);
+        AsyncImportAnalyzerService analyzerService = createAnalyzerService(projectRoot, moduleRoots);
+        List<CleanerRule> rules = rulesProvider.apply(classIndex, analyzerService);
         logger.info("Applying " + rules.size() + " cleaner rules to " + testFiles.size() + " test files.");
         for (Path testFile : testFiles) {
             applyRules(testFile, rules);
@@ -88,8 +94,12 @@ public class TestCleaner {
         logger.info("Cleaner mode finished.");
     }
 
-    private static List<CleanerRule> defaultRules(ProjectClassIndex index, CompilerInvoker compilerInvoker) {
+    private static List<CleanerRule> defaultRules(ProjectClassIndex index,
+                                                 CompilerInvoker compilerInvoker,
+                                                 AsyncImportAnalyzerService analyzerService,
+                                                 PipelineLogger logger) {
         return List.of(
+                new ImportAnalyzerCleanerRule(analyzerService, logger),
                 new MissingImportRule(index, compilerInvoker),
                 new DanglingTestAnnotationRule(),
                 new StubAssertionRemovalRule()
@@ -232,8 +242,7 @@ public class TestCleaner {
         }
     }
 
-    private List<Path> discoverTestFiles(Path projectRoot, List<String> includeModules) throws IOException {
-        List<Path> moduleRoots = determineModuleRoots(projectRoot, includeModules);
+    private List<Path> discoverTestFiles(List<Path> moduleRoots) throws IOException {
         List<Path> testFiles = new ArrayList<>();
         for (Path moduleRoot : moduleRoots) {
             Path testRoot = moduleRoot.resolve(Path.of("src", "test", "java"));
@@ -266,6 +275,20 @@ public class TestCleaner {
         return List.copyOf(modules);
     }
 
+    private AsyncImportAnalyzerService createAnalyzerService(Path projectRoot, List<Path> moduleRoots) {
+        ImportAnalyzerBuilder builder = new ImportAnalyzerBuilder()
+                .projectRoot(projectRoot)
+                .includeDependencies(true)
+                .threads(Runtime.getRuntime().availableProcessors());
+        for (Path moduleRoot : moduleRoots) {
+            builder.sourceRoot(moduleRoot.resolve(Path.of("src", "main", "java")));
+            builder.testSourceRoot(moduleRoot.resolve(Path.of("src", "test", "java")));
+        }
+        AsyncImportAnalyzerService service = new AsyncImportAnalyzerService(builder.buildConfig());
+        service.startScan();
+        return service;
+    }
+
     private List<MethodDeclaration> findTestMethods(CompilationUnit unit) {
         return unit.findAll(MethodDeclaration.class).stream()
                 .filter(this::isTestMethod)
@@ -279,7 +302,7 @@ public class TestCleaner {
     }
 
     private boolean removeFailingTests(AgentConfig config, List<CompilationFailureLocation> failing) throws IOException {
-        List<Path> discoveredTests = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
+        List<Path> discoveredTests = discoverTestFiles(determineModuleRoots(config.getProjectPath(), config.getIncludeModules()));
         logger.info("Found " + discoveredTests.size() + " test files while removing failures");
 
         List<Path> failingFiles = failing.stream()
@@ -350,7 +373,7 @@ public class TestCleaner {
     }
 
     private void removeExecutionFailures(AgentConfig config, List<TestFailure> failingTests) throws IOException {
-        List<Path> discoveredTests = discoverTestFiles(config.getProjectPath(), config.getIncludeModules());
+        List<Path> discoveredTests = discoverTestFiles(determineModuleRoots(config.getProjectPath(), config.getIncludeModules()));
         logger.info("Processing execution failures across " + discoveredTests.size() + " discovered tests");
 
         for (TestFailure failure : failingTests) {

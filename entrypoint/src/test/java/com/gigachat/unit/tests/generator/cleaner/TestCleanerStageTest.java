@@ -75,7 +75,7 @@ class TestCleanerStageTest {
 
         ExecutionInvoker executionInvoker = (root, file, method) ->
                 new ExecuteResult(false, List.of(), executionLog, "runtime-error");
-        TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
+        TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, (index, service) -> List.of());
 
         AgentConfig config = new AgentConfigBuilder()
                 .mode(AgentMode.CLEAN)
@@ -116,7 +116,7 @@ class TestCleanerStageTest {
                 "com.example.app.model.UserTest > shouldBeRemoved FAILED",
                 "48 tests completed, 1 failed");
         ExecutionInvoker executionInvoker = (root, file, method) -> new ExecuteResult(false, List.of(), executionLog, "runtime-error");
-        TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, index -> List.of());
+        TestCleaner cleaner = new TestCleaner(logger, compilerInvoker, executionInvoker, (index, service) -> List.of());
 
         AgentConfig config = new AgentConfigBuilder()
                 .mode(AgentMode.CLEAN)

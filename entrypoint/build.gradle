@@ -6,6 +6,7 @@ dependencies {
     implementation libs.javaparser
     implementation libs.json
     implementation libs.gigachat
+    implementation project(':import-analyzer-core')
 
     testImplementation libs.junit
     testRuntimeOnly libs.junit.platform.launcher
