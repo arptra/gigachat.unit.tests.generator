@@ -1,5 +1,6 @@
 package com.gigachat.unit.tests.generator.pipeline.helpers;
 
+import com.gigachat.unit.tests.generator.analysis.deepsemantic.DeepSemanticMethodAnalyzer;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
@@ -26,6 +27,7 @@ import com.testagent.entrypoint.pipeline.helpers.analyze.MethodAnalyzer;
 import com.testagent.entrypoint.pipeline.helpers.analyze.InvocationInfo;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MockStrategyResolver;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MockType;
+import com.testagent.entrypoint.pipeline.helpers.analyze.SemanticAnalysis;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -71,7 +73,7 @@ public class Analyze {
     }
 
     public Analyze(PipelineLogger logger, MethodSignatureRegistry signatureRegistry) {
-        this(new MethodAnalyzer(logger),
+        this(new DeepSemanticMethodAnalyzer(logger, signatureRegistry),
                 new AnalysisFormatter(),
                 new MockStrategyResolver(),
                 logger,
@@ -248,7 +250,8 @@ public class Analyze {
                 analysis.dependencies(),
                 sanitisedInvocations,
                 analysis.staticUsages(),
-                analysis.unresolved());
+                analysis.unresolved(),
+                analysis.semanticAnalysis());
     }
 
     private String sanitizeInvocationTarget(String target, Set<String> internalFields) {
@@ -291,7 +294,12 @@ public class Analyze {
                                                 TestClassInfo classInfo,
                                                 TestMethodInfo methodInfo) {
         if (analysis == null) {
-            return new FilteredAnalysis(new MethodAnalysisResult(null, List.of(), List.of(), List.of(), List.of()),
+            return new FilteredAnalysis(new MethodAnalysisResult(null,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    SemanticAnalysis.empty()),
                     List.of(),
                     Set.of());
         }
@@ -378,7 +386,8 @@ public class Analyze {
                 filteredDependencies,
                 filteredInvocations,
                 analysis.staticUsages(),
-                analysis.unresolved());
+                analysis.unresolved(),
+                analysis.semanticAnalysis());
         for (String type : variableTypes.values()) {
             addRelevantType(relevantClasses, type);
         }

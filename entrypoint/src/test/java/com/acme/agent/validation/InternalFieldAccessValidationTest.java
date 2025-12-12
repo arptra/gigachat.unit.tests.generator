@@ -21,6 +21,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze.AnalysisSummar
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze.TestTargetContext;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodAnalysisResult;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodMetadata;
+import com.testagent.entrypoint.pipeline.helpers.analyze.SemanticAnalysis;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,7 +76,8 @@ class InternalFieldAccessValidationTest {
                 List.of(),
                 List.of(),
                 List.of(),
-                List.of());
+                List.of(),
+                SemanticAnalysis.empty());
 
         analysisSummary = new AnalysisSummary(new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of()),
                 methodAnalysis,

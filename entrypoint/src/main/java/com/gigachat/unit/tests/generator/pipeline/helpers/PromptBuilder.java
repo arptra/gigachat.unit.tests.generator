@@ -141,6 +141,7 @@ public class PromptBuilder {
         if (!hints.isEmpty()) {
             root.put("hints", hints);
         }
+        customizeContext(root, config, classInfo, methodInfo, skeletonJson, summary);
         return jsonRenderer.render(root);
     }
 
@@ -231,6 +232,15 @@ public class PromptBuilder {
         return "You are an AI agent that generates Java JUnit 5 unit tests using Mockito." + System.lineSeparator()
                 + "The context is missing or incomplete — generate a generic unit test skeleton with mocks." + System.lineSeparator()
                 + "Return only valid Java code of the test class.";
+    }
+
+    protected void customizeContext(Map<String, Object> root,
+                                    AgentConfig config,
+                                    TestClassInfo classInfo,
+                                    TestMethodInfo methodInfo,
+                                    String skeletonJson,
+                                    AnalysisSummary summary) {
+        // Default implementation intentionally left blank.
     }
 
 

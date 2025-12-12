@@ -10,6 +10,8 @@ import com.github.javaparser.ParseProblemException;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.stmt.BlockStmt;
 
+import com.testagent.entrypoint.pipeline.helpers.analyze.SemanticAnalysis;
+
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,7 +53,8 @@ public class MethodAnalyzer {
                 dependencies,
                 invocationAnalysis.invocations(),
                 invocationAnalysis.staticUsages(),
-                invocationAnalysis.unresolved());
+                invocationAnalysis.unresolved(),
+                SemanticAnalysis.empty());
         if (logger != null) {
             logger.info("Method analysis completed for " + metadata.name() + ": "
                     + dependencies.size() + " dependencies, "

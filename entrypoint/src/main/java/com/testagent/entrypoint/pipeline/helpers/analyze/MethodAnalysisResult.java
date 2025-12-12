@@ -9,7 +9,8 @@ public record MethodAnalysisResult(MethodMetadata method,
                                    List<DependencyInfo> dependencies,
                                    List<InvocationInfo> invocations,
                                    List<String> staticUsages,
-                                   List<String> unresolved) {
+                                   List<String> unresolved,
+                                   SemanticAnalysis semanticAnalysis) {
 
     public MethodAnalysisResult {
         method = method == null ? new MethodMetadata("method", "method()", "void") : method;
@@ -17,5 +18,6 @@ public record MethodAnalysisResult(MethodMetadata method,
         invocations = invocations == null ? List.of() : List.copyOf(invocations);
         staticUsages = staticUsages == null ? List.of() : List.copyOf(staticUsages);
         unresolved = unresolved == null ? List.of() : List.copyOf(unresolved);
+        semanticAnalysis = semanticAnalysis == null ? SemanticAnalysis.empty() : semanticAnalysis;
     }
 }
