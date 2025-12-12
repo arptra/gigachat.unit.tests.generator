@@ -38,7 +38,13 @@ import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
 import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
+import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
+import com.gigachat.unit.tests.generator.reasoning.service.BuildFileEditor;
+import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
+import com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor;
+import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -190,6 +196,9 @@ public class InitialGenerationStep {
             return;
         }
 
+        ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath(), logger);
+        SourceFileEditor sourceFileEditor = new SourceFileEditor(logger);
+        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath(), logger);
         boolean success = false;
         int attempt = 0;
         int maxAttempts = 5;
@@ -201,6 +210,16 @@ public class InitialGenerationStep {
         List<TestReportFailure> lastReportFailures = List.of();
 
         while (attempt < maxAttempts) {
+            ToolActionExecutor actionExecutor = createActionExecutor(config,
+                    classInfo,
+                    buildFileEditor,
+                    sourceFileEditor,
+                    snippet);
+            CompilationPipelineOrchestrator fixingOrchestrator = createFixingOrchestrator(config,
+                    classInfo,
+                    projectContextCollector,
+                    actionExecutor,
+                    snippet);
             mergeResult = diffEngine.merge(classInfo, snippet);
             if (!mergeResult.changed()) {
                 logger.warn("Merge step did not change target class for method " + snippet.methodName());
@@ -215,34 +234,36 @@ public class InitialGenerationStep {
                             lastCompileResult.messages(),
                             lastCompileResult.stdout(),
                             lastCompileResult.stderr()));
-                    ReasoningResponse reasoningResponse = triggerReasoningWorkflow(config,
-                            classInfo,
-                            methodInfo,
-                            lastCompileResult,
-                            null);
-                    logReasoningResponse("compile", reasoningResponse);
-                    revertMerge(classInfo, mergeResult);
-                    repairContext = buildRepairContext(repairContext,
-                            lastCompileResult,
-                            null,
-                            null,
-                            List.of(),
-                            snippet,
-                            attempt + 1);
-                    snippet = requestSnippetSimple(config,
-                            classInfo,
-                            methodInfo,
-                            plan,
-                            repairContext,
-                            analysisSummary,
-                            moduleConfig,
-                            true);
-                    if (snippet == null) {
-                        logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
-                        break;
+                    try {
+                        lastCompileResult = fixingOrchestrator.runFixingLoop();
+                    } catch (FixingFailureException exception) {
+                        logger.error("Reasoning loop failed to fix compilation errors: " + exception.getMessage(), exception);
+                        lastCompileResult = exception.getLastResult();
                     }
-                    attempt++;
-                    continue;
+                    if (!lastCompileResult.success()) {
+                        revertMerge(classInfo, mergeResult);
+                        repairContext = buildRepairContext(repairContext,
+                                lastCompileResult,
+                                null,
+                                null,
+                                List.of(),
+                                snippet,
+                                attempt + 1);
+                        snippet = requestSnippetSimple(config,
+                                classInfo,
+                                methodInfo,
+                                plan,
+                                repairContext,
+                                analysisSummary,
+                                moduleConfig,
+                                true);
+                        if (snippet == null) {
+                            logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
+                            break;
+                        }
+                        attempt++;
+                        continue;
+                    }
                 }
             } else {
                 logger.info("Compilation disabled via configuration; skipping compile step.");
@@ -266,6 +287,22 @@ public class InitialGenerationStep {
                             lastCompileResult,
                             lastExecuteResult);
                     logReasoningResponse("execute", reasoningResponse);
+                    if (reasoningResponse != null) {
+                        actionExecutor.execute(reasoningResponse.getAction());
+                        try {
+                            lastCompileResult = fixingOrchestrator.runFixingLoop();
+                        } catch (FixingFailureException exception) {
+                            logger.error("Reasoning loop failed during execution fixes: " + exception.getMessage(), exception);
+                            lastCompileResult = exception.getLastResult();
+                        }
+                        if (lastCompileResult != null && lastCompileResult.success()) {
+                            lastExecuteResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
+                            if (lastExecuteResult.success()) {
+                                success = true;
+                                break;
+                            }
+                        }
+                    }
                     revertMerge(classInfo, mergeResult);
                     repairContext = buildRepairContext(repairContext,
                             lastCompileResult,
@@ -430,6 +467,37 @@ public class InitialGenerationStep {
             }
         }
         hints.put(hint);
+    }
+
+    private ToolActionExecutor createActionExecutor(AgentConfig config,
+                                                    TestClassInfo classInfo,
+                                                    BuildFileEditor buildFileEditor,
+                                                    SourceFileEditor sourceFileEditor,
+                                                    GeneratedTestSnippet snippet) {
+        return new ToolActionExecutor(logger,
+                buildFileEditor,
+                sourceFileEditor,
+                compilerInvoker,
+                executionInvoker,
+                config.getProjectPath(),
+                classInfo.getTargetPath(),
+                snippet.methodName());
+    }
+
+    private CompilationPipelineOrchestrator createFixingOrchestrator(AgentConfig config,
+                                                                     TestClassInfo classInfo,
+                                                                     ProjectContextCollector projectContextCollector,
+                                                                     ToolActionExecutor actionExecutor,
+                                                                     GeneratedTestSnippet snippet) {
+        return new CompilationPipelineOrchestrator(compilerInvoker,
+                reasoningWorkflow,
+                projectContextCollector,
+                actionExecutor,
+                logger,
+                config.getProjectPath(),
+                classInfo.getTargetPath(),
+                classInfo.getTestClassName(),
+                snippet.methodName());
     }
 
     private JSONObject buildRepairContext(JSONObject baseContext,
