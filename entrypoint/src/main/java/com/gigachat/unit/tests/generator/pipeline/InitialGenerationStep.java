@@ -35,6 +35,10 @@ import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParse
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
 import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
 import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
+import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
+import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -85,6 +89,7 @@ public class InitialGenerationStep {
     private final AutoCorrectionStage autoCorrectionStage;
     private final ExecutionFailureLogParser executionFailureLogParser;
     private final ExecutionReportParser executionReportParser;
+    private final ReasoningWorkflow reasoningWorkflow;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -96,7 +101,8 @@ public class InitialGenerationStep {
                                  CompilerInvoker compilerInvoker,
                                  ExecutionInvoker executionInvoker,
                                  SnapshotStorage snapshotStorage,
-                                 MethodSignatureRegistry signatureRegistry) {
+                                 MethodSignatureRegistry signatureRegistry,
+                                 ReasoningWorkflow reasoningWorkflow) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.testClassWriter = Objects.requireNonNull(testClassWriter, "testClassWriter");
         this.skeletonPromptBuilder = Objects.requireNonNull(skeletonPromptBuilder, "skeletonPromptBuilder");
@@ -112,6 +118,7 @@ public class InitialGenerationStep {
         this.autoCorrectionStage = new AutoCorrectionStage();
         this.executionFailureLogParser = new ExecutionFailureLogParser();
         this.executionReportParser = new ExecutionReportParser();
+        this.reasoningWorkflow = Objects.requireNonNull(reasoningWorkflow, "reasoningWorkflow");
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -208,6 +215,12 @@ public class InitialGenerationStep {
                             lastCompileResult.messages(),
                             lastCompileResult.stdout(),
                             lastCompileResult.stderr()));
+                    ReasoningResponse reasoningResponse = triggerReasoningWorkflow(config,
+                            classInfo,
+                            methodInfo,
+                            lastCompileResult,
+                            null);
+                    logReasoningResponse("compile", reasoningResponse);
                     revertMerge(classInfo, mergeResult);
                     repairContext = buildRepairContext(repairContext,
                             lastCompileResult,
@@ -247,6 +260,12 @@ public class InitialGenerationStep {
                             lastExecuteResult.stderr()));
                     lastFailureParseResult = parseExecutionLog(lastExecuteResult);
                     lastReportFailures = parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
+                    ReasoningResponse reasoningResponse = triggerReasoningWorkflow(config,
+                            classInfo,
+                            methodInfo,
+                            lastCompileResult,
+                            lastExecuteResult);
+                    logReasoningResponse("execute", reasoningResponse);
                     revertMerge(classInfo, mergeResult);
                     repairContext = buildRepairContext(repairContext,
                             lastCompileResult,
@@ -473,6 +492,80 @@ public class InitialGenerationStep {
             repair.put("diagnostics", diagnostics);
         }
         return nextContext;
+    }
+
+    private ReasoningResponse triggerReasoningWorkflow(AgentConfig config,
+                                                       TestClassInfo classInfo,
+                                                       TestMethodInfo methodInfo,
+                                                       CompileResult compileResult,
+                                                       ExecuteResult executeResult) {
+        try {
+            CompilationErrorInfo errorInfo = compileResult != null
+                    ? buildCompilationErrorInfo(compileResult, classInfo)
+                    : buildExecutionErrorInfo(executeResult, classInfo, methodInfo);
+            ProjectContextSummary summary = buildProjectContextSummary(config, classInfo);
+            return reasoningWorkflow.process(errorInfo, summary);
+        } catch (Exception exception) {
+            logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
+                    + ": " + exception.getMessage(), exception);
+            return null;
+        }
+    }
+
+    private CompilationErrorInfo buildCompilationErrorInfo(CompileResult compileResult, TestClassInfo classInfo) {
+        String primaryMessage = compileResult.messages().isEmpty()
+                ? compileResult.stderr()
+                : compileResult.messages().get(0);
+        String compilerOutput = (compileResult.stdout() + System.lineSeparator() + compileResult.stderr()).trim();
+        if (compilerOutput.isBlank()) {
+            compilerOutput = String.join(System.lineSeparator(), compileResult.messages());
+        }
+        return new CompilationErrorInfo(
+                compilerOutput,
+                primaryMessage,
+                classInfo.getTestClassName(),
+                classInfo.getTargetPath().toString(),
+                null,
+                null
+        );
+    }
+
+    private CompilationErrorInfo buildExecutionErrorInfo(ExecuteResult executeResult,
+                                                         TestClassInfo classInfo,
+                                                         TestMethodInfo methodInfo) {
+        String primaryMessage = executeResult.failedTests().isEmpty()
+                ? executeResult.stderr()
+                : executeResult.failedTests().get(0);
+        String output = (executeResult.stdout() + System.lineSeparator() + executeResult.stderr()).trim();
+        if (output.isBlank()) {
+            output = "Execution failed for " + methodInfo.getSignature();
+        }
+        return new CompilationErrorInfo(
+                output,
+                primaryMessage,
+                classInfo.getTestClassName(),
+                classInfo.getTargetPath().toString(),
+                null,
+                null
+        );
+    }
+
+    private ProjectContextSummary buildProjectContextSummary(AgentConfig config, TestClassInfo classInfo) {
+        Path projectRoot = config.getProjectPath();
+        Path testDirectory = classInfo.getTargetPath().getParent();
+        List<String> sourceRoots = List.of(projectRoot.resolve("src/main/java").toString());
+        List<String> testSourceRoots = testDirectory == null
+                ? List.of()
+                : List.of(testDirectory.toString());
+        return new ProjectContextSummary(sourceRoots, testSourceRoots, List.of());
+    }
+
+    private void logReasoningResponse(String stage, ReasoningResponse response) {
+        if (response == null) {
+            logger.warn("Reasoning workflow returned no response for " + stage + " failure.");
+            return;
+        }
+        logger.info("Reasoning workflow result for " + stage + " failure: " + response);
     }
 
     private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
