@@ -181,7 +181,7 @@ public class ToolActionExecutor {
                     .filter(path -> Files.isRegularFile(path) && path.toString().endsWith(".java"))
                     .forEach(path -> matches.addAll(searchInFile(path, symbol)));
         } catch (IOException ignored) {
-            return ActionExecutionResult.empty();
+            // ignore and return any matches gathered so far
         }
         Map<String, Object> payload = new HashMap<>();
         payload.put("symbolSearchResults", matches);
@@ -220,16 +220,20 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleRunTests() {
-        if (executionInvoker == null) {
-            return ActionExecutionResult.empty();
-        }
-        ExecuteResult executeResult = executionInvoker.execute(projectRoot, testFile, methodName);
         Map<String, Object> payload = new HashMap<>();
         Map<String, Object> detail = new HashMap<>();
-        detail.put("success", executeResult.success());
-        detail.put("stdout", executeResult.stdout());
-        detail.put("stderr", executeResult.stderr());
-        detail.put("stacktrace", executeResult.failedTests().stream().collect(Collectors.joining("\n")));
+        if (executionInvoker == null) {
+            detail.put("success", false);
+            detail.put("stdout", "");
+            detail.put("stderr", "Execution invoker is not configured");
+            detail.put("stacktrace", "");
+        } else {
+            ExecuteResult executeResult = executionInvoker.execute(projectRoot, testFile, methodName);
+            detail.put("success", executeResult.success());
+            detail.put("stdout", executeResult.stdout());
+            detail.put("stderr", executeResult.stderr());
+            detail.put("stacktrace", executeResult.failedTests().stream().collect(Collectors.joining("\n")));
+        }
         payload.put("testResult", detail);
         return new ActionExecutionResult(payload);
     }

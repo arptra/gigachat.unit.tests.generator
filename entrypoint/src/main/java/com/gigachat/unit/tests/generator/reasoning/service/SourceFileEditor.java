@@ -77,7 +77,8 @@ public class SourceFileEditor {
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String trimmed = line.trim();
                 if (trimmed.startsWith("import ")) {
-                    imports.add(trimmed.replace("import ", "").replace(";", "").trim());
+                    String formatted = trimmed.endsWith(";") ? trimmed : trimmed + ";";
+                    imports.add(formatted);
                 }
             }
             return imports;
