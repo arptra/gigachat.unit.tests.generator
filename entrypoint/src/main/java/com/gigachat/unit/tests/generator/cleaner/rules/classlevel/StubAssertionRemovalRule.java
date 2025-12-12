@@ -1,7 +1,7 @@
-package com.gigachat.unit.tests.generator.cleaner.rules;
+package com.gigachat.unit.tests.generator.cleaner.rules.classlevel;
 
-import com.gigachat.unit.tests.generator.cleaner.CleanerRule;
 import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
+import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.api.TestClassCleanerRule;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.BooleanLiteralExpr;
@@ -17,7 +17,7 @@ import java.util.List;
  * Removes test methods that only contain placeholder assertions such as {@code assertTrue(true)}
  * or {@code assertEquals(true, true)}.
  */
-public final class StubAssertionRemovalRule implements CleanerRule {
+public final class StubAssertionRemovalRule implements TestClassCleanerRule {
     @Override
     public boolean apply(TestFileContext context) throws IOException {
         CompilationUnit unit = context.getCompilationUnit().orElse(null);

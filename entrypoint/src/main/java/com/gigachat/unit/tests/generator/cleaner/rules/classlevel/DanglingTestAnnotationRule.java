@@ -1,7 +1,7 @@
-package com.gigachat.unit.tests.generator.cleaner.rules;
+package com.gigachat.unit.tests.generator.cleaner.rules.classlevel;
 
-import com.gigachat.unit.tests.generator.cleaner.CleanerRule;
 import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
+import com.gigachat.unit.tests.generator.cleaner.rules.classlevel.api.TestClassCleanerRule;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -11,7 +11,7 @@ import java.util.List;
  * Removes stray {@code @Test} annotations that are not followed by a declaration. These
  * often appear after interrupted merges or partially generated files.
  */
-public final class DanglingTestAnnotationRule implements CleanerRule {
+public final class DanglingTestAnnotationRule implements TestClassCleanerRule {
     @Override
     public boolean apply(TestFileContext context) throws IOException {
         String source = context.getSource();
