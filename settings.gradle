@@ -6,3 +6,4 @@ plugins {
 rootProject.name = 'gigachat.unit.tests.generator'
 include 'entrypoint'
 include 'example-project'
+include 'import-analyzer-core'
