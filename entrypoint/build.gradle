@@ -6,6 +6,7 @@ dependencies {
     implementation libs.javaparser
     implementation libs.json
     implementation libs.gigachat
+    implementation libs.jackson.databind
 
     testImplementation libs.junit
     testRuntimeOnly libs.junit.platform.launcher

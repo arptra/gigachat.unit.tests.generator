@@ -1,0 +1,50 @@
+package com.gigachat.unit.tests.generator.reasoning.service;
+
+import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
+import com.gigachat.unit.tests.generator.dto.MockPlan;
+import com.gigachat.unit.tests.generator.dto.MockStrategy;
+import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
+import com.gigachat.unit.tests.generator.llm.LlmClient;
+import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
+import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
+
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.Objects;
+
+public class CompilationReasoningService {
+
+    private final LlmClient llmClient;
+    private final CompilationReasoningPromptBuilder promptBuilder;
+    private final ReasoningResponseParser parser;
+
+    public CompilationReasoningService(LlmClient llmClient,
+                                       CompilationReasoningPromptBuilder promptBuilder,
+                                       ReasoningResponseParser parser) {
+        this.llmClient = Objects.requireNonNull(llmClient, "llmClient");
+        this.promptBuilder = Objects.requireNonNull(promptBuilder, "promptBuilder");
+        this.parser = Objects.requireNonNull(parser, "parser");
+    }
+
+    public ReasoningResponse reasonAboutError(CompilationErrorInfo errorInfo,
+                                              ProjectContextSummary contextSummary) {
+        String prompt = promptBuilder.buildPrompt(errorInfo, contextSummary);
+
+        TestClassInfo classInfo = new TestClassInfo(
+                "ReasoningPlaceholder",
+                "ReasoningPlaceholderTest",
+                Paths.get("."),
+                List.of(),
+                List.of()
+        );
+        TestMethodInfo methodInfo = new TestMethodInfo("reason()", "void", "");
+        MockPlan mockPlan = new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of());
+
+        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, mockPlan);
+        String raw = snippet == null ? "" : snippet.methodBody();
+        return parser.parse(raw);
+    }
+}
