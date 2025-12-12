@@ -31,6 +31,10 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
+import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
+import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -79,6 +83,8 @@ public class InitialGenerationStep {
     private final ExternalCollaboratorDetector collaboratorDetector;
     private final MethodSignatureRegistry signatureRegistry;
     private final AutoCorrectionStage autoCorrectionStage;
+    private final ExecutionFailureLogParser executionFailureLogParser;
+    private final ExecutionReportParser executionReportParser;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -104,6 +110,8 @@ public class InitialGenerationStep {
         this.collaboratorDetector = new ExternalCollaboratorDetector();
         this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
         this.autoCorrectionStage = new AutoCorrectionStage();
+        this.executionFailureLogParser = new ExecutionFailureLogParser();
+        this.executionReportParser = new ExecutionReportParser();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -161,56 +169,122 @@ public class InitialGenerationStep {
         MockPlan plan = analysisSummary.mockPlan();
         String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
         JSONObject contextJson = toJsonObject(promptJson, methodInfo);
-        GeneratedTestSnippet snippet;
         logger.info("-> DEBUG info about tested method \n" + methodInfo);
-        try {
-            snippet = generateSnippetWithRetry(config,
-                    classInfo,
-                    methodInfo,
-                    skeletonPrompt,
-                    plan,
-                    contextJson,
-                    analysisSummary,
-                    moduleConfig);
-        } catch (InvalidLLMResponseException exception) {
-            logger.info("Skipping method " + methodInfo.getSignature() + " due to invalid LLM response: " + exception.getMessage());
+        GeneratedTestSnippet snippet = requestSnippetSimple(config,
+                classInfo,
+                methodInfo,
+                plan,
+                contextJson,
+                analysisSummary,
+                moduleConfig,
+                false);
+        if (snippet == null) {
+            logger.warn("LLM did not return a snippet for method " + methodInfo.getSignature());
             return;
         }
-        DiffEngine.MergeResult mergeResult = diffEngine.merge(classInfo, snippet);
-        if (!mergeResult.changed()) {
-            logger.warn("Merge step did not change target class for method " + snippet.methodName());
+
+        boolean success = false;
+        int attempt = 0;
+        int maxAttempts = 5;
+        JSONObject repairContext = contextJson;
+        DiffEngine.MergeResult mergeResult = null;
+        CompileResult lastCompileResult = null;
+        ExecuteResult lastExecuteResult = null;
+        ExecutionFailureParseResult lastFailureParseResult = null;
+        List<TestReportFailure> lastReportFailures = List.of();
+
+        while (attempt < maxAttempts) {
+            mergeResult = diffEngine.merge(classInfo, snippet);
+            if (!mergeResult.changed()) {
+                logger.warn("Merge step did not change target class for method " + snippet.methodName());
+                break;
+            }
+            if (moduleConfig.compileEnabled()) {
+                lastCompileResult = compilerInvoker.compile(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
+                if (!lastCompileResult.success()) {
+                    logger.warn("Compilation failed for method " + snippet.methodName());
+                    report.addCompileErrors(new CompileErrors(classInfo.getTargetPath(),
+                            snippet.methodName(),
+                            lastCompileResult.messages(),
+                            lastCompileResult.stdout(),
+                            lastCompileResult.stderr()));
+                    revertMerge(classInfo, mergeResult);
+                    repairContext = buildRepairContext(repairContext,
+                            lastCompileResult,
+                            null,
+                            null,
+                            List.of(),
+                            snippet,
+                            attempt + 1);
+                    snippet = requestSnippetSimple(config,
+                            classInfo,
+                            methodInfo,
+                            plan,
+                            repairContext,
+                            analysisSummary,
+                            moduleConfig,
+                            true);
+                    if (snippet == null) {
+                        logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
+                        break;
+                    }
+                    attempt++;
+                    continue;
+                }
+            } else {
+                logger.info("Compilation disabled via configuration; skipping compile step.");
+                lastCompileResult = new CompileResult(true, List.of(), "", "");
+            }
+
+            if (moduleConfig.executeEnabled()) {
+                lastExecuteResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
+                if (!lastExecuteResult.success()) {
+                    logger.warn("Execution failed for method " + snippet.methodName());
+                    report.addExecuteErrors(new ExecuteErrors(classInfo.getTargetPath(),
+                            snippet.methodName(),
+                            lastExecuteResult.failedTests(),
+                            lastExecuteResult.stdout(),
+                            lastExecuteResult.stderr()));
+                    lastFailureParseResult = parseExecutionLog(lastExecuteResult);
+                    lastReportFailures = parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
+                    revertMerge(classInfo, mergeResult);
+                    repairContext = buildRepairContext(repairContext,
+                            lastCompileResult,
+                            lastExecuteResult,
+                            lastFailureParseResult,
+                            lastReportFailures,
+                            snippet,
+                            attempt + 1);
+                    snippet = requestSnippetSimple(config,
+                            classInfo,
+                            methodInfo,
+                            plan,
+                            repairContext,
+                            analysisSummary,
+                            moduleConfig,
+                            true);
+                    if (snippet == null) {
+                        logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
+                        break;
+                    }
+                    attempt++;
+                    continue;
+                }
+            } else {
+                logger.info("Execution disabled via configuration; skipping execution step.");
+                lastExecuteResult = new ExecuteResult(true, List.of(), "", "");
+            }
+            success = true;
+            break;
+        }
+
+        if (!success) {
+            if (mergeResult != null) {
+                handleFailure(classInfo, snippet, mergeResult, moduleConfig, "Compilation/Execution failure");
+            }
             return;
         }
-        if (moduleConfig.compileEnabled()) {
-            CompileResult compileResult = compilerInvoker.compile(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
-            if (!compileResult.success()) {
-                logger.warn("Compilation failed for method " + snippet.methodName());
-                report.addCompileErrors(new CompileErrors(classInfo.getTargetPath(),
-                        snippet.methodName(),
-                        compileResult.messages(),
-                        compileResult.stdout(),
-                        compileResult.stderr()));
-                handleFailure(classInfo, snippet, mergeResult, moduleConfig, "Compilation failure");
-                return;
-            }
-        } else {
-            logger.info("Compilation disabled via configuration; skipping compile step.");
-        }
-        if (moduleConfig.executeEnabled()) {
-            ExecuteResult executeResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
-            if (!executeResult.success()) {
-                logger.warn("Execution failed for method " + snippet.methodName());
-                report.addExecuteErrors(new ExecuteErrors(classInfo.getTargetPath(),
-                        snippet.methodName(),
-                        executeResult.failedTests(),
-                        executeResult.stdout(),
-                        executeResult.stderr()));
-                handleFailure(classInfo, snippet, mergeResult, moduleConfig, "Execution failure");
-                return;
-            }
-        } else {
-            logger.info("Execution disabled via configuration; skipping execution step.");
-        }
+
         logger.info("Generation pipeline completed successfully for method " + snippet.methodName());
     }
 
@@ -293,6 +367,23 @@ public class InitialGenerationStep {
         return snippet;
     }
 
+    private GeneratedTestSnippet requestSnippetSimple(AgentConfig config,
+                                                      TestClassInfo classInfo,
+                                                      TestMethodInfo methodInfo,
+                                                      MockPlan plan,
+                                                      JSONObject contextJson,
+                                                      Analyze.AnalysisSummary analysisSummary,
+                                                      PipelineModuleConfig moduleConfig,
+                                                      boolean retryAttempt) {
+        String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
+        logger.info("-> DEBUG LOG Request to gigachat \n" + llmPrompt);
+        logger.info("Prepared LLM prompt for method " + methodInfo.getSignature()
+                + (retryAttempt ? " [retry]" : ""));
+        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
+        logger.info("Response from gigachat " + snippet);
+        return autoCorrectionStage.apply(snippet);
+    }
+
     private boolean shouldRetry(InvalidLLMResponseException exception) {
         if (exception == null) {
             return false;
@@ -320,6 +411,90 @@ public class InitialGenerationStep {
             }
         }
         hints.put(hint);
+    }
+
+    private JSONObject buildRepairContext(JSONObject baseContext,
+                                          CompileResult compileResult,
+                                          ExecuteResult executeResult,
+                                          ExecutionFailureParseResult failureParseResult,
+                                          List<TestReportFailure> reportFailures,
+                                          GeneratedTestSnippet snippet,
+                                          int attempt) {
+        JSONObject nextContext = baseContext == null ? new JSONObject() : new JSONObject(baseContext.toString());
+        JSONObject repair = nextContext.optJSONObject("repair");
+        if (repair == null) {
+            repair = new JSONObject();
+            nextContext.put("repair", repair);
+        }
+        repair.put("attempt", attempt);
+        repair.put("chainOfThought", "Use chain-of-thought reasoning to iteratively fix compilation and execution issues.");
+        if (snippet != null) {
+            repair.put("previousSnippet", snippet.methodBody());
+        }
+        JSONArray diagnostics = new JSONArray();
+        if (compileResult != null) {
+            JSONObject compileBlock = new JSONObject();
+            compileBlock.put("stage", "compile");
+            compileBlock.put("messages", new JSONArray(compileResult.messages()));
+            compileBlock.put("stdout", compileResult.stdout());
+            compileBlock.put("stderr", compileResult.stderr());
+            diagnostics.put(compileBlock);
+        }
+        if (executeResult != null) {
+            JSONObject executeBlock = new JSONObject();
+            executeBlock.put("stage", "execute");
+            JSONArray messages = new JSONArray(executeResult.failedTests());
+            if (failureParseResult != null && !failureParseResult.failures().isEmpty()) {
+                JSONArray parsedFailures = new JSONArray();
+                failureParseResult.failures().forEach(failure -> parsedFailures.put(failure.className() + "." + failure.methodName()));
+                executeBlock.put("parsedFailures", parsedFailures);
+                for (int i = 0; i < parsedFailures.length(); i++) {
+                    messages.put(parsedFailures.get(i));
+                }
+            }
+            if (reportFailures != null && !reportFailures.isEmpty()) {
+                JSONArray reports = new JSONArray();
+                for (TestReportFailure reportFailure : reportFailures) {
+                    JSONObject detail = new JSONObject();
+                    detail.put("class", reportFailure.className());
+                    detail.put("method", reportFailure.methodName());
+                    detail.put("message", reportFailure.message());
+                    detail.put("stackTrace", new JSONArray(reportFailure.stackTrace()));
+                    reports.put(detail);
+                }
+                executeBlock.put("reportFailures", reports);
+            }
+            executeBlock.put("messages", messages);
+            executeBlock.put("stdout", executeResult.stdout());
+            executeBlock.put("stderr", executeResult.stderr());
+            diagnostics.put(executeBlock);
+        }
+        if (diagnostics.length() > 0) {
+            repair.put("diagnostics", diagnostics);
+        }
+        return nextContext;
+    }
+
+    private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
+        if (executeResult == null) {
+            return new ExecutionFailureParseResult(List.of(), Optional.empty());
+        }
+        String combined = (executeResult.stdout() + System.lineSeparator() + executeResult.stderr()).trim();
+        return executionFailureLogParser.parse(combined);
+    }
+
+    private List<TestReportFailure> parseExecutionReport(Path projectRoot, ExecutionFailureParseResult parseResult) {
+        if (parseResult == null || parseResult.reportPath().isEmpty()) {
+            return List.of();
+        }
+        Path reportPath = parseResult.reportPath().get();
+        Path resolved = reportPath.isAbsolute() ? reportPath : projectRoot.resolve(reportPath);
+        try {
+            return executionReportParser.parse(resolved);
+        } catch (Exception exception) {
+            logger.warn("Failed to parse execution report at " + resolved + ": " + exception.getMessage());
+            return List.of();
+        }
     }
 
     private void handleFailure(TestClassInfo classInfo,
