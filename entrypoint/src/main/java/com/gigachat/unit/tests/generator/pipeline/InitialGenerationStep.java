@@ -35,9 +35,12 @@ import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParse
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
 import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
 import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
+import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
 import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
@@ -196,9 +199,9 @@ public class InitialGenerationStep {
             return;
         }
 
-        ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath(), logger);
-        SourceFileEditor sourceFileEditor = new SourceFileEditor(logger);
-        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath(), logger);
+        ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath());
+        SourceFileEditor sourceFileEditor = new SourceFileEditor();
+        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath());
         boolean success = false;
         int attempt = 0;
         int maxAttempts = 5;
@@ -474,13 +477,13 @@ public class InitialGenerationStep {
                                                     BuildFileEditor buildFileEditor,
                                                     SourceFileEditor sourceFileEditor,
                                                     GeneratedTestSnippet snippet) {
-        return new ToolActionExecutor(logger,
-                buildFileEditor,
+        return new ToolActionExecutor(buildFileEditor,
                 sourceFileEditor,
                 compilerInvoker,
                 executionInvoker,
                 config.getProjectPath(),
                 classInfo.getTargetPath(),
+                classInfo.getTestClassName(),
                 snippet.methodName());
     }
 
@@ -493,7 +496,6 @@ public class InitialGenerationStep {
                 reasoningWorkflow,
                 projectContextCollector,
                 actionExecutor,
-                logger,
                 config.getProjectPath(),
                 classInfo.getTargetPath(),
                 classInfo.getTestClassName(),
@@ -572,7 +574,9 @@ public class InitialGenerationStep {
                     ? buildCompilationErrorInfo(compileResult, classInfo)
                     : buildExecutionErrorInfo(executeResult, classInfo, methodInfo);
             ProjectContextSummary summary = buildProjectContextSummary(config, classInfo);
-            return reasoningWorkflow.process(errorInfo, summary);
+            ReasoningLoopContext loopContext = new NextContextBuilder()
+                    .build(errorInfo, summary, ActionExecutionResult.empty());
+            return reasoningWorkflow.process(loopContext);
         } catch (Exception exception) {
             logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
                     + ": " + exception.getMessage(), exception);

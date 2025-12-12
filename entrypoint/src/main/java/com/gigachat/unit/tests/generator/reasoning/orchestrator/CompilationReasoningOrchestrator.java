@@ -1,7 +1,6 @@
 package com.gigachat.unit.tests.generator.reasoning.orchestrator;
 
-import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
-import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.service.CompilationReasoningService;
 
@@ -15,7 +14,7 @@ public class CompilationReasoningOrchestrator {
         this.service = Objects.requireNonNull(service, "service");
     }
 
-    public ReasoningResponse handle(CompilationErrorInfo errorInfo, ProjectContextSummary summary) {
-        return service.reasonAboutError(errorInfo, summary);
+    public ReasoningResponse handle(ReasoningLoopContext loopContext) {
+        return service.reasonAboutError(loopContext);
     }
 }

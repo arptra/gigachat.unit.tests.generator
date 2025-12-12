@@ -1,6 +1,5 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
-import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
 
 import java.io.IOException;
@@ -20,11 +19,9 @@ public class ProjectContextCollector {
     private static final Pattern DEPENDENCY_PATTERN = Pattern.compile("(testImplementation|implementation)\\s*\\(\\\"(?<dep>[^\\\"]+)\\\"\\)");
 
     private final Path projectRoot;
-    private final PipelineLogger logger;
 
-    public ProjectContextCollector(Path projectRoot, PipelineLogger logger) {
+    public ProjectContextCollector(Path projectRoot) {
         this.projectRoot = projectRoot;
-        this.logger = logger;
     }
 
     /**
@@ -62,7 +59,7 @@ public class ProjectContextCollector {
                 }
             }
         } catch (IOException exception) {
-            logger.error("Failed to read project dependencies: " + exception.getMessage(), exception);
+            return List.of();
         }
         return dependencies;
     }

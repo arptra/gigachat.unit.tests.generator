@@ -2,9 +2,11 @@ package com.gigachat.unit.tests.generator.reasoning.prompt;
 
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -27,7 +29,7 @@ class CompilationReasoningPromptBuilderTest {
         );
 
         CompilationReasoningPromptBuilder builder = new CompilationReasoningPromptBuilder();
-        String prompt = builder.buildPrompt(errorInfo, summary);
+        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, Map.of("hint", "value")));
 
         assertTrue(prompt.contains("reasoning agent"));
         assertTrue(prompt.contains("Allowed tools"));

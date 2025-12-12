@@ -7,6 +7,7 @@ import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionStep;
@@ -36,7 +37,7 @@ class CompilationReasoningOrchestratorTest {
         );
         CompilationReasoningOrchestrator orchestrator = new CompilationReasoningOrchestrator(service);
 
-        ReasoningResponse response = orchestrator.handle(new CompilationErrorInfo(), new ProjectContextSummary());
+        ReasoningResponse response = orchestrator.handle(new ReasoningLoopContext(new CompilationErrorInfo(), new ProjectContextSummary(), Map.of()));
         ReasoningResponse expected = new ReasoningResponse(
                 List.of("a"),
                 new ToolAction(ToolActionType.RECOMPILE, List.of(), new ToolActionStep(ToolActionType.RECOMPILE, Map.of()))

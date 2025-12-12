@@ -1,7 +1,5 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
-import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,35 +18,32 @@ public class SourceFileEditor {
 
     private static final Pattern HUNK_HEADER = Pattern.compile("@@ -(?<start1>\\d+)(,(?<count1>\\d+))? +\\+(?<start2>\\d+)(,(?<count2>\\d+))? @@");
 
-    private final PipelineLogger logger;
-
-    public SourceFileEditor(PipelineLogger logger) {
-        this.logger = logger;
+    public SourceFileEditor() {
     }
 
-    public void applyPatch(Path file, String patchContent) {
+    public String applyPatch(Path file, String patchContent) {
         if (file == null || patchContent == null || patchContent.isBlank()) {
-            return;
+            return "";
         }
         try {
             String original = Files.readString(file, StandardCharsets.UTF_8);
             String updated = applyUnifiedPatch(original, patchContent);
             Files.writeString(file, updated, StandardCharsets.UTF_8);
-            logger.info("Applied patch to " + file);
+            return updated;
         } catch (IOException | IllegalArgumentException exception) {
-            logger.error("Failed to apply patch to " + file + ": " + exception.getMessage(), exception);
+            return "";
         }
     }
 
-    public void addImport(Path file, String importFqcn) {
+    public String addImport(Path file, String importFqcn) {
         Objects.requireNonNull(file, "file");
         if (importFqcn == null || importFqcn.isBlank()) {
-            return;
+            return "";
         }
         try {
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
             if (lines.stream().anyMatch(line -> line.contains("import " + importFqcn))) {
-                return;
+                return String.join("\n", lines);
             }
             int insertIndex = 0;
             for (int i = 0; i < lines.size(); i++) {
@@ -62,9 +57,9 @@ public class SourceFileEditor {
             }
             lines.add(insertIndex, "import " + importFqcn + ";");
             Files.write(file, lines, StandardCharsets.UTF_8);
-            logger.info("Added import " + importFqcn + " to " + file);
+            return String.join("\n", lines);
         } catch (IOException exception) {
-            logger.error("Failed to add import to " + file + ": " + exception.getMessage(), exception);
+            return "";
         }
     }
 
@@ -72,7 +67,6 @@ public class SourceFileEditor {
         try {
             return Files.readString(file, StandardCharsets.UTF_8);
         } catch (IOException exception) {
-            logger.error("Failed to read file " + file + ": " + exception.getMessage(), exception);
             return "";
         }
     }
@@ -88,7 +82,6 @@ public class SourceFileEditor {
             }
             return imports;
         } catch (IOException exception) {
-            logger.error("Failed to read imports from " + file + ": " + exception.getMessage(), exception);
             return List.of();
         }
     }

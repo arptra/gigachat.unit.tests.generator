@@ -3,8 +3,7 @@ package com.gigachat.unit.tests.generator.reasoning.prompt;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
-import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
-import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 
 import java.util.Arrays;
@@ -19,8 +18,10 @@ public class CompilationReasoningPromptBuilder {
         this.writer = mapper.writerWithDefaultPrettyPrinter();
     }
 
-    public String buildPrompt(CompilationErrorInfo errorInfo,
-                              ProjectContextSummary contextSummary) {
+    public String buildPrompt(ReasoningLoopContext loopContext) {
+        if (loopContext == null) {
+            throw new IllegalArgumentException("loopContext");
+        }
         StringBuilder prompt = new StringBuilder();
         prompt.append("You are a reasoning agent that debugs compilation failures for generated tests.\n");
         prompt.append("Think step-by-step (chain-of-thought) before choosing actions.\n\n");
@@ -42,9 +43,13 @@ public class CompilationReasoningPromptBuilder {
                 .append("}\n\n");
 
         prompt.append("Compilation error info (JSON):\n");
-        prompt.append(asJson(errorInfo)).append("\n\n");
+        prompt.append(asJson(loopContext.getErrorInfo())).append("\n\n");
         prompt.append("Project context summary (JSON):\n");
-        prompt.append(asJson(contextSummary)).append("\n");
+        prompt.append(asJson(loopContext.getProjectContextSummary())).append("\n\n");
+        if (!loopContext.getActionContext().isEmpty()) {
+            prompt.append("Previous tool actions and results (JSON):\n");
+            prompt.append(asJson(loopContext.getActionContext())).append("\n");
+        }
 
         return prompt.toString();
     }

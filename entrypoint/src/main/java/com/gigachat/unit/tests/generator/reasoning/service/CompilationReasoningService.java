@@ -6,8 +6,7 @@ import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
-import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
-import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
 
@@ -29,9 +28,8 @@ public class CompilationReasoningService {
         this.parser = Objects.requireNonNull(parser, "parser");
     }
 
-    public ReasoningResponse reasonAboutError(CompilationErrorInfo errorInfo,
-                                              ProjectContextSummary contextSummary) {
-        String prompt = promptBuilder.buildPrompt(errorInfo, contextSummary);
+    public ReasoningResponse reasonAboutError(ReasoningLoopContext loopContext) {
+        String prompt = promptBuilder.buildPrompt(loopContext);
 
         TestClassInfo classInfo = new TestClassInfo(
                 "ReasoningPlaceholder",

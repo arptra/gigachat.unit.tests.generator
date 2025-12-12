@@ -1,11 +1,10 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
-import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -15,46 +14,42 @@ import java.util.List;
 public class BuildFileEditor {
 
     private final Path projectRoot;
-    private final PipelineLogger logger;
 
-    public BuildFileEditor(Path projectRoot, PipelineLogger logger) {
+    public BuildFileEditor(Path projectRoot) {
         this.projectRoot = projectRoot;
-        this.logger = logger;
     }
 
     /**
-     * Adds a {@code testImplementation} dependency if it is not already present.
+     * Adds a {@code testImplementation} dependency if it is not already present and returns the updated dependency list.
      *
      * @param dependencyNotation dependency notation, e.g. {@code "org.junit.jupiter:junit-jupiter-api:5.10.0"}
+     * @return list of declared dependencies after the update
      */
-    public void addTestDependency(String dependencyNotation) {
+    public List<String> addTestDependency(String dependencyNotation) {
         if (dependencyNotation == null || dependencyNotation.isBlank()) {
-            return;
+            return List.of();
         }
         Path buildFile = projectRoot.resolve("build.gradle");
         if (!Files.exists(buildFile)) {
-            logger.warn("build.gradle not found at " + buildFile);
-            return;
+            return List.of();
         }
         try {
             List<String> lines = Files.readAllLines(buildFile, StandardCharsets.UTF_8);
             String dependencyLine = String.format("    testImplementation(\"%s\")", dependencyNotation.trim());
-            if (lines.stream().anyMatch(line -> line.contains(dependencyNotation))) {
-                logger.info("Dependency already declared: " + dependencyNotation);
-                return;
+            if (lines.stream().noneMatch(line -> line.contains(dependencyNotation))) {
+                int dependenciesIndex = findDependenciesBlock(lines);
+                if (dependenciesIndex == -1) {
+                    lines.add("dependencies {");
+                    lines.add(dependencyLine);
+                    lines.add("}");
+                } else {
+                    lines.add(dependenciesIndex + 1, dependencyLine);
+                }
+                Files.write(buildFile, lines, StandardCharsets.UTF_8);
             }
-            int dependenciesIndex = findDependenciesBlock(lines);
-            if (dependenciesIndex == -1) {
-                lines.add("dependencies {");
-                lines.add(dependencyLine);
-                lines.add("}");
-            } else {
-                lines.add(dependenciesIndex + 1, dependencyLine);
-            }
-            Files.write(buildFile, lines, StandardCharsets.UTF_8);
-            logger.info("Added test dependency: " + dependencyNotation);
+            return readDeclaredDependencies(lines);
         } catch (IOException exception) {
-            logger.error("Failed to update build.gradle: " + exception.getMessage(), exception);
+            return List.of();
         }
     }
 
@@ -65,6 +60,21 @@ public class BuildFileEditor {
             }
         }
         return -1;
+    }
+
+    private List<String> readDeclaredDependencies(List<String> lines) {
+        List<String> dependencies = new ArrayList<>();
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("testImplementation(") || trimmed.startsWith("implementation(")) {
+                int start = trimmed.indexOf('"');
+                int end = trimmed.lastIndexOf('"');
+                if (start >= 0 && end > start) {
+                    dependencies.add(trimmed.substring(start + 1, end));
+                }
+            }
+        }
+        return dependencies;
     }
 }
 
