@@ -31,6 +31,10 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
+import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
+import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
+import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -79,6 +83,8 @@ public class InitialGenerationStep {
     private final ExternalCollaboratorDetector collaboratorDetector;
     private final MethodSignatureRegistry signatureRegistry;
     private final AutoCorrectionStage autoCorrectionStage;
+    private final ExecutionFailureLogParser executionFailureLogParser;
+    private final ExecutionReportParser executionReportParser;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -104,6 +110,8 @@ public class InitialGenerationStep {
         this.collaboratorDetector = new ExternalCollaboratorDetector();
         this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
         this.autoCorrectionStage = new AutoCorrectionStage();
+        this.executionFailureLogParser = new ExecutionFailureLogParser();
+        this.executionReportParser = new ExecutionReportParser();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -182,6 +190,8 @@ public class InitialGenerationStep {
         DiffEngine.MergeResult mergeResult = null;
         CompileResult lastCompileResult = null;
         ExecuteResult lastExecuteResult = null;
+        ExecutionFailureParseResult lastFailureParseResult = null;
+        List<TestReportFailure> lastReportFailures = List.of();
 
         while (attempt < maxAttempts) {
             mergeResult = diffEngine.merge(classInfo, snippet);
@@ -199,7 +209,13 @@ public class InitialGenerationStep {
                             lastCompileResult.stdout(),
                             lastCompileResult.stderr()));
                     revertMerge(classInfo, mergeResult);
-                    repairContext = buildRepairContext(repairContext, lastCompileResult, null, snippet, attempt + 1);
+                    repairContext = buildRepairContext(repairContext,
+                            lastCompileResult,
+                            null,
+                            null,
+                            List.of(),
+                            snippet,
+                            attempt + 1);
                     snippet = requestSnippetSimple(config,
                             classInfo,
                             methodInfo,
@@ -229,8 +245,16 @@ public class InitialGenerationStep {
                             lastExecuteResult.failedTests(),
                             lastExecuteResult.stdout(),
                             lastExecuteResult.stderr()));
+                    lastFailureParseResult = parseExecutionLog(lastExecuteResult);
+                    lastReportFailures = parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
                     revertMerge(classInfo, mergeResult);
-                    repairContext = buildRepairContext(repairContext, lastCompileResult, lastExecuteResult, snippet, attempt + 1);
+                    repairContext = buildRepairContext(repairContext,
+                            lastCompileResult,
+                            lastExecuteResult,
+                            lastFailureParseResult,
+                            lastReportFailures,
+                            snippet,
+                            attempt + 1);
                     snippet = requestSnippetSimple(config,
                             classInfo,
                             methodInfo,
@@ -392,6 +416,8 @@ public class InitialGenerationStep {
     private JSONObject buildRepairContext(JSONObject baseContext,
                                           CompileResult compileResult,
                                           ExecuteResult executeResult,
+                                          ExecutionFailureParseResult failureParseResult,
+                                          List<TestReportFailure> reportFailures,
                                           GeneratedTestSnippet snippet,
                                           int attempt) {
         JSONObject nextContext = baseContext == null ? new JSONObject() : new JSONObject(baseContext.toString());
@@ -417,7 +443,28 @@ public class InitialGenerationStep {
         if (executeResult != null) {
             JSONObject executeBlock = new JSONObject();
             executeBlock.put("stage", "execute");
-            executeBlock.put("messages", new JSONArray(executeResult.failedTests()));
+            JSONArray messages = new JSONArray(executeResult.failedTests());
+            if (failureParseResult != null && !failureParseResult.failures().isEmpty()) {
+                JSONArray parsedFailures = new JSONArray();
+                failureParseResult.failures().forEach(failure -> parsedFailures.put(failure.className() + "." + failure.methodName()));
+                executeBlock.put("parsedFailures", parsedFailures);
+                for (int i = 0; i < parsedFailures.length(); i++) {
+                    messages.put(parsedFailures.get(i));
+                }
+            }
+            if (reportFailures != null && !reportFailures.isEmpty()) {
+                JSONArray reports = new JSONArray();
+                for (TestReportFailure reportFailure : reportFailures) {
+                    JSONObject detail = new JSONObject();
+                    detail.put("class", reportFailure.className());
+                    detail.put("method", reportFailure.methodName());
+                    detail.put("message", reportFailure.message());
+                    detail.put("stackTrace", new JSONArray(reportFailure.stackTrace()));
+                    reports.put(detail);
+                }
+                executeBlock.put("reportFailures", reports);
+            }
+            executeBlock.put("messages", messages);
             executeBlock.put("stdout", executeResult.stdout());
             executeBlock.put("stderr", executeResult.stderr());
             diagnostics.put(executeBlock);
@@ -426,6 +473,28 @@ public class InitialGenerationStep {
             repair.put("diagnostics", diagnostics);
         }
         return nextContext;
+    }
+
+    private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
+        if (executeResult == null) {
+            return new ExecutionFailureParseResult(List.of(), Optional.empty());
+        }
+        String combined = (executeResult.stdout() + System.lineSeparator() + executeResult.stderr()).trim();
+        return executionFailureLogParser.parse(combined);
+    }
+
+    private List<TestReportFailure> parseExecutionReport(Path projectRoot, ExecutionFailureParseResult parseResult) {
+        if (parseResult == null || parseResult.reportPath().isEmpty()) {
+            return List.of();
+        }
+        Path reportPath = parseResult.reportPath().get();
+        Path resolved = reportPath.isAbsolute() ? reportPath : projectRoot.resolve(reportPath);
+        try {
+            return executionReportParser.parse(resolved);
+        } catch (Exception exception) {
+            logger.warn("Failed to parse execution report at " + resolved + ": " + exception.getMessage());
+            return List.of();
+        }
     }
 
     private void handleFailure(TestClassInfo classInfo,
