@@ -46,7 +46,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private final boolean cleanupOutputs;
     private static final CompilationCache COMPILATION_CACHE = CompilationCache.getInstance();
     private static final CompilationEnvironment COMPILATION_ENVIRONMENT = new CompilationEnvironment();
-    private static final ConcurrentMap<String, Set<Path>> CLASSPATH_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, ClasspathResolution> CLASSPATH_CACHE = new ConcurrentHashMap<>();
+    private static final Set<Path> DEFAULT_CLASSPATH = defaultClasspath();
 
     public GradleCompilerInvoker(PipelineLogger logger) {
         this(logger, false);
@@ -556,29 +557,29 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     private Set<Path> resolveTestClasspathWithRefresh(Path projectRoot, String modulePath, List<String> messages) {
         String cacheKey = projectRoot.toAbsolutePath().normalize() + "|" + modulePath;
-        Set<Path> cached = CLASSPATH_CACHE.get(cacheKey);
-        if (cached != null && !cached.isEmpty()) {
-            return new LinkedHashSet<>(cached);
+        ClasspathResolution cached = CLASSPATH_CACHE.get(cacheKey);
+        if (cached != null && !cached.entries().isEmpty()) {
+            return new LinkedHashSet<>(cached.entries());
         }
 
-        Set<Path> classpath = resolveTestClasspath(projectRoot, modulePath, messages, false);
-        if (classpath.isEmpty() && Files.exists(projectRoot.resolve("gradlew"))) {
+        ClasspathResolution classpath = resolveTestClasspath(projectRoot, modulePath, messages, false);
+        if (classpath.entries().isEmpty() && Files.exists(projectRoot.resolve("gradlew"))) {
             classpath = resolveTestClasspath(projectRoot, modulePath, messages, true);
         }
 
-        if (!classpath.isEmpty()) {
-            CLASSPATH_CACHE.put(cacheKey, new LinkedHashSet<>(classpath));
+        if (classpath.derivedFromGradle() && !classpath.entries().isEmpty()) {
+            CLASSPATH_CACHE.put(cacheKey, new ClasspathResolution(new LinkedHashSet<>(classpath.entries()), true));
         }
-        return classpath;
+        return classpath.entries();
     }
 
-    private Set<Path> resolveTestClasspath(Path projectRoot, String modulePath, List<String> messages, boolean refreshDependencies) {
+    private ClasspathResolution resolveTestClasspath(Path projectRoot, String modulePath, List<String> messages, boolean refreshDependencies) {
         Set<Path> entries = new LinkedHashSet<>();
         Path gradlew = projectRoot.resolve("gradlew");
         if (!Files.exists(gradlew)) {
             messages.add("Gradle wrapper not found. Using current JVM classpath only.");
-            entries.addAll(defaultClasspath());
-            return entries;
+            entries.addAll(DEFAULT_CLASSPATH);
+            return new ClasspathResolution(entries, false);
         }
 
         Path initScript;
@@ -586,8 +587,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             initScript = createClasspathInitScript();
         } catch (IOException exception) {
             logger.warn("Failed to create classpath init script: " + exception.getMessage());
-            entries.addAll(defaultClasspath());
-            return entries;
+            entries.addAll(DEFAULT_CLASSPATH);
+            return new ClasspathResolution(entries, false);
         }
 
         String gradleTask = (modulePath.isBlank() ? "" : (":" + modulePath + ":")) + "printTestClasspath";
@@ -605,8 +606,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             int exitCode = process.waitFor();
             if (exitCode != 0) {
                 messages.add("Gradle classpath task exited with code " + exitCode + "; falling back to JVM classpath.");
-                entries.addAll(defaultClasspath());
-                return entries;
+                entries.addAll(DEFAULT_CLASSPATH);
+                return new ClasspathResolution(entries, false);
             }
             String classpathLine = stdout.lines()
                     .filter(line -> !line.isBlank())
@@ -614,8 +615,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     .orElse("");
             if (classpathLine.isBlank()) {
                 messages.add("Gradle did not return a test classpath; using JVM classpath.");
-                entries.addAll(defaultClasspath());
-                return entries;
+                entries.addAll(DEFAULT_CLASSPATH);
+                return new ClasspathResolution(entries, false);
             }
             entries.addAll(Arrays.stream(classpathLine.split(java.io.File.pathSeparator))
                     .parallel()
@@ -623,14 +624,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     .map(Path::of)
                     .collect(Collectors.toCollection(LinkedHashSet::new)));
             messages.add("Gradle wrapper detected. Resolved test classpath via printTestClasspath task" + (refreshDependencies ? " with refresh." : "."));
-            return entries;
+            return new ClasspathResolution(entries, true);
         } catch (IOException | InterruptedException exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             messages.add("Failed to resolve classpath via Gradle: " + exception.getMessage());
-            entries.addAll(defaultClasspath());
-            return entries;
+            entries.addAll(DEFAULT_CLASSPATH);
+            return new ClasspathResolution(entries, false);
         } finally {
             try {
                 Files.deleteIfExists(initScript);
@@ -737,10 +738,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private static Set<Path> defaultClasspath() {
         String jvmClasspath = System.getProperty("java.class.path", "");
         return Arrays.stream(jvmClasspath.split(java.io.File.pathSeparator))
-                .parallel()
                 .filter(part -> !part.isBlank())
                 .map(Path::of)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private record ClasspathResolution(Set<Path> entries, boolean derivedFromGradle) {
     }
 
     private void deleteDirectory(Path directory) throws IOException {
