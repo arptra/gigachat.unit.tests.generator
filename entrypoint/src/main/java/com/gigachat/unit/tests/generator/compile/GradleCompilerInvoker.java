@@ -27,8 +27,10 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -43,6 +45,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private final PipelineLogger logger;
     private final boolean cleanupOutputs;
     private static final CompilationCache COMPILATION_CACHE = CompilationCache.getInstance();
+    private static final CompilationEnvironment COMPILATION_ENVIRONMENT = new CompilationEnvironment();
+    private static final ConcurrentMap<String, Set<Path>> CLASSPATH_CACHE = new ConcurrentHashMap<>();
 
     public GradleCompilerInvoker(PipelineLogger logger) {
         this(logger, false);
@@ -138,7 +142,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             return new CompileResult(false, List.of(message), "", message);
         }
 
-        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        JavaCompiler compiler = COMPILATION_ENVIRONMENT.getCompiler();
         if (compiler == null) {
             String message = "No system Java compiler available. Ensure a JDK is installed.";
             logger.error(message);
@@ -175,7 +179,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages);
             if (includeAllTestClasses) {
                 classpathEntries.addAll(resolveAllTestOutputs(projectRoot, messages));
             }
@@ -197,10 +201,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(outputDir));
 
                 Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjectsFromPaths(compilationTargets);
-                List<String> options = new ArrayList<>();
-                options.add("--release");
-                options.add(String.valueOf(Runtime.version().feature()));
-                options.add("-g");
+                List<String> options = COMPILATION_ENVIRONMENT.copyBaseOptions();
 
                 logger.info("Compiling " + compilationTargets.size() + " test source(s) starting at " + testClassFile
                         + " for method " + methodName);
@@ -249,7 +250,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages);
             classpathEntries.addAll(resolveAllTestOutputs(projectRoot, messages));
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
@@ -365,7 +366,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspath(projectRoot, modulePath, messages);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages);
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
             classpathEntries.add(moduleRoot.resolve("build/resources/test"));
@@ -381,9 +382,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
             List<String> command = new ArrayList<>();
             command.add("javac");
-            command.add("--release");
-            command.add(String.valueOf(Runtime.version().feature()));
-            command.add("-g");
+            command.addAll(COMPILATION_ENVIRONMENT.copyBaseOptions());
             command.add("-d");
             command.add(outputDir.toString());
             if (!classpath.isBlank()) {
@@ -555,7 +554,25 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private record ModuleCompilationOutcome(CompileResult result, List<Diagnostic<? extends JavaFileObject>> diagnostics) {
     }
 
-    private Set<Path> resolveTestClasspath(Path projectRoot, String modulePath, List<String> messages) {
+    private Set<Path> resolveTestClasspathWithRefresh(Path projectRoot, String modulePath, List<String> messages) {
+        String cacheKey = projectRoot.toAbsolutePath().normalize() + "|" + modulePath;
+        Set<Path> cached = CLASSPATH_CACHE.get(cacheKey);
+        if (cached != null && !cached.isEmpty()) {
+            return new LinkedHashSet<>(cached);
+        }
+
+        Set<Path> classpath = resolveTestClasspath(projectRoot, modulePath, messages, false);
+        if (classpath.isEmpty() && Files.exists(projectRoot.resolve("gradlew"))) {
+            classpath = resolveTestClasspath(projectRoot, modulePath, messages, true);
+        }
+
+        if (!classpath.isEmpty()) {
+            CLASSPATH_CACHE.put(cacheKey, new LinkedHashSet<>(classpath));
+        }
+        return classpath;
+    }
+
+    private Set<Path> resolveTestClasspath(Path projectRoot, String modulePath, List<String> messages, boolean refreshDependencies) {
         Set<Path> entries = new LinkedHashSet<>();
         Path gradlew = projectRoot.resolve("gradlew");
         if (!Files.exists(gradlew)) {
@@ -574,7 +591,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
 
         String gradleTask = (modulePath.isBlank() ? "" : (":" + modulePath + ":")) + "printTestClasspath";
-        String command = "./gradlew -q " + gradleTask + " --init-script " + initScript.toAbsolutePath();
+        String refreshFlag = refreshDependencies ? " --refresh-dependencies" : "";
+        String command = "./gradlew -q " + gradleTask + " --init-script " + initScript.toAbsolutePath() + refreshFlag;
         ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
         builder.directory(projectRoot.toFile());
         builder.redirectErrorStream(true);
@@ -604,7 +622,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     .filter(path -> !path.isBlank())
                     .map(Path::of)
                     .collect(Collectors.toCollection(LinkedHashSet::new)));
-            messages.add("Gradle wrapper detected. Resolved test classpath via printTestClasspath task.");
+            messages.add("Gradle wrapper detected. Resolved test classpath via printTestClasspath task" + (refreshDependencies ? " with refresh." : "."));
             return entries;
         } catch (IOException | InterruptedException exception) {
             if (exception instanceof InterruptedException) {
@@ -744,6 +762,19 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private static String formatDiagnostic(Diagnostic<? extends JavaFileObject> diagnostic) {
         String source = diagnostic.getSource() == null ? "" : diagnostic.getSource().getName();
         return source + ":" + diagnostic.getLineNumber() + ": error: " + diagnostic.getMessage(Locale.getDefault());
+    }
+
+    private static final class CompilationEnvironment {
+        private final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        private final List<String> baseOptions = List.of("--release", String.valueOf(Runtime.version().feature()), "-g");
+
+        JavaCompiler getCompiler() {
+            return compiler;
+        }
+
+        List<String> copyBaseOptions() {
+            return new ArrayList<>(baseOptions);
+        }
     }
 
 }
