@@ -777,21 +777,32 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return new GradleTaskResult(exitCode == 0, exitCode, stdout);
     }
 
+
     private Path createClasspathInitScript() throws IOException {
-        String script = "allprojects { project ->\n" +
-                "    project.afterEvaluate {\n" +
-                "        if (project.tasks.findByName('printTestClasspath') != null) return\n" +
-                "        def sourceSets = project.extensions.findByName('sourceSets')\n" +
-                "        project.tasks.register('printTestClasspath') {\n" +
-                "            doLast {\n" +
-                "                if (sourceSets == null) { println ''; return }\n" +
-                "                def testSet = sourceSets.findByName('test')\n" +
-                "                if (testSet == null || testSet.runtimeClasspath == null) { println ''; return }\n" +
-                "                println testSet.runtimeClasspath.files.collect { it.absolutePath }.join(File.pathSeparator)\n" +
-                "            }\n" +
-                "        }\n" +
-                "    }\n" +
-                "}\n";
+        String script = """
+                allprojects { project ->
+                    project.afterEvaluate {
+                        def taskName = 'printTestClasspath'
+                        if (project.tasks.findByName(taskName) != null) return
+                        project.tasks.register(taskName) {
+                            doLast {
+                                def sourceSets = project.extensions.findByName('sourceSets')
+                                def testSet = sourceSets == null ? null : sourceSets.findByName('test')
+                                def configuration = project.configurations.findByName('testRuntimeClasspath')
+                                if (configuration == null) configuration = project.configurations.findByName('testRuntimeOnly')
+                                def classpathFiles = [] as Set
+                                if (configuration != null) { classpathFiles.addAll(configuration.resolve()) }
+                                if (testSet != null) {
+                                    classpathFiles.addAll(testSet.output.classesDirs.files)
+                                    if (testSet.output.resourcesDir != null) { classpathFiles.add(testSet.output.resourcesDir) }
+                                    if (testSet.runtimeClasspath != null) { classpathFiles.addAll(testSet.runtimeClasspath.files) }
+                                }
+                                println classpathFiles.collect { it.absolutePath }.join(File.pathSeparator)
+                            }
+                        }
+                    }
+                }
+                """;
         Path tempScript = Files.createTempFile("print-test-classpath", ".gradle");
         Files.writeString(tempScript, script, StandardCharsets.UTF_8);
         return tempScript;
