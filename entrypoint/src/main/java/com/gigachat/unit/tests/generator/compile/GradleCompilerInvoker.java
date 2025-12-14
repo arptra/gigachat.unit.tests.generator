@@ -37,6 +37,8 @@ import java.util.stream.StreamSupport;
 
 import org.gradle.tooling.GradleConnector;
 import org.gradle.tooling.ProjectConnection;
+import org.gradle.tooling.model.eclipse.EclipseProject;
+import org.gradle.tooling.model.eclipse.EclipseSourceDirectory;
 import org.gradle.tooling.model.idea.IdeaCompilerOutput;
 import org.gradle.tooling.model.idea.IdeaDependency;
 import org.gradle.tooling.model.idea.IdeaModule;
@@ -658,49 +660,107 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private Set<Path> resolveTestClasspathViaToolingApi(Path projectRoot, List<String> messages) {
-        try {
-            GradleConnector connector = GradleConnector.newConnector()
-                    .forProjectDirectory(projectRoot.toFile());
-            if (Files.exists(projectRoot.resolve("gradle/wrapper/gradle-wrapper.properties"))) {
-                connector.useBuildDistribution();
+        GradleConnector connector = GradleConnector.newConnector()
+                .forProjectDirectory(projectRoot.toFile());
+        if (Files.exists(projectRoot.resolve("gradle/wrapper/gradle-wrapper.properties"))) {
+            connector.useBuildDistribution();
+        }
+
+        try (ProjectConnection connection = connector.connect()) {
+            Set<Path> ideaEntries = collectIdeaModelClasspath(connection);
+            if (!ideaEntries.isEmpty()) {
+                return ideaEntries;
             }
-            try (ProjectConnection connection = connector.connect()) {
-                IdeaProject project = connection.getModel(IdeaProject.class);
-                if (project == null) {
-                    messages.add("Tooling API did not return an IdeaProject model.");
-                    return Set.of();
+
+            Set<Path> eclipseEntries = collectEclipseModelClasspath(connection);
+            if (!eclipseEntries.isEmpty()) {
+                return eclipseEntries;
+            }
+
+            messages.add("Tooling API did not provide test classpath entries.");
+            return Set.of();
+        } catch (Exception exception) {
+            messages.add("Tooling API classpath resolution failed: " + exception.getMessage());
+            return Set.of();
+        }
+    }
+
+    private Set<Path> collectIdeaModelClasspath(ProjectConnection connection) {
+        try {
+            IdeaProject project = connection.getModel(IdeaProject.class);
+            if (project == null) {
+                return Set.of();
+            }
+
+            Set<Path> entries = new LinkedHashSet<>();
+            for (IdeaModule module : project.getModules()) {
+                IdeaCompilerOutput output = module.getCompilerOutput();
+                if (output != null) {
+                    if (output.getTestOutputDir() != null) {
+                        entries.add(output.getTestOutputDir().toPath());
+                    }
+                    if (output.getOutputDir() != null) {
+                        entries.add(output.getOutputDir().toPath());
+                    }
                 }
 
-                Set<Path> entries = new LinkedHashSet<>();
-                for (IdeaModule module : project.getModules()) {
-                    IdeaCompilerOutput output = module.getCompilerOutput();
-                    if (output != null) {
-                        if (output.getTestOutputDir() != null) {
-                            entries.add(output.getTestOutputDir().toPath());
-                        }
-                        if (output.getOutputDir() != null) {
-                            entries.add(output.getOutputDir().toPath());
-                        }
-                    }
-
-                    for (IdeaDependency dependency : module.getDependencies()) {
-                        if (dependency instanceof IdeaSingleEntryLibraryDependency libraryDependency) {
-                            String scope = libraryDependency.getScope() == null ? "" : libraryDependency.getScope().getScope();
-                            if (scope == null || scope.isBlank() || scope.equalsIgnoreCase("TEST")
-                                    || scope.equalsIgnoreCase("RUNTIME") || scope.equalsIgnoreCase("COMPILE")) {
-                                File file = libraryDependency.getFile();
-                                if (file != null) {
-                                    entries.add(file.toPath());
-                                }
+                for (IdeaDependency dependency : module.getDependencies()) {
+                    if (dependency instanceof IdeaSingleEntryLibraryDependency libraryDependency) {
+                        String scope = libraryDependency.getScope() == null ? "" : libraryDependency.getScope().getScope();
+                        if (scope == null || scope.isBlank() || scope.equalsIgnoreCase("TEST")
+                                || scope.equalsIgnoreCase("RUNTIME") || scope.equalsIgnoreCase("COMPILE")) {
+                            File file = libraryDependency.getFile();
+                            if (file != null) {
+                                entries.add(file.toPath());
                             }
                         }
                     }
                 }
-                return entries;
             }
-        } catch (Exception exception) {
-            messages.add("Tooling API classpath resolution failed: " + exception.getMessage());
+            return entries;
+        } catch (Exception ignored) {
             return Set.of();
+        }
+    }
+
+    private Set<Path> collectEclipseModelClasspath(ProjectConnection connection) {
+        try {
+            EclipseProject eclipseProject = connection.getModel(EclipseProject.class);
+            if (eclipseProject == null) {
+                return Set.of();
+            }
+            Set<Path> entries = new LinkedHashSet<>();
+            collectEclipseProjectClasspath(eclipseProject, entries, new LinkedHashSet<>());
+            return entries;
+        } catch (Exception ignored) {
+            return Set.of();
+        }
+    }
+
+    private void collectEclipseProjectClasspath(EclipseProject project, Set<Path> entries, Set<String> visited) {
+        if (project == null) {
+            return;
+        }
+        String identity = project.getName() + "|" + project.getProjectDirectory().getAbsolutePath();
+        if (!visited.add(identity)) {
+            return;
+        }
+
+        if (project.getOutputLocation() != null && project.getOutputLocation().getPath() != null) {
+            entries.add(Path.of(project.getOutputLocation().getPath()));
+        }
+        for (EclipseSourceDirectory sourceDirectory : project.getSourceDirectories()) {
+            if (sourceDirectory.getOutput() != null) {
+                entries.add(Path.of(sourceDirectory.getOutput()));
+            }
+        }
+        project.getClasspath().forEach(dependency -> {
+            if (dependency.getFile() != null) {
+                entries.add(dependency.getFile().toPath());
+            }
+        });
+        for (EclipseProject child : project.getChildren()) {
+            collectEclipseProjectClasspath(child, entries, visited);
         }
     }
 
