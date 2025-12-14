@@ -35,6 +35,14 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import org.gradle.tooling.GradleConnector;
+import org.gradle.tooling.ProjectConnection;
+import org.gradle.tooling.model.idea.IdeaCompilerOutput;
+import org.gradle.tooling.model.idea.IdeaDependency;
+import org.gradle.tooling.model.idea.IdeaModule;
+import org.gradle.tooling.model.idea.IdeaProject;
+import org.gradle.tooling.model.idea.IdeaSingleEntryLibraryDependency;
+
 /**
  * Compiles a single generated test file. The invoker resolves the test runtime classpath via a
  * lightweight Gradle helper task (when the wrapper is present) and then delegates to the JDK's
@@ -601,6 +609,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 gradleResult = runGradleCommand(projectRoot, rootCommand);
             }
             if (!gradleResult.success()) {
+                Set<Path> toolingEntries = resolveTestClasspathViaToolingApi(projectRoot, messages);
+                if (!toolingEntries.isEmpty()) {
+                    messages.add("Gradle classpath task failed; resolved test classpath via Tooling API.");
+                    entries.addAll(toolingEntries);
+                    return new ClasspathResolution(entries, true);
+                }
                 messages.add("Gradle classpath task exited with code " + gradleResult.exitCode() + "; falling back to JVM classpath.");
                 entries.addAll(DEFAULT_CLASSPATH);
                 return new ClasspathResolution(entries, false);
@@ -610,6 +624,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     .reduce((first, second) -> second)
                     .orElse("");
             if (classpathLine.isBlank()) {
+                Set<Path> toolingEntries = resolveTestClasspathViaToolingApi(projectRoot, messages);
+                if (!toolingEntries.isEmpty()) {
+                    messages.add("Gradle task returned no classpath; resolved test classpath via Tooling API.");
+                    entries.addAll(toolingEntries);
+                    return new ClasspathResolution(entries, true);
+                }
                 messages.add("Gradle did not return a test classpath; using JVM classpath.");
                 entries.addAll(DEFAULT_CLASSPATH);
                 return new ClasspathResolution(entries, false);
@@ -634,6 +654,53 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             } catch (IOException ignored) {
                 // best-effort cleanup
             }
+        }
+    }
+
+    private Set<Path> resolveTestClasspathViaToolingApi(Path projectRoot, List<String> messages) {
+        try {
+            GradleConnector connector = GradleConnector.newConnector()
+                    .forProjectDirectory(projectRoot.toFile());
+            if (Files.exists(projectRoot.resolve("gradle/wrapper/gradle-wrapper.properties"))) {
+                connector.useBuildDistribution();
+            }
+            try (ProjectConnection connection = connector.connect()) {
+                IdeaProject project = connection.getModel(IdeaProject.class);
+                if (project == null) {
+                    messages.add("Tooling API did not return an IdeaProject model.");
+                    return Set.of();
+                }
+
+                Set<Path> entries = new LinkedHashSet<>();
+                for (IdeaModule module : project.getModules()) {
+                    IdeaCompilerOutput output = module.getCompilerOutput();
+                    if (output != null) {
+                        if (output.getTestOutputDir() != null) {
+                            entries.add(output.getTestOutputDir().toPath());
+                        }
+                        if (output.getOutputDir() != null) {
+                            entries.add(output.getOutputDir().toPath());
+                        }
+                    }
+
+                    for (IdeaDependency dependency : module.getDependencies()) {
+                        if (dependency instanceof IdeaSingleEntryLibraryDependency libraryDependency) {
+                            String scope = libraryDependency.getScope() == null ? "" : libraryDependency.getScope().getScope();
+                            if (scope == null || scope.isBlank() || scope.equalsIgnoreCase("TEST")
+                                    || scope.equalsIgnoreCase("RUNTIME") || scope.equalsIgnoreCase("COMPILE")) {
+                                File file = libraryDependency.getFile();
+                                if (file != null) {
+                                    entries.add(file.toPath());
+                                }
+                            }
+                        }
+                    }
+                }
+                return entries;
+            }
+        } catch (Exception exception) {
+            messages.add("Tooling API classpath resolution failed: " + exception.getMessage());
+            return Set.of();
         }
     }
 
