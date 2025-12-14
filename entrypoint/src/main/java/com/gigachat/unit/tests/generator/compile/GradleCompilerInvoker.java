@@ -591,25 +591,21 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             return new ClasspathResolution(entries, false);
         }
 
-        String gradleTask = (modulePath.isBlank() ? "" : (":" + modulePath + ":")) + "printTestClasspath";
         String refreshFlag = refreshDependencies ? " --refresh-dependencies" : "";
+        String gradleTask = (modulePath.isBlank() ? "" : (":" + modulePath + ":")) + "printTestClasspath";
         String command = "./gradlew -q " + gradleTask + " --init-script " + initScript.toAbsolutePath() + refreshFlag;
-        ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
-        builder.directory(projectRoot.toFile());
-        builder.redirectErrorStream(true);
         try {
-            Process process = builder.start();
-            String stdout;
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                stdout = reader.lines().collect(Collectors.joining(System.lineSeparator()));
+            GradleTaskResult gradleResult = runGradleCommand(projectRoot, command);
+            if (!gradleResult.success() && !modulePath.isBlank()) {
+                String rootCommand = "./gradlew -q printTestClasspath --init-script " + initScript.toAbsolutePath() + refreshFlag;
+                gradleResult = runGradleCommand(projectRoot, rootCommand);
             }
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                messages.add("Gradle classpath task exited with code " + exitCode + "; falling back to JVM classpath.");
+            if (!gradleResult.success()) {
+                messages.add("Gradle classpath task exited with code " + gradleResult.exitCode() + "; falling back to JVM classpath.");
                 entries.addAll(DEFAULT_CLASSPATH);
                 return new ClasspathResolution(entries, false);
             }
-            String classpathLine = stdout.lines()
+            String classpathLine = gradleResult.stdout().lines()
                     .filter(line -> !line.isBlank())
                     .reduce((first, second) -> second)
                     .orElse("");
@@ -641,19 +637,33 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
     }
 
+    private GradleTaskResult runGradleCommand(Path projectRoot, String command) throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
+        builder.directory(projectRoot.toFile());
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+        String stdout;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            stdout = reader.lines().collect(Collectors.joining(System.lineSeparator()));
+        }
+        int exitCode = process.waitFor();
+        return new GradleTaskResult(exitCode == 0, exitCode, stdout);
+    }
+
     private Path createClasspathInitScript() throws IOException {
-        String script = "import org.gradle.api.plugins.JavaPlugin\n" +
-                "import org.gradle.api.plugins.JavaLibraryPlugin\n" +
-                "allprojects { project ->\n" +
-                "    def registerTask = {\n" +
-                "        if (project.tasks.findByName('printTestClasspath') == null) {\n" +
-                "            project.tasks.register('printTestClasspath') {\n" +
-                "                doLast { println project.sourceSets.test.runtimeClasspath.asPath }\n" +
+        String script = "allprojects { project ->\n" +
+                "    project.afterEvaluate {\n" +
+                "        if (project.tasks.findByName('printTestClasspath') != null) return\n" +
+                "        def sourceSets = project.extensions.findByName('sourceSets')\n" +
+                "        project.tasks.register('printTestClasspath') {\n" +
+                "            doLast {\n" +
+                "                if (sourceSets == null) { println ''; return }\n" +
+                "                def testSet = sourceSets.findByName('test')\n" +
+                "                if (testSet == null || testSet.runtimeClasspath == null) { println ''; return }\n" +
+                "                println testSet.runtimeClasspath.files.collect { it.absolutePath }.join(File.pathSeparator)\n" +
                 "            }\n" +
                 "        }\n" +
                 "    }\n" +
-                "    project.plugins.withType(JavaPlugin) { registerTask() }\n" +
-                "    project.plugins.withType(JavaLibraryPlugin) { registerTask() }\n" +
                 "}\n";
         Path tempScript = Files.createTempFile("print-test-classpath", ".gradle");
         Files.writeString(tempScript, script, StandardCharsets.UTF_8);
@@ -721,15 +731,19 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private Path createAllTestOutputsInitScript() throws IOException {
-        String script = "import org.gradle.api.plugins.JavaPlugin\n" +
-                "import org.gradle.api.plugins.JavaLibraryPlugin\n" +
-                "gradle.projectsEvaluated {\n" +
+        String script = "gradle.projectsEvaluated {\n" +
                 "    def outputs = rootProject.allprojects\n" +
-                "        .findAll { it.plugins.hasPlugin('java') || it.plugins.hasPlugin('java-library') }\n" +
-                "        .collectMany { it.sourceSets.test.output.classesDirs.files }\n" +
-                "        .collect { it.absolutePath }\n" +
-                "    rootProject.tasks.register('printAllTestOutputs') {\n" +
-                "        doLast { println outputs.join(File.pathSeparator) }\n" +
+                "        .collectMany { project ->\n" +
+                "            def sourceSets = project.extensions.findByName('sourceSets')\n" +
+                "            if (sourceSets == null) return []\n" +
+                "            def testSet = sourceSets.findByName('test')\n" +
+                "            if (testSet == null) return []\n" +
+                "            return testSet.output.classesDirs.files.collect { it.absolutePath }\n" +
+                "        }\n" +
+                "    if (rootProject.tasks.findByName('printAllTestOutputs') == null) {\n" +
+                "        rootProject.tasks.register('printAllTestOutputs') {\n" +
+                "            doLast { println outputs.join(File.pathSeparator) }\n" +
+                "        }\n" +
                 "    }\n" +
                 "}\n";
         Path tempScript = Files.createTempFile("print-all-test-outputs", ".gradle");
@@ -752,6 +766,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private record ClasspathResolution(Set<Path> entries, boolean derivedFromGradle) {
+    }
+
+    private record GradleTaskResult(boolean success, int exitCode, String stdout) {
     }
 
     private void deleteDirectory(Path directory) throws IOException {
