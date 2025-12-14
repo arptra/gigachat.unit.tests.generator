@@ -61,7 +61,7 @@ public class CompilationPipelineOrchestrator {
         CompileResult lastResult = null;
         ActionExecutionResult cumulativeResult = ActionExecutionResult.empty();
         for (int attempt = 0; attempt < MAX_ITERATIONS; attempt++) {
-            lastResult = compilerInvoker.compile(projectRoot, testFile, methodName);
+            lastResult = compilerInvoker.compileWithoutCache(projectRoot, testFile, methodName);
             if (lastResult.success()) {
                 return lastResult;
             }

@@ -55,7 +55,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     @Override
     public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
-        return compile(projectRoot, testClassFile, methodName, false);
+        return compile(projectRoot, testClassFile, methodName, false, true);
+    }
+
+    @Override
+    public CompileResult compileWithoutCache(Path projectRoot, Path testClassFile, String methodName) {
+        return compile(projectRoot, testClassFile, methodName, false, false);
     }
 
     public CompileResult compileAllTests(Path projectRoot, String methodName) {
@@ -125,7 +130,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return new CompileResult(overallSuccess, messages, stdout.toString(), stderr.toString());
     }
 
-    private CompileResult compile(Path projectRoot, Path testClassFile, String methodName, boolean includeAllTestClasses) {
+    private CompileResult compile(Path projectRoot, Path testClassFile, String methodName, boolean includeAllTestClasses, boolean useCache) {
         List<String> messages = new ArrayList<>();
         if (!Files.exists(testClassFile)) {
             String message = "Target test path does not exist: " + testClassFile;
@@ -154,9 +159,11 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
 
         Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
-        CompileResult cachedResult = getCachedResult(cacheKey);
-        if (cachedResult != null) {
-            return cachedResult;
+        if (useCache) {
+            CompileResult cachedResult = getCachedResult(cacheKey);
+            if (cachedResult != null) {
+                return cachedResult;
+            }
         }
 
         Path representative = compilationTargets.getFirst();
@@ -206,14 +213,17 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 if (!compilationSucceeded) {
                     logger.warn("Compilation failed for " + testClassFile);
                 }
-                return cacheResult(cacheKey, new CompileResult(compilationSucceeded, messages, stdout, stderr));
+                CompileResult result = new CompileResult(compilationSucceeded, messages, stdout, stderr);
+                return useCache ? cacheResult(cacheKey, result) : result;
             } catch (IOException exception) {
                 logger.error("Compilation failed for " + testClassFile, exception);
-                return cacheResult(cacheKey, new CompileResult(false, messages, "", exception.getMessage()));
+                CompileResult result = new CompileResult(false, messages, "", exception.getMessage());
+                return useCache ? cacheResult(cacheKey, result) : result;
             }
         } catch (IOException exception) {
             logger.error("Compilation failed for " + testClassFile, exception);
-            return cacheResult(cacheKey, new CompileResult(false, messages, "", exception.getMessage()));
+            CompileResult result = new CompileResult(false, messages, "", exception.getMessage());
+            return useCache ? cacheResult(cacheKey, result) : result;
         } finally {
             if (cleanupOutputs && !outputDirPreexisted) {
                 try {

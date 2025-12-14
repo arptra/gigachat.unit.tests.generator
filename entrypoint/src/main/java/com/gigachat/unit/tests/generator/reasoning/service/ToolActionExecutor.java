@@ -127,7 +127,7 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleSearchSymbol(Map<String, Object> args) {
-        String symbol = readStringArg(args, "symbol", "query", "name");
+        String symbol = readStringArg(args, "symbol", "query", "name", "symbolName");
         if (symbol == null || symbol.isBlank()) {
             return ActionExecutionResult.empty();
         }
@@ -163,7 +163,7 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleRecompile() {
-        CompileResult result = compilerInvoker.compile(projectRoot, testFile, methodName);
+        CompileResult result = compilerInvoker.compileWithoutCache(projectRoot, testFile, methodName);
         Map<String, Object> detail = new HashMap<>();
         detail.put("success", result.success());
         if (!result.success()) {
