@@ -642,12 +642,18 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private Path createClasspathInitScript() throws IOException {
-        String script = "allprojects { project ->\n" +
-                "    project.plugins.withId('java') {\n" +
-                "        project.tasks.register('printTestClasspath') {\n" +
-                "            doLast { println project.sourceSets.test.runtimeClasspath.asPath }\n" +
+        String script = "import org.gradle.api.plugins.JavaPlugin\n" +
+                "import org.gradle.api.plugins.JavaLibraryPlugin\n" +
+                "allprojects { project ->\n" +
+                "    def registerTask = {\n" +
+                "        if (project.tasks.findByName('printTestClasspath') == null) {\n" +
+                "            project.tasks.register('printTestClasspath') {\n" +
+                "                doLast { println project.sourceSets.test.runtimeClasspath.asPath }\n" +
+                "            }\n" +
                 "        }\n" +
                 "    }\n" +
+                "    project.plugins.withType(JavaPlugin) { registerTask() }\n" +
+                "    project.plugins.withType(JavaLibraryPlugin) { registerTask() }\n" +
                 "}\n";
         Path tempScript = Files.createTempFile("print-test-classpath", ".gradle");
         Files.writeString(tempScript, script, StandardCharsets.UTF_8);
@@ -715,9 +721,11 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private Path createAllTestOutputsInitScript() throws IOException {
-        String script = "gradle.projectsEvaluated {\n" +
+        String script = "import org.gradle.api.plugins.JavaPlugin\n" +
+                "import org.gradle.api.plugins.JavaLibraryPlugin\n" +
+                "gradle.projectsEvaluated {\n" +
                 "    def outputs = rootProject.allprojects\n" +
-                "        .findAll { it.plugins.hasPlugin('java') }\n" +
+                "        .findAll { it.plugins.hasPlugin('java') || it.plugins.hasPlugin('java-library') }\n" +
                 "        .collectMany { it.sourceSets.test.output.classesDirs.files }\n" +
                 "        .collect { it.absolutePath }\n" +
                 "    rootProject.tasks.register('printAllTestOutputs') {\n" +
