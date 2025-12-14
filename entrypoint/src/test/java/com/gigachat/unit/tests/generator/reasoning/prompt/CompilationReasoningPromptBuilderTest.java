@@ -1,5 +1,6 @@
 package com.gigachat.unit.tests.generator.reasoning.prompt;
 
+import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
@@ -29,7 +30,8 @@ class CompilationReasoningPromptBuilderTest {
         );
 
         CompilationReasoningPromptBuilder builder = new CompilationReasoningPromptBuilder();
-        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, Map.of("hint", "value")));
+        ActionExecutionResult executionResult = new ActionExecutionResult(Map.of("hint", "value"), List.of("ADD_DEPENDENCY junit"));
+        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, executionResult));
 
         assertTrue(prompt.contains("reasoning agent"));
         assertTrue(prompt.contains("Allowed tools"));

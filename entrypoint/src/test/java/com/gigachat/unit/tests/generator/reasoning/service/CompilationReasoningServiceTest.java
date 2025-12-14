@@ -6,6 +6,7 @@ import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
+import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
@@ -48,7 +49,7 @@ class CompilationReasoningServiceTest {
         CompilationErrorInfo errorInfo = new CompilationErrorInfo("out", "msg", "fqcn", "path", 1, null);
         ProjectContextSummary summary = new ProjectContextSummary(List.of("src"), List.of("test"), List.of("dep"));
 
-        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, Map.of()));
+        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty()));
 
         assertEquals(List.of("inspect error", "apply fix"), response.getReasoning());
         ToolAction expected = new ToolAction(

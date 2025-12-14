@@ -46,9 +46,11 @@ public class CompilationReasoningPromptBuilder {
         prompt.append(asJson(loopContext.getErrorInfo())).append("\n\n");
         prompt.append("Project context summary (JSON):\n");
         prompt.append(asJson(loopContext.getProjectContextSummary())).append("\n\n");
-        if (!loopContext.getActionContext().isEmpty()) {
-            prompt.append("Previous tool actions and results (JSON):\n");
-            prompt.append(asJson(loopContext.getActionContext())).append("\n");
+        if (loopContext.getExecutionResult() != null
+                && (!loopContext.getExecutionResult().getInformation().isEmpty()
+                || !loopContext.getExecutionResult().getPerformedActions().isEmpty())) {
+            prompt.append("Execution log from previous iteration (JSON):\n");
+            prompt.append(asJson(loopContext.getExecutionResult().toPromptPayload())).append("\n");
         }
 
         return prompt.toString();

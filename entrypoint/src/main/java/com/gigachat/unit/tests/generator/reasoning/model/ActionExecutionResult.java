@@ -1,5 +1,6 @@
 package com.gigachat.unit.tests.generator.reasoning.model;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -7,32 +8,49 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Captures structured data produced by executing tool actions. The payload is expected to be
- * JSON-serialisable and will be forwarded to the next reasoning prompt.
+ * Captures structured data produced by executing tool actions. Information-gathering steps append
+ * details to {@code information} while project-modifying steps are tracked via {@code performedActions}.
+ * The accumulated payload is serialisable and injected into the next reasoning prompt in a single
+ * batch.
  */
 public class ActionExecutionResult {
 
-    private final Map<String, Object> context;
+    private final Map<String, Object> information;
+    private final List<String> performedActions;
 
     public ActionExecutionResult() {
-        this.context = new HashMap<>();
+        this.information = new HashMap<>();
+        this.performedActions = new ArrayList<>();
     }
 
-    public ActionExecutionResult(Map<String, Object> context) {
-        this.context = context == null ? new HashMap<>() : new HashMap<>(context);
+    public ActionExecutionResult(Map<String, Object> information) {
+        this(information, List.of());
     }
 
-    public Map<String, Object> getContext() {
-        return Collections.unmodifiableMap(context);
+    public ActionExecutionResult(Map<String, Object> information, List<String> performedActions) {
+        this.information = information == null ? new HashMap<>() : new HashMap<>(information);
+        this.performedActions = performedActions == null ? new ArrayList<>() : new ArrayList<>(performedActions);
+    }
+
+    public Map<String, Object> getInformation() {
+        return Collections.unmodifiableMap(information);
+    }
+
+    public List<String> getPerformedActions() {
+        return Collections.unmodifiableList(performedActions);
     }
 
     public ActionExecutionResult merge(ActionExecutionResult other) {
-        if (other == null || other.context.isEmpty()) {
+        if (other == null || (other.information.isEmpty() && other.performedActions.isEmpty())) {
             return this;
         }
-        Map<String, Object> merged = new HashMap<>(this.context);
-        other.context.forEach((key, value) -> merged.merge(key, value, ActionExecutionResult::mergeValues));
-        return new ActionExecutionResult(merged);
+        Map<String, Object> mergedInformation = new HashMap<>(this.information);
+        other.information.forEach((key, value) -> mergedInformation.merge(key, value, ActionExecutionResult::mergeValues));
+
+        List<String> mergedPerformedActions = new ArrayList<>(this.performedActions);
+        mergedPerformedActions.addAll(other.performedActions);
+
+        return new ActionExecutionResult(mergedInformation, mergedPerformedActions);
     }
 
     public static ActionExecutionResult empty() {
@@ -73,11 +91,22 @@ public class ActionExecutionResult {
             return false;
         }
         ActionExecutionResult that = (ActionExecutionResult) o;
-        return Objects.equals(context, that.context);
+        return Objects.equals(information, that.information) && Objects.equals(performedActions, that.performedActions);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(context);
+        return Objects.hash(information, performedActions);
+    }
+
+    /**
+     * Converts the aggregated result into a prompt-ready payload containing both the information
+     * collected and a list of performed project modifications.
+     */
+    public Map<String, Object> toPromptPayload() {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("performedActions", getPerformedActions());
+        payload.put("informationCollected", getInformation());
+        return payload;
     }
 }

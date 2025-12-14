@@ -2,13 +2,17 @@ package com.gigachat.unit.tests.generator.reasoning.service;
 
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
-import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
+import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfoBuilder;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionStep;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
+import com.gigachat.unit.tests.generator.reasoning.service.action.AddDependencyAction;
+import com.gigachat.unit.tests.generator.reasoning.service.action.AddImportAction;
+import com.gigachat.unit.tests.generator.reasoning.service.action.ApplyPatchAction;
+import com.gigachat.unit.tests.generator.reasoning.service.action.ProjectModificationAction;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -22,8 +26,9 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * Executes tool actions returned by the reasoning model and accumulates machine-readable context
- * for subsequent reasoning iterations.
+ * Executes tool actions returned by the reasoning model. Information-gathering steps append data to
+ * the execution log while project modifications are applied silently and recorded only as performed
+ * actions. No human-facing logs are emitted; all outputs are captured for the next reasoning prompt.
  */
 public class ToolActionExecutor {
 
@@ -58,16 +63,12 @@ public class ToolActionExecutor {
         if (action == null) {
             return ActionExecutionResult.empty();
         }
-        if (action.getType() == ToolActionType.COMPOSITE && action.getSteps() != null) {
-            return executeComposite(action.getSteps());
+        List<ToolActionStep> steps = resolveSteps(action);
+        ActionExecutionResult cumulative = ActionExecutionResult.empty();
+        for (ToolActionStep step : steps) {
+            cumulative = cumulative.merge(executeStep(step));
         }
-        if (action.getSingleStep() != null) {
-            return executeStep(action.getSingleStep());
-        }
-        if (action.getType() != null) {
-            return executeStep(new ToolActionStep(action.getType(), action.getSingleStep() == null ? Map.of() : action.getSingleStep().getArguments()));
-        }
-        return ActionExecutionResult.empty();
+        return cumulative;
     }
 
     public ActionExecutionResult executeStep(ToolActionStep step) {
@@ -77,70 +78,24 @@ public class ToolActionExecutor {
         ToolActionType type = step.getType();
         Map<String, Object> args = step.getArguments();
         return switch (type) {
-            case ADD_DEPENDENCY -> handleAddDependency(args);
-            case APPLY_PATCH -> handleApplyPatch(args);
-            case ADD_IMPORT -> handleAddImport(args);
             case SHOW_FILE -> handleShowFile(args);
             case SHOW_IMPORTS -> handleShowImports(args);
             case SEARCH_SYMBOL -> handleSearchSymbol(args);
-            case RECOMPILE -> handleRecompile();
             case RUN_TEST -> handleRunTests();
+            case ADD_DEPENDENCY -> applyModification(createAddDependencyAction(args));
+            case APPLY_PATCH -> applyModification(createApplyPatchAction(args));
+            case ADD_IMPORT -> applyModification(createAddImportAction(args));
+            case RECOMPILE -> handleRecompile();
             case COMPOSITE -> ActionExecutionResult.empty();
         };
     }
 
-    private ActionExecutionResult executeComposite(List<ToolActionStep> steps) {
-        ActionExecutionResult cumulative = ActionExecutionResult.empty();
-        for (ToolActionStep step : steps) {
-            cumulative = cumulative.merge(executeStep(step));
-        }
-        return cumulative;
-    }
-
-    private ActionExecutionResult handleAddDependency(Map<String, Object> args) {
-        String dependency = readStringArg(args, "dependencyName", "dependency", "artifact");
-        List<String> dependencies = buildFileEditor.addTestDependency(dependency);
-        Map<String, Object> payload = new HashMap<>();
-        if (!dependencies.isEmpty()) {
-            payload.put("updatedDependencies", dependencies);
-        }
-        return new ActionExecutionResult(payload);
-    }
-
-    private ActionExecutionResult handleApplyPatch(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "target");
-        String patch = readStringArg(args, "patch", "content", "diff");
-        if (patch == null || pathValue == null) {
+    private ActionExecutionResult applyModification(ProjectModificationAction action) {
+        if (action == null) {
             return ActionExecutionResult.empty();
         }
-        Path path = resolve(pathValue);
-        String updatedContent = sourceFileEditor.applyPatch(path, patch);
-        Map<String, Object> payload = new HashMap<>();
-        if (!updatedContent.isEmpty()) {
-            payload.put("updatedFile", Map.of(
-                    "path", path.toString(),
-                    "content", updatedContent
-            ));
-        }
-        return new ActionExecutionResult(payload);
-    }
-
-    private ActionExecutionResult handleAddImport(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "target");
-        String importName = readStringArg(args, "import", "importFqcn", "fqcn");
-        if (pathValue == null || importName == null) {
-            return ActionExecutionResult.empty();
-        }
-        Path path = resolve(pathValue);
-        String updatedContent = sourceFileEditor.addImport(path, importName);
-        Map<String, Object> payload = new HashMap<>();
-        if (!updatedContent.isEmpty()) {
-            payload.put("updatedFile", Map.of(
-                    "path", path.toString(),
-                    "content", updatedContent
-            ));
-        }
-        return new ActionExecutionResult(payload);
+        action.apply();
+        return new ActionExecutionResult(Map.of(), List.of(action.describe()));
     }
 
     private ActionExecutionResult handleShowFile(Map<String, Object> args) {
@@ -150,12 +105,10 @@ public class ToolActionExecutor {
         }
         Path path = resolve(pathValue);
         String content = sourceFileEditor.readFile(path);
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("fileContent", Map.of(
-                "path", path.toString(),
-                "content", content
-        ));
-        return new ActionExecutionResult(payload);
+        Map<String, Object> entry = new HashMap<>();
+        entry.put("path", path.toString());
+        entry.put("content", content);
+        return listPayload("fileContents", entry);
     }
 
     private ActionExecutionResult handleShowImports(Map<String, Object> args) {
@@ -165,9 +118,12 @@ public class ToolActionExecutor {
         }
         Path path = resolve(pathValue);
         List<String> imports = sourceFileEditor.readImports(path);
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("imports", imports);
-        return new ActionExecutionResult(payload);
+        Map<String, Object> entry = new HashMap<>();
+        entry.put("path", path.toString());
+        entry.put("imports", imports.stream()
+                .map(value -> value.endsWith(";") ? value : value + ";")
+                .collect(Collectors.toList()));
+        return listPayload("imports", entry);
     }
 
     private ActionExecutionResult handleSearchSymbol(Map<String, Object> args) {
@@ -183,9 +139,7 @@ public class ToolActionExecutor {
         } catch (IOException ignored) {
             // ignore and return any matches gathered so far
         }
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("symbolSearchResults", matches);
-        return new ActionExecutionResult(payload);
+        return new ActionExecutionResult(Map.of("symbolSearchResults", matches));
     }
 
     private List<Map<String, Object>> searchInFile(Path file, String symbol) {
@@ -210,17 +164,15 @@ public class ToolActionExecutor {
 
     private ActionExecutionResult handleRecompile() {
         CompileResult result = compilerInvoker.compile(projectRoot, testFile, methodName);
-        Map<String, Object> payload = new HashMap<>();
-        if (result.success()) {
-            payload.put("compilationSuccess", true);
-        } else {
-            payload.put("errorInfo", CompilationErrorInfoBuilder.from(result, testFile, testFileFqcn));
+        Map<String, Object> detail = new HashMap<>();
+        detail.put("success", result.success());
+        if (!result.success()) {
+            detail.put("errorInfo", CompilationErrorInfoBuilder.from(result, testFile, testFileFqcn));
         }
-        return new ActionExecutionResult(payload);
+        return new ActionExecutionResult(Map.of("compilationResult", detail));
     }
 
     private ActionExecutionResult handleRunTests() {
-        Map<String, Object> payload = new HashMap<>();
         Map<String, Object> detail = new HashMap<>();
         if (executionInvoker == null) {
             detail.put("success", false);
@@ -234,7 +186,51 @@ public class ToolActionExecutor {
             detail.put("stderr", executeResult.stderr());
             detail.put("stacktrace", executeResult.failedTests().stream().collect(Collectors.joining("\n")));
         }
-        payload.put("testResult", detail);
+        return listPayload("testRuns", detail);
+    }
+
+    private ProjectModificationAction createAddDependencyAction(Map<String, Object> args) {
+        String dependency = readStringArg(args, "dependencyName", "dependency", "artifact");
+        if (dependency == null) {
+            return null;
+        }
+        return new AddDependencyAction(buildFileEditor, dependency);
+    }
+
+    private ProjectModificationAction createApplyPatchAction(Map<String, Object> args) {
+        String pathValue = readStringArg(args, "filePath", "path", "target");
+        String patch = readStringArg(args, "patch", "content", "diff");
+        if (patch == null || pathValue == null) {
+            return null;
+        }
+        return new ApplyPatchAction(sourceFileEditor, resolve(pathValue), patch);
+    }
+
+    private ProjectModificationAction createAddImportAction(Map<String, Object> args) {
+        String pathValue = readStringArg(args, "filePath", "path", "target");
+        String importName = readStringArg(args, "import", "importFqcn", "fqcn");
+        if (pathValue == null || importName == null) {
+            return null;
+        }
+        return new AddImportAction(sourceFileEditor, resolve(pathValue), importName);
+    }
+
+    private List<ToolActionStep> resolveSteps(ToolAction action) {
+        if (action.getType() == ToolActionType.COMPOSITE && action.getSteps() != null) {
+            return action.getSteps();
+        }
+        if (action.getSingleStep() != null) {
+            return List.of(action.getSingleStep());
+        }
+        if (action.getType() != null) {
+            return List.of(new ToolActionStep(action.getType(), action.getSingleStep() == null ? Map.of() : action.getSingleStep().getArguments()));
+        }
+        return List.of();
+    }
+
+    private ActionExecutionResult listPayload(String key, Object entry) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put(key, List.of(entry));
         return new ActionExecutionResult(payload);
     }
 
