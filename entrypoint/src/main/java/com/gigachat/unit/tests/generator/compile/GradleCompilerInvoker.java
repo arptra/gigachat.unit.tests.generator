@@ -166,7 +166,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             }
         }
 
-        Path representative = compilationTargets.getFirst();
+        Path representative = compilationTargets.get(0);
         String modulePath = determineGradlePath(projectRoot, representative);
         Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
@@ -356,7 +356,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             return cachedResult;
         }
 
-        Path representative = compilationTargets.getFirst();
+        Path representative = compilationTargets.get(0);
         String modulePath = determineGradlePath(projectRoot, representative);
         Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
@@ -448,7 +448,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private Path deriveCacheKey(List<Path> compilationTargets, Path requestedPath) {
         return compilationTargets.isEmpty()
                 ? requestedPath.toAbsolutePath().normalize()
-                : compilationTargets.getFirst().toAbsolutePath().normalize();
+                : compilationTargets.get(0).toAbsolutePath().normalize();
     }
 
     private CompileResult cacheResult(Path cacheKey, CompileResult result) {

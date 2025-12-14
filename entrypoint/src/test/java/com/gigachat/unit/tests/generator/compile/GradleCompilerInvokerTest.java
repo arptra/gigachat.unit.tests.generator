@@ -167,7 +167,7 @@ class GradleCompilerInvokerTest {
         List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(firstTest, secondTest), "parallel");
 
         assertEquals(2, results.size());
-        assertTrue(results.getFirst().success());
+        assertTrue(results.get(0).success());
         assertTrue(results.getLast().success());
 
         Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
@@ -201,7 +201,7 @@ class GradleCompilerInvokerTest {
         List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(validTest, invalidTest), "parallel");
 
         assertEquals(2, results.size());
-        assertTrue(results.getFirst().success());
+        assertTrue(results.get(0).success());
         assertFalse(results.getLast().success());
 
         Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
@@ -233,7 +233,7 @@ class GradleCompilerInvokerTest {
         GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
         List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(firstTest, secondTest), "forked");
 
-        assertTrue(results.getFirst().success());
+        assertTrue(results.get(0).success());
         assertTrue(results.getLast().success());
 
         Path logFile = projectRoot.resolve(".agent/logs/pipeline.log");
