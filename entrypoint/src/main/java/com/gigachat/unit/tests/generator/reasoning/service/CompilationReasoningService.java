@@ -30,7 +30,6 @@ public class CompilationReasoningService {
 
     public ReasoningResponse reasonAboutError(ReasoningLoopContext loopContext) {
         String prompt = promptBuilder.buildPrompt(loopContext);
-
         TestClassInfo classInfo = new TestClassInfo(
                 "ReasoningPlaceholder",
                 "ReasoningPlaceholderTest",
@@ -43,6 +42,16 @@ public class CompilationReasoningService {
 
         GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, mockPlan);
         String raw = snippet == null ? "" : snippet.methodBody();
-        return parser.parse(raw);
+        try {
+            return parser.parse(raw);
+        } catch (RuntimeException firstFailure) {
+            GeneratedTestSnippet retrySnippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, mockPlan);
+            String retryRaw = retrySnippet == null ? "" : retrySnippet.methodBody();
+            try {
+                return parser.parse(retryRaw);
+            } catch (RuntimeException ignored) {
+                return new ReasoningResponse();
+            }
+        }
     }
 }

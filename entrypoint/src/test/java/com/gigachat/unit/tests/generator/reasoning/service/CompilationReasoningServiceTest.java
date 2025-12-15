@@ -61,6 +61,30 @@ class CompilationReasoningServiceTest {
         assertTrue(llmClient.lastPrompt.contains("Compilation error info"));
     }
 
+    @Test
+    void shouldRetryParsingWhenInitialResponseIsInvalid() {
+        String validJson = """
+                {
+                  "reasoning": ["second attempt parsed"],
+                  "action": {"type": "RECOMPILE", "singleStep": {"type": "RECOMPILE", "arguments": {}}}
+                }
+                """;
+        RetryingLlmClient llmClient = new RetryingLlmClient(List.of("not-a-json", validJson));
+        CompilationReasoningService service = new CompilationReasoningService(
+                llmClient,
+                new CompilationReasoningPromptBuilder(),
+                new ReasoningResponseParser()
+        );
+
+        CompilationErrorInfo errorInfo = new CompilationErrorInfo("out", "msg", "fqcn", "path", 1, null);
+        ProjectContextSummary summary = new ProjectContextSummary(List.of("src"), List.of("test"), List.of("dep"));
+
+        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty()));
+
+        assertEquals(List.of("second attempt parsed"), response.getReasoning());
+        assertEquals(2, llmClient.callCount);
+    }
+
     private static class CapturingLlmClient implements LlmClient {
 
         private final String responseJson;
@@ -80,6 +104,37 @@ class CompilationReasoningServiceTest {
                     classInfo.getTestClassName(),
                     methodInfo.getSignature(),
                     responseJson,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    ""
+            );
+        }
+    }
+
+    private static class RetryingLlmClient implements LlmClient {
+
+        private final List<String> responses;
+        private int index;
+        private int callCount;
+
+        RetryingLlmClient(List<String> responses) {
+            this.responses = responses;
+        }
+
+        @Override
+        public GeneratedTestSnippet generateTestSnippet(String prompt,
+                                                        TestClassInfo classInfo,
+                                                        TestMethodInfo methodInfo,
+                                                        MockPlan plan) {
+            callCount++;
+            String payload = responses.get(Math.min(index, responses.size() - 1));
+            index++;
+            return new GeneratedTestSnippet(
+                    classInfo.getTestClassName(),
+                    methodInfo.getSignature(),
+                    payload,
                     List.of(),
                     List.of(),
                     List.of(),

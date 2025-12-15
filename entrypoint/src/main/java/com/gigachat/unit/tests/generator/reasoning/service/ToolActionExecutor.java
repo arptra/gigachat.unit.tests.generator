@@ -132,10 +132,21 @@ public class ToolActionExecutor {
             return ActionExecutionResult.empty();
         }
         List<Map<String, Object>> matches = new ArrayList<>();
-        try {
-            Files.walk(projectRoot)
-                    .filter(path -> Files.isRegularFile(path) && path.toString().endsWith(".java"))
-                    .forEach(path -> matches.addAll(searchInFile(path, symbol)));
+        Path testRoot = projectRoot.resolve("src/test").normalize().toAbsolutePath();
+        try (var paths = Files.walk(projectRoot)) {
+            for (Path path : (Iterable<Path>) paths
+                    .filter(candidate -> Files.isRegularFile(candidate) && candidate.toString().endsWith(".java"))
+                    ::iterator) {
+                Path normalized = path.toAbsolutePath().normalize();
+                if (normalized.startsWith(testRoot)) {
+                    continue;
+                }
+                List<Map<String, Object>> found = searchInFile(normalized, symbol);
+                if (!found.isEmpty()) {
+                    matches.addAll(found);
+                    break;
+                }
+            }
         } catch (IOException ignored) {
             // ignore and return any matches gathered so far
         }
