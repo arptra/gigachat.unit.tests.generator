@@ -32,6 +32,17 @@ public class CompilationReasoningPromptBuilder {
                 .collect(Collectors.joining(", "));
         prompt.append(tools).append("\n\n");
 
+        prompt.append("Use the following argument schema for each tool (all keys are case-sensitive):\n");
+        prompt.append("- SHOW_FILE:   {\\\"filePath\\\": \\\"<relative or absolute path>\\\"}\n");
+        prompt.append("- SHOW_IMPORTS:{\\\"filePath\\\": \\\"<relative or absolute path>\\\"}\n");
+        prompt.append("- SEARCH_SYMBOL:{\\\"symbol\\\": \\\"<identifier or substring>\\\"}\n");
+        prompt.append("- RUN_TEST:    { } (no arguments; the target test/method is provided in context)\n");
+        prompt.append("- ADD_DEPENDENCY:{\\\"dependency\\\": \\\"<group:artifact:version or notation>\\\"}\n");
+        prompt.append("- APPLY_PATCH: {\\\"filePath\\\": \\\"<relative or absolute path>\\\", \\\"patch\\\": \\\"<unified diff>\\\"}\n");
+        prompt.append("- ADD_IMPORT:  {\\\"filePath\\\": \\\"<relative or absolute path>\\\", \\\"importFqcn\\\": \\\"<fully-qualified class>\\\"}\n");
+        prompt.append("- RECOMPILE:   { } (no arguments)\n");
+        prompt.append("- COMPOSITE:   {\\\"steps\\\": [{step objects using the schema above}]}\n\n");
+
         prompt.append("Return JSON response strictly in the following format:\n");
         prompt.append("{\n")
                 .append("  \"reasoning\": [<chain-of-thought steps as strings>],\n")

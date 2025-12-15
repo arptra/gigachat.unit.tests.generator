@@ -35,6 +35,8 @@ class CompilationReasoningPromptBuilderTest {
 
         assertTrue(prompt.contains("reasoning agent"));
         assertTrue(prompt.contains("Allowed tools"));
+        assertTrue(prompt.contains("argument schema"));
+        assertTrue(prompt.contains("filePath"));
         assertTrue(prompt.contains("reasoning\""));
         assertTrue(prompt.contains("Compilation error info"));
         assertTrue(prompt.contains("cannot find symbol"));
