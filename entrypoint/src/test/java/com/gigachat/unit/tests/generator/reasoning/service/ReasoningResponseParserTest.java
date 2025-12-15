@@ -52,4 +52,19 @@ class ReasoningResponseParserTest {
         ReasoningResponseParser parser = new ReasoningResponseParser();
         assertThrows(IllegalArgumentException.class, () -> parser.parse("   "));
     }
+
+    @Test
+    void shouldParsePayloadWrappedInCodeFence() {
+        String json = """
+                ```json
+                {"reasoning":["ok"],"action":{"type":"RECOMPILE","singleStep":{"type":"RECOMPILE","arguments":{}},"steps":[]}}
+                ```
+                """;
+
+        ReasoningResponseParser parser = new ReasoningResponseParser();
+        ReasoningResponse response = parser.parse(json);
+
+        assertEquals(List.of("ok"), response.getReasoning());
+        assertEquals(ToolActionType.RECOMPILE, response.getAction().getType());
+    }
 }
