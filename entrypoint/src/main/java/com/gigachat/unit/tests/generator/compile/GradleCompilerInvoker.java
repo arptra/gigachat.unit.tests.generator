@@ -59,6 +59,15 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private static final ConcurrentMap<String, ClasspathResolution> CLASSPATH_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Path, Long> DEPENDENCY_FILE_TIMESTAMPS = new ConcurrentHashMap<>();
     private static final Set<Path> DEFAULT_CLASSPATH = defaultClasspath();
+    private static final Set<String> DEPENDENCY_FILE_NAMES = Set.of(
+            "gradle.dependencies",
+            "dependencies.gradle",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+            "libs.versions.toml"
+    );
 
     public GradleCompilerInvoker(PipelineLogger logger) {
         this(logger, false);
@@ -935,25 +944,41 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     private boolean dependencyFileUpdated(Path projectRoot) {
         Path normalizedRoot = projectRoot.toAbsolutePath().normalize();
-        Path dependencyFile = normalizedRoot.resolve("gradle.dependencies");
-        Long previous = DEPENDENCY_FILE_TIMESTAMPS.get(normalizedRoot);
+        Set<Path> candidates = collectDependencyFiles(normalizedRoot);
+        boolean changed = false;
 
-        if (!Files.exists(dependencyFile)) {
-            if (previous != null) {
-                DEPENDENCY_FILE_TIMESTAMPS.remove(normalizedRoot);
-                return true;
+        for (Path candidate : candidates) {
+            try {
+                long lastModified = Files.getLastModifiedTime(candidate).toMillis();
+                Long previous = DEPENDENCY_FILE_TIMESTAMPS.put(candidate, lastModified);
+                if (previous == null || lastModified != previous) {
+                    changed = true;
+                }
+            } catch (IOException exception) {
+                logger.warn("Unable to read dependency timestamp for " + candidate + ": " + exception.getMessage());
             }
-            return false;
         }
 
-        try {
-            long lastModified = Files.getLastModifiedTime(dependencyFile).toMillis();
-            DEPENDENCY_FILE_TIMESTAMPS.put(normalizedRoot, lastModified);
-            return previous != null && lastModified > previous;
-        } catch (IOException exception) {
-            logger.warn("Unable to read gradle.dependencies timestamp: " + exception.getMessage());
-            return false;
+        for (Path tracked : new ArrayList<>(DEPENDENCY_FILE_TIMESTAMPS.keySet())) {
+            if (tracked.startsWith(normalizedRoot) && !candidates.contains(tracked)) {
+                DEPENDENCY_FILE_TIMESTAMPS.remove(tracked);
+                changed = true;
+            }
         }
+
+        return changed;
+    }
+
+    private Set<Path> collectDependencyFiles(Path projectRoot) {
+        Set<Path> files = new LinkedHashSet<>();
+        try (Stream<Path> stream = Files.walk(projectRoot)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(path -> DEPENDENCY_FILE_NAMES.contains(path.getFileName().toString()))
+                    .forEach(files::add);
+        } catch (IOException ignored) {
+            // best-effort collection
+        }
+        return files;
     }
 
     private void invalidateClasspathCacheForProject(Path projectRoot) {
