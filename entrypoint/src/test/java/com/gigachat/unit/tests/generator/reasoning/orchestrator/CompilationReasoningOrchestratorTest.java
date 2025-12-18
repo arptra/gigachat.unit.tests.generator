@@ -41,7 +41,8 @@ class CompilationReasoningOrchestratorTest {
         ReasoningResponse response = orchestrator.handle(new ReasoningLoopContext(
                 new CompilationErrorInfo(),
                 new ProjectContextSummary(),
-                ActionExecutionResult.empty()));
+                ActionExecutionResult.empty(),
+                null));
         ReasoningResponse expected = new ReasoningResponse(
                 List.of("a"),
                 new ToolAction(ToolActionType.RECOMPILE, List.of(), new ToolActionStep(ToolActionType.RECOMPILE, Map.of()))

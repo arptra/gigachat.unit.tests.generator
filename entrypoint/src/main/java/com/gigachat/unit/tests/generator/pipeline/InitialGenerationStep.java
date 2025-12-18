@@ -48,6 +48,7 @@ import com.gigachat.unit.tests.generator.reasoning.service.BuildFileEditor;
 import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
 import com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor;
 import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
+import com.gigachat.unit.tests.generator.compile.classification.classify.CompilationErrorClassifier;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -496,6 +497,7 @@ public class InitialGenerationStep {
                 reasoningWorkflow,
                 projectContextCollector,
                 actionExecutor,
+                new CompilationErrorClassifier(),
                 config.getProjectPath(),
                 classInfo.getTargetPath(),
                 classInfo.getTestClassName(),
@@ -574,8 +576,11 @@ public class InitialGenerationStep {
                     ? buildCompilationErrorInfo(compileResult, classInfo)
                     : buildExecutionErrorInfo(executeResult, classInfo, methodInfo);
             ProjectContextSummary summary = buildProjectContextSummary(config, classInfo);
+            com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport = compileResult != null
+                    ? new CompilationErrorClassifier().classify(compileResult.stderr())
+                    : null;
             ReasoningLoopContext loopContext = new NextContextBuilder()
-                    .build(errorInfo, summary, ActionExecutionResult.empty());
+                    .build(errorInfo, summary, ActionExecutionResult.empty(), errorReport);
             return reasoningWorkflow.process(loopContext);
         } catch (Exception exception) {
             logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()

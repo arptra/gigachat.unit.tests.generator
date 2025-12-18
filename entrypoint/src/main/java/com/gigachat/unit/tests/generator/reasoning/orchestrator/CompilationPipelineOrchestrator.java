@@ -2,6 +2,8 @@ package com.gigachat.unit.tests.generator.reasoning.orchestrator;
 
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
+import com.gigachat.unit.tests.generator.compile.classification.classify.CompilationErrorClassifier;
+import com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfoBuilder;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
@@ -29,6 +31,7 @@ public class CompilationPipelineOrchestrator {
     private final ProjectContextCollector projectContextCollector;
     private final ToolActionExecutor actionExecutor;
     private final NextContextBuilder nextContextBuilder;
+    private final CompilationErrorClassifier errorClassifier;
     private final Path projectRoot;
     private final Path testFile;
     private final String testFileFqcn;
@@ -38,6 +41,7 @@ public class CompilationPipelineOrchestrator {
                                            ReasoningWorkflow reasoningWorkflow,
                                            ProjectContextCollector projectContextCollector,
                                            ToolActionExecutor actionExecutor,
+                                           CompilationErrorClassifier errorClassifier,
                                            Path projectRoot,
                                            Path testFile,
                                            String testFileFqcn,
@@ -47,6 +51,7 @@ public class CompilationPipelineOrchestrator {
         this.projectContextCollector = Objects.requireNonNull(projectContextCollector, "projectContextCollector");
         this.actionExecutor = Objects.requireNonNull(actionExecutor, "actionExecutor");
         this.nextContextBuilder = new NextContextBuilder();
+        this.errorClassifier = errorClassifier == null ? new CompilationErrorClassifier() : errorClassifier;
         this.projectRoot = Objects.requireNonNull(projectRoot, "projectRoot");
         this.testFile = Objects.requireNonNull(testFile, "testFile");
         this.testFileFqcn = testFileFqcn;
@@ -66,7 +71,8 @@ public class CompilationPipelineOrchestrator {
                 return lastResult;
             }
             CompilationErrorInfo errorInfo = CompilationErrorInfoBuilder.from(lastResult, testFile, testFileFqcn);
-            ReasoningLoopContext loopContext = nextContextBuilder.build(errorInfo, projectContextCollector.collect(), cumulativeResult);
+            CompilationErrorReport report = errorClassifier.classify(lastResult.stderr());
+            ReasoningLoopContext loopContext = nextContextBuilder.build(errorInfo, projectContextCollector.collect(), cumulativeResult, report);
             ReasoningResponse response = reasoningWorkflow.process(loopContext);
             ActionExecutionResult iterationResult = actionExecutor.execute(response == null ? null : response.getAction());
             cumulativeResult = cumulativeResult.merge(iterationResult);

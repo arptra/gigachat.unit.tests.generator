@@ -38,7 +38,7 @@ class ReasoningWorkflowTest {
         );
         ReasoningWorkflow workflow = new ReasoningWorkflow(new CompilationReasoningOrchestrator(service));
 
-        ReasoningResponse actual = workflow.process(new ReasoningLoopContext(new CompilationErrorInfo(), new ProjectContextSummary(), ActionExecutionResult.empty()));
+        ReasoningResponse actual = workflow.process(new ReasoningLoopContext(new CompilationErrorInfo(), new ProjectContextSummary(), ActionExecutionResult.empty(), null));
         ReasoningResponse expected = new ReasoningResponse(
                 List.of("step"),
                 new ToolAction(ToolActionType.RECOMPILE, List.of(), new ToolActionStep(ToolActionType.RECOMPILE, Map.of()))

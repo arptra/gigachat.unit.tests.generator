@@ -55,6 +55,10 @@ public class CompilationReasoningPromptBuilder {
 
         prompt.append("Compilation error info (JSON):\n");
         prompt.append(asJson(loopContext.getErrorInfo())).append("\n\n");
+        if (loopContext.getErrorReport() != null) {
+            prompt.append("Classified compilation errors (JSON):\n");
+            prompt.append(asJson(loopContext.getErrorReport())).append("\n\n");
+        }
         prompt.append("Project context summary (JSON):\n");
         prompt.append(asJson(loopContext.getProjectContextSummary())).append("\n\n");
         if (loopContext.getExecutionResult() != null

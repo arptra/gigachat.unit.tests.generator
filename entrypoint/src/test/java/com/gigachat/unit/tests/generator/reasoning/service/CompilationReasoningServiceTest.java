@@ -49,7 +49,7 @@ class CompilationReasoningServiceTest {
         CompilationErrorInfo errorInfo = new CompilationErrorInfo("out", "msg", "fqcn", "path", 1, null);
         ProjectContextSummary summary = new ProjectContextSummary(List.of("src"), List.of("test"), List.of("dep"));
 
-        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty()));
+        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null));
 
         assertEquals(List.of("inspect error", "apply fix"), response.getReasoning());
         ToolAction expected = new ToolAction(
@@ -79,7 +79,7 @@ class CompilationReasoningServiceTest {
         CompilationErrorInfo errorInfo = new CompilationErrorInfo("out", "msg", "fqcn", "path", 1, null);
         ProjectContextSummary summary = new ProjectContextSummary(List.of("src"), List.of("test"), List.of("dep"));
 
-        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty()));
+        ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null));
 
         assertEquals(List.of("second attempt parsed"), response.getReasoning());
         assertEquals(2, llmClient.callCount);

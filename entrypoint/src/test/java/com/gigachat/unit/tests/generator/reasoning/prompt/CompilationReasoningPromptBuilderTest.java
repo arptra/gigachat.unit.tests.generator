@@ -31,7 +31,7 @@ class CompilationReasoningPromptBuilderTest {
 
         CompilationReasoningPromptBuilder builder = new CompilationReasoningPromptBuilder();
         ActionExecutionResult executionResult = new ActionExecutionResult(Map.of("hint", "value"), List.of("ADD_DEPENDENCY junit"));
-        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, executionResult));
+        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, executionResult, null));
 
         assertTrue(prompt.contains("reasoning agent"));
         assertTrue(prompt.contains("Allowed tools"));

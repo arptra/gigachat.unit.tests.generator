@@ -11,13 +11,16 @@ public class ReasoningLoopContext {
     private final CompilationErrorInfo errorInfo;
     private final ProjectContextSummary projectContextSummary;
     private final ActionExecutionResult executionResult;
+    private final com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport;
 
     public ReasoningLoopContext(CompilationErrorInfo errorInfo,
                                 ProjectContextSummary projectContextSummary,
-                                ActionExecutionResult executionResult) {
+                                ActionExecutionResult executionResult,
+                                com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport) {
         this.errorInfo = Objects.requireNonNull(errorInfo, "errorInfo");
         this.projectContextSummary = Objects.requireNonNull(projectContextSummary, "projectContextSummary");
         this.executionResult = executionResult == null ? ActionExecutionResult.empty() : executionResult;
+        this.errorReport = errorReport;
     }
 
     public CompilationErrorInfo getErrorInfo() {
@@ -30,5 +33,9 @@ public class ReasoningLoopContext {
 
     public ActionExecutionResult getExecutionResult() {
         return executionResult;
+    }
+
+    public com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport getErrorReport() {
+        return errorReport;
     }
 }

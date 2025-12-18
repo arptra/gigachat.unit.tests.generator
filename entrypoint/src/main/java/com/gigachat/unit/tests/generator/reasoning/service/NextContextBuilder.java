@@ -13,8 +13,10 @@ public class NextContextBuilder {
 
     public ReasoningLoopContext build(CompilationErrorInfo errorInfo,
                                       ProjectContextSummary projectContextSummary,
-                                      ActionExecutionResult actionResult) {
+                                      ActionExecutionResult actionResult,
+                                      com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport) {
         return new ReasoningLoopContext(errorInfo, projectContextSummary,
-                actionResult == null ? ActionExecutionResult.empty() : actionResult);
+                actionResult == null ? ActionExecutionResult.empty() : actionResult,
+                errorReport);
     }
 }
