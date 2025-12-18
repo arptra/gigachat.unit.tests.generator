@@ -26,6 +26,7 @@ import com.github.javaparser.ast.body.MethodDeclaration;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -102,6 +103,10 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
             Optional<GeneratedTestSnippet> snippet = mapContentToSnippet(content, classInfo);
             if (snippet.isPresent()) {
                 return snippet.get();
+            }
+            if (content != null && !content.isBlank() && isReasoningRequest(classInfo, methodInfo)) {
+                logger.info("Received reasoning response; skipping snippet parsing for " + methodInfo.getSignature());
+                return createRawSnippet(content, classInfo, methodInfo);
             }
             logger.warn("Unable to parse GigaChat response for method " + methodInfo.getSignature() + "; using stub fallback.");
         } catch (HttpClientException exception) {
@@ -331,6 +336,31 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
             return annotationIndex;
         }
         return genericClassIndex;
+    }
+
+    private boolean isReasoningRequest(TestClassInfo classInfo, TestMethodInfo methodInfo) {
+        String className = classInfo == null ? "" : classInfo.getTestClassName();
+        if (className != null && className.startsWith("ReasoningPlaceholder")) {
+            return true;
+        }
+        String signature = methodInfo == null ? "" : methodInfo.getSignature();
+        if (signature == null) {
+            return false;
+        }
+        String normalised = signature.toLowerCase(Locale.ROOT);
+        return normalised.contains("reasoning") || normalised.contains("reason()");
+    }
+
+    private GeneratedTestSnippet createRawSnippet(String content,
+                                                  TestClassInfo classInfo,
+                                                  TestMethodInfo methodInfo) {
+        String className = classInfo == null ? "" : classInfo.getTestClassName();
+        String methodName = methodInfo == null ? "reason" : Optional.ofNullable(methodInfo.getSignature())
+                .map(signature -> signature.replaceAll("[^A-Za-z0-9]+", " ").trim())
+                .filter(name -> !name.isBlank())
+                .orElse("reason");
+        String trimmed = content.trim();
+        return new GeneratedTestSnippet(className, methodName, trimmed, List.of(), List.of(), List.of(), List.of(), trimmed);
     }
 
     private MethodDeclaration locateTestMethod(ClassOrInterfaceDeclaration declaration) {

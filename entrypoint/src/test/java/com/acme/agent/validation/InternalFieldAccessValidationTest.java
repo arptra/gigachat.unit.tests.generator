@@ -21,6 +21,11 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze.AnalysisSummar
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze.TestTargetContext;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodAnalysisResult;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodMetadata;
+import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationReasoningOrchestrator;
+import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
+import com.gigachat.unit.tests.generator.reasoning.service.CompilationReasoningService;
+import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
+import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +63,11 @@ class InternalFieldAccessValidationTest {
         CompilerInvoker compilerInvoker = (projectRoot, testClassFile, methodName) -> new CompileResult(true, List.of(), "", "");
         ExecutionInvoker executionInvoker = (projectRoot, testClassFile, methodName) -> new ExecuteResult(true, List.of(), "", "");
         SnapshotStorage snapshotStorage = new SnapshotStorage(tempDir, logger);
+        ReasoningWorkflow reasoningWorkflow = new ReasoningWorkflow(
+                new CompilationReasoningOrchestrator(new CompilationReasoningService(
+                        llmClient,
+                        new CompilationReasoningPromptBuilder(),
+                        new ReasoningResponseParser())));
 
         generationStep = new InitialGenerationStep(logger,
                 writer,
@@ -69,7 +79,8 @@ class InternalFieldAccessValidationTest {
                 compilerInvoker,
                 executionInvoker,
                 snapshotStorage,
-                registry);
+                registry,
+                reasoningWorkflow);
 
         MethodAnalysisResult methodAnalysis = new MethodAnalysisResult(new MethodMetadata("method", "method()", "void"),
                 List.of(),

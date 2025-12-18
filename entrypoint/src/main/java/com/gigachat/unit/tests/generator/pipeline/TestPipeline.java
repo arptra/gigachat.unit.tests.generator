@@ -20,6 +20,11 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
+import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationReasoningOrchestrator;
+import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
+import com.gigachat.unit.tests.generator.reasoning.service.CompilationReasoningService;
+import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
+import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -98,6 +103,14 @@ public class TestPipeline {
         CompilerInvoker compilerInvoker = new GradleCompilerInvoker(logger);
         ExecutionInvoker executionInvoker = new JUnitExecutionInvoker(logger);
         SnapshotStorage snapshotStorage = new SnapshotStorage(projectRoot, logger);
+        CompilationReasoningPromptBuilder reasoningPromptBuilder = new CompilationReasoningPromptBuilder();
+        ReasoningResponseParser reasoningResponseParser = new ReasoningResponseParser();
+        CompilationReasoningService reasoningService = new CompilationReasoningService(
+                llmClient,
+                reasoningPromptBuilder,
+                reasoningResponseParser);
+        ReasoningWorkflow reasoningWorkflow = new ReasoningWorkflow(
+                new CompilationReasoningOrchestrator(reasoningService));
         return new InitialGenerationStep(logger,
                 testClassWriter,
                 skeletonPromptBuilder,
@@ -108,7 +121,8 @@ public class TestPipeline {
                 compilerInvoker,
                 executionInvoker,
                 snapshotStorage,
-                methodRegistry);
+                methodRegistry,
+                reasoningWorkflow);
     }
 
     private LlmClient createLlmClient(AgentConfig config, PipelineLogger logger) {
