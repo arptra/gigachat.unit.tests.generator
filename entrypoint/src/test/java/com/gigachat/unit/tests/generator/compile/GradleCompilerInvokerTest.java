@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
@@ -14,12 +16,14 @@ import javax.tools.ToolProvider;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -499,5 +503,43 @@ class GradleCompilerInvokerTest {
             assertFalse(cachedResult.success(), "Cached result should fail for " + fileName);
             assertTrue(cachedResult.stderr().contains(fileName), "Cached diagnostics should reference " + fileName);
         }
+    }
+
+    @Test
+    void refreshesClasspathWhenDependenciesFileChanges(@TempDir Path projectRoot) throws Exception {
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+        Path testFile = testsDir.resolve("DependencyAwareTest.java");
+        Files.writeString(testFile,
+                "package sample;\n" +
+                        "public class DependencyAwareTest {\n" +
+                        "    public void ok() {}\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path dependencyFile = projectRoot.resolve("gradle.dependencies");
+        Files.writeString(dependencyFile, "deps", StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        assertTrue(invoker.compile(projectRoot, testFile, "ok").success());
+
+        TimeUnit.MILLISECONDS.sleep(5);
+        Files.writeString(dependencyFile, "\nnew-dep", StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+
+        Field cacheField = GradleCompilerInvoker.class.getDeclaredField("CLASSPATH_CACHE");
+        cacheField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        ConcurrentMap<String, Object> classpathCache = (ConcurrentMap<String, Object>) cacheField.get(null);
+
+        Constructor<?> ctor = Class.forName("com.gigachat.unit.tests.generator.compile.GradleCompilerInvoker$ClasspathResolution")
+                .getDeclaredConstructor(Set.class, boolean.class);
+        ctor.setAccessible(true);
+        Object dummyResolution = ctor.newInstance(Set.of(projectRoot.resolve("lib/dummy.jar")), true);
+        String cacheKey = projectRoot.toAbsolutePath().normalize() + "|";
+        classpathCache.put(cacheKey, dummyResolution);
+
+        invoker.compile(projectRoot, testFile, "ok");
+
+        assertFalse(classpathCache.containsKey(cacheKey));
     }
 }

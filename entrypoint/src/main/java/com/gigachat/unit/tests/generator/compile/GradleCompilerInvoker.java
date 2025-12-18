@@ -57,6 +57,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private static final CompilationCache COMPILATION_CACHE = CompilationCache.getInstance();
     private static final CompilationEnvironment COMPILATION_ENVIRONMENT = new CompilationEnvironment();
     private static final ConcurrentMap<String, ClasspathResolution> CLASSPATH_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Path, Long> DEPENDENCY_FILE_TIMESTAMPS = new ConcurrentHashMap<>();
     private static final Set<Path> DEFAULT_CLASSPATH = defaultClasspath();
 
     public GradleCompilerInvoker(PipelineLogger logger) {
@@ -107,14 +108,24 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             String modulePath = entry.getKey();
             List<Path> moduleTargets = entry.getValue();
 
-            List<CompileResult> cachedResults = moduleTargets.stream()
-                    .map(target -> getCachedResult(deriveCacheKey(List.of(target), target)))
-                    .filter(Objects::nonNull)
-                    .toList();
+            boolean dependenciesChanged = dependencyFileUpdated(projectRoot);
+            if (dependenciesChanged) {
+                invalidateClasspathCacheForProject(projectRoot);
+                moduleTargets.forEach(COMPILATION_CACHE::remove);
+            }
 
-            List<Path> staleTargets = moduleTargets.stream()
-                    .filter(target -> getCachedResult(deriveCacheKey(List.of(target), target)) == null)
-                    .toList();
+            List<CompileResult> cachedResults = dependenciesChanged
+                    ? List.of()
+                    : moduleTargets.stream()
+                            .map(target -> getCachedResult(deriveCacheKey(List.of(target), target)))
+                            .filter(Objects::nonNull)
+                            .toList();
+
+            List<Path> staleTargets = dependenciesChanged
+                    ? moduleTargets
+                    : moduleTargets.stream()
+                            .filter(target -> getCachedResult(deriveCacheKey(List.of(target), target)) == null)
+                            .toList();
 
             if (staleTargets.isEmpty()) {
                 moduleTargets.forEach(target -> messages.add("Using cached compilation result for " + target.toAbsolutePath().normalize()));
@@ -129,7 +140,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     ? projectRoot
                     : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
 
-            ModuleCompilationOutcome moduleOutcome = compileModuleTests(projectRoot, modulePath, moduleRoot, moduleTargets, methodName, messages);
+            ModuleCompilationOutcome moduleOutcome = compileModuleTests(projectRoot, modulePath, moduleRoot, moduleTargets, methodName, messages, dependenciesChanged);
             CompileResult moduleResult = moduleOutcome.result();
             overallSuccess &= moduleResult.success();
             appendOutputs(stdout, stderr, moduleResult);
@@ -174,23 +185,29 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
 
         Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
-        if (useCache) {
+        Path representative = compilationTargets.get(0);
+        String modulePath = determineGradlePath(projectRoot, representative);
+        Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
+        Path outputDir = moduleRoot.resolve("build/classes/java/test");
+
+        boolean dependenciesChanged = dependencyFileUpdated(projectRoot);
+        if (dependenciesChanged) {
+            invalidateClasspathCacheForProject(projectRoot);
+            if (useCache) {
+                COMPILATION_CACHE.remove(cacheKey);
+            }
+        } else if (useCache) {
             CompileResult cachedResult = getCachedResult(cacheKey);
             if (cachedResult != null) {
                 return cachedResult;
             }
         }
 
-        Path representative = compilationTargets.get(0);
-        String modulePath = determineGradlePath(projectRoot, representative);
-        Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
-        Path outputDir = moduleRoot.resolve("build/classes/java/test");
-
         boolean outputDirPreexisted = Files.exists(outputDir);
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages, dependenciesChanged);
             if (includeAllTestClasses) {
                 classpathEntries.addAll(resolveAllTestOutputs(projectRoot, messages));
             }
@@ -248,7 +265,8 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private ModuleCompilationOutcome compileModuleTests(Path projectRoot, String modulePath, Path moduleRoot,
-                                                        List<Path> compilationTargets, String methodName, List<String> messages) {
+                                                        List<Path> compilationTargets, String methodName, List<String> messages,
+                                                        boolean dependenciesChanged) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             String message = "No system Java compiler available. Ensure a JDK is installed.";
@@ -261,7 +279,10 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages);
+            if (dependenciesChanged) {
+                invalidateClasspathCacheForProject(projectRoot);
+            }
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages, dependenciesChanged);
             classpathEntries.addAll(resolveAllTestOutputs(projectRoot, messages));
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
@@ -363,21 +384,27 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
 
         Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
-        CompileResult cachedResult = getCachedResult(cacheKey);
-        if (cachedResult != null) {
-            return cachedResult;
-        }
-
         Path representative = compilationTargets.get(0);
         String modulePath = determineGradlePath(projectRoot, representative);
         Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
 
+        boolean dependenciesChanged = dependencyFileUpdated(projectRoot);
+        if (dependenciesChanged) {
+            invalidateClasspathCacheForProject(projectRoot);
+            COMPILATION_CACHE.remove(cacheKey);
+        } else {
+            CompileResult cachedResult = getCachedResult(cacheKey);
+            if (cachedResult != null) {
+                return cachedResult;
+            }
+        }
+
         boolean outputDirPreexisted = Files.exists(outputDir);
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages, dependenciesChanged);
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
             classpathEntries.add(moduleRoot.resolve("build/resources/test"));
@@ -565,15 +592,18 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     private record ModuleCompilationOutcome(CompileResult result, List<Diagnostic<? extends JavaFileObject>> diagnostics) {
     }
 
-    private Set<Path> resolveTestClasspathWithRefresh(Path projectRoot, String modulePath, List<String> messages) {
+    private Set<Path> resolveTestClasspathWithRefresh(Path projectRoot, String modulePath, List<String> messages, boolean forceRefresh) {
         String cacheKey = projectRoot.toAbsolutePath().normalize() + "|" + modulePath;
+        if (forceRefresh) {
+            CLASSPATH_CACHE.remove(cacheKey);
+        }
         ClasspathResolution cached = CLASSPATH_CACHE.get(cacheKey);
         if (cached != null && !cached.entries().isEmpty()) {
             return new LinkedHashSet<>(cached.entries());
         }
 
-        ClasspathResolution classpath = resolveTestClasspath(projectRoot, modulePath, messages, false);
-        if (classpath.entries().isEmpty() && Files.exists(projectRoot.resolve("gradlew"))) {
+        ClasspathResolution classpath = resolveTestClasspath(projectRoot, modulePath, messages, forceRefresh);
+        if (classpath.entries().isEmpty() && Files.exists(projectRoot.resolve("gradlew")) && !forceRefresh) {
             classpath = resolveTestClasspath(projectRoot, modulePath, messages, true);
         }
 
@@ -901,6 +931,34 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 .filter(part -> !part.isBlank())
                 .map(Path::of)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private boolean dependencyFileUpdated(Path projectRoot) {
+        Path normalizedRoot = projectRoot.toAbsolutePath().normalize();
+        Path dependencyFile = normalizedRoot.resolve("gradle.dependencies");
+        Long previous = DEPENDENCY_FILE_TIMESTAMPS.get(normalizedRoot);
+
+        if (!Files.exists(dependencyFile)) {
+            if (previous != null) {
+                DEPENDENCY_FILE_TIMESTAMPS.remove(normalizedRoot);
+                return true;
+            }
+            return false;
+        }
+
+        try {
+            long lastModified = Files.getLastModifiedTime(dependencyFile).toMillis();
+            DEPENDENCY_FILE_TIMESTAMPS.put(normalizedRoot, lastModified);
+            return previous != null && lastModified > previous;
+        } catch (IOException exception) {
+            logger.warn("Unable to read gradle.dependencies timestamp: " + exception.getMessage());
+            return false;
+        }
+    }
+
+    private void invalidateClasspathCacheForProject(Path projectRoot) {
+        String normalizedRoot = projectRoot.toAbsolutePath().normalize().toString();
+        CLASSPATH_CACHE.keySet().removeIf(key -> key.startsWith(normalizedRoot));
     }
 
     private record ClasspathResolution(Set<Path> entries, boolean derivedFromGradle) {
