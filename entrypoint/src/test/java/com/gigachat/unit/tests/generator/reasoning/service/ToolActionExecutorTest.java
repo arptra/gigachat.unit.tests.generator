@@ -50,14 +50,17 @@ class ToolActionExecutorTest {
                 "test"
         );
 
-        ToolActionStep step = new ToolActionStep(ToolActionType.SEARCH_SYMBOL, Map.of("symbol", "TargetSymbol"));
+        ToolActionStep step = new ToolActionStep(ToolActionType.SEARCH_SYMBOL, Map.of("symbol", "Main"));
 
         Map<String, Object> info = executor.executeStep(step).getInformation();
-        List<?> matches = (List<?>) info.get("symbolSearchResults");
-
-        assertEquals(1, matches.size());
         @SuppressWarnings("unchecked")
-        Map<String, Object> firstMatch = (Map<String, Object>) matches.get(0);
-        assertEquals(mainFile.toAbsolutePath().normalize().toString(), firstMatch.get("file"));
+        List<Map<String, Object>> results = (List<Map<String, Object>>) info.get("symbolSearchResults");
+        Map<String, Object> result = results.get(0);
+        assertEquals("FOUND_ONE", result.get("searchStatus"));
+        assertEquals("PROJECT_SOURCE", result.get("source"));
+        @SuppressWarnings("unchecked")
+        List<String> candidates = (List<String>) result.get("candidates");
+        assertEquals(1, candidates.size());
+        assertEquals("Main", candidates.get(0));
     }
 }

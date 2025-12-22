@@ -18,10 +18,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 
 /**
@@ -39,6 +43,8 @@ public class ToolActionExecutor {
     private final Path testFile;
     private final String testFileFqcn;
     private final String methodName;
+    private Map<String, List<String>> projectSymbolIndex;
+    private Map<String, List<String>> classpathSymbolIndex;
 
     public ToolActionExecutor(BuildFileEditor buildFileEditor,
                               SourceFileEditor sourceFileEditor,
@@ -144,26 +150,34 @@ public class ToolActionExecutor {
         if (symbol == null || symbol.isBlank()) {
             return ActionExecutionResult.empty();
         }
-        List<Map<String, Object>> matches = new ArrayList<>();
-        Path testRoot = projectRoot.resolve("src/test").normalize().toAbsolutePath();
-        try (var paths = Files.walk(projectRoot)) {
-            for (Path path : (Iterable<Path>) paths
-                    .filter(candidate -> Files.isRegularFile(candidate) && candidate.toString().endsWith(".java"))
-                    ::iterator) {
-                Path normalized = path.toAbsolutePath().normalize();
-                if (normalized.startsWith(testRoot)) {
-                    continue;
-                }
-                List<Map<String, Object>> found = searchInFile(normalized, symbol);
-                if (!found.isEmpty()) {
-                    matches.addAll(found);
-                    break;
-                }
+        String simpleName = symbol.contains(".")
+                ? symbol.substring(symbol.lastIndexOf('.') + 1)
+                : symbol;
+        Map<String, Object> payload = new HashMap<>();
+        List<String> candidates = new ArrayList<>();
+        String status = "NOT_FOUND";
+        String source = "PROJECT_SOURCE";
+
+        Map<String, List<String>> projectIndex = buildProjectSymbolIndex();
+        List<String> projectMatches = projectIndex.getOrDefault(simpleName, List.of());
+        if (!projectMatches.isEmpty()) {
+            candidates.addAll(projectMatches);
+            status = projectMatches.size() == 1 ? "FOUND_ONE" : "FOUND_MANY";
+        } else {
+            Map<String, List<String>> cpIndex = buildClasspathSymbolIndex();
+            List<String> classpathMatches = cpIndex.getOrDefault(simpleName, List.of());
+            if (!classpathMatches.isEmpty()) {
+                candidates.addAll(classpathMatches);
+                status = classpathMatches.size() == 1 ? "FOUND_ONE" : "FOUND_MANY";
+                source = "CLASSPATH";
             }
-        } catch (IOException ignored) {
-            // ignore and return any matches gathered so far
         }
-        return new ActionExecutionResult(Map.of("symbolSearchResults", matches));
+
+        payload.put("searchStatus", status);
+        payload.put("symbol", symbol);
+        payload.put("candidates", candidates);
+        payload.put("source", status.equals("NOT_FOUND") ? "" : source);
+        return new ActionExecutionResult(Map.of("symbolSearchResults", List.of(payload)));
     }
 
     private ActionExecutionResult handleReadClass(Map<String, Object> args) {
@@ -349,5 +363,110 @@ public class ToolActionExecutor {
     private boolean isTestFile(Path path) {
         Path testRoot = projectRoot.resolve("src/test").toAbsolutePath().normalize();
         return path != null && path.toAbsolutePath().normalize().startsWith(testRoot);
+    }
+
+    private Map<String, List<String>> buildProjectSymbolIndex() {
+        if (projectSymbolIndex != null) {
+            return projectSymbolIndex;
+        }
+        Map<String, List<String>> index = new HashMap<>();
+        Path mainRoot = projectRoot.resolve("src/main/java").toAbsolutePath().normalize();
+        if (Files.exists(mainRoot)) {
+            try (var paths = Files.walk(mainRoot)) {
+                for (Path file : (Iterable<Path>) paths.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java"))::iterator) {
+                    String content = sourceFileEditor.readFile(file);
+                    String pkg = parsePackage(content);
+                    Set<String> types = parseTopLevelTypes(content);
+                    for (String type : types) {
+                        String fqn = pkg.isBlank() ? type : pkg + "." + type;
+                        index.computeIfAbsent(type, k -> new ArrayList<>()).add(fqn);
+                    }
+                }
+            } catch (IOException ignored) {
+                // best effort
+            }
+        }
+        projectSymbolIndex = index;
+        return index;
+    }
+
+    private Map<String, List<String>> buildClasspathSymbolIndex() {
+        if (classpathSymbolIndex != null) {
+            return classpathSymbolIndex;
+        }
+        Map<String, List<String>> index = new HashMap<>();
+        List<Path> entries = new ArrayList<>();
+        Path mainOutput = projectRoot.resolve("build/classes/java/main");
+        if (Files.exists(mainOutput)) {
+            entries.add(mainOutput);
+        }
+        String cp = System.getProperty("java.class.path", "");
+        for (String part : cp.split(java.io.File.pathSeparator)) {
+            if (!part.isBlank()) {
+                Path path = Path.of(part);
+                if (Files.exists(path)) {
+                    entries.add(path.toAbsolutePath().normalize());
+                }
+            }
+        }
+        for (Path entry : entries) {
+            if (Files.isDirectory(entry)) {
+                indexDirectory(entry, index);
+            } else if (entry.toString().endsWith(".jar")) {
+                indexJar(entry, index);
+            }
+        }
+        classpathSymbolIndex = index;
+        return index;
+    }
+
+    private void indexDirectory(Path dir, Map<String, List<String>> index) {
+        try (var paths = Files.walk(dir)) {
+            for (Path file : (Iterable<Path>) paths.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".class"))::iterator) {
+                String rel = dir.relativize(file).toString().replace('\\', '/');
+                if (rel.startsWith("META-INF") || rel.endsWith("module-info.class")) {
+                    continue;
+                }
+                String fqn = rel.substring(0, rel.length() - ".class".length()).replace('/', '.');
+                String simple = fqn.contains(".") ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+                index.computeIfAbsent(simple, k -> new ArrayList<>()).add(fqn);
+            }
+        } catch (IOException ignored) {
+            // ignore
+        }
+    }
+
+    private void indexJar(Path jarPath, Map<String, List<String>> index) {
+        try (JarFile jarFile = new JarFile(jarPath.toFile())) {
+            jarFile.stream()
+                    .filter(entry -> !entry.isDirectory())
+                    .map(JarEntry::getName)
+                    .filter(name -> name.endsWith(".class"))
+                    .filter(name -> !name.startsWith("META-INF") && !name.endsWith("module-info.class"))
+                    .forEach(name -> {
+                        String fqn = name.substring(0, name.length() - ".class".length()).replace('/', '.').replace('\\', '.');
+                        String simple = fqn.contains(".") ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+                        index.computeIfAbsent(simple, k -> new ArrayList<>()).add(fqn);
+                    });
+        } catch (IOException ignored) {
+            // ignore
+        }
+    }
+
+    private String parsePackage(String content) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("package\\s+([a-zA-Z0-9_.]+)\\s*;").matcher(content);
+        if (matcher.find()) {
+            return matcher.group(1).trim();
+        }
+        return "";
+    }
+
+    private Set<String> parseTopLevelTypes(String content) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\b(class|interface|enum|record|@interface)\\s+([A-Za-z0-9_]+)\\b").matcher(content);
+        Set<String> types = new java.util.HashSet<>();
+        while (matcher.find()) {
+            types.add(matcher.group(2));
+        }
+        return types;
     }
 }
