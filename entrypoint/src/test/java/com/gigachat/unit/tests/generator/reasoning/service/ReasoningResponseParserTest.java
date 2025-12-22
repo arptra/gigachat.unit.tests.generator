@@ -12,9 +12,9 @@ class ReasoningResponseParserTest {
     void shouldParseValidJson() {
         String json = """
                 {
-                  "decision": "APPLY_PATCH",
+                  "decision": "APPLY_FIX",
                   "actions": [
-                    {"type": "APPLY_PATCH", "target": "src/test/java/Sample.java", "details": "@@ -1,1 +1,1 @@"}
+                    {"type": "APPLY_PATCH", "args": {"filePath": "src/test/java/Sample.java", "patch": "@@ -1,1 +1,1 @@"}}
                   ],
                   "memory_updates": {
                     "knownMissingSymbols": ["Missing"],
@@ -26,7 +26,7 @@ class ReasoningResponseParserTest {
         ReasoningResponseParser parser = new ReasoningResponseParser();
         ReasoningResponse response = parser.parse(json);
 
-        assertEquals("APPLY_PATCH", response.getDecision());
+        assertEquals("APPLY_FIX", response.getDecision());
         assertEquals(1, response.getActions().size());
         assertEquals("Missing", response.getMemoryUpdates().getKnownMissingSymbols().iterator().next());
     }
@@ -34,7 +34,8 @@ class ReasoningResponseParserTest {
     @Test
     void shouldRejectEmptyPayload() {
         ReasoningResponseParser parser = new ReasoningResponseParser();
-        assertThrows(IllegalArgumentException.class, () -> parser.parse("   "));
+        ReasoningResponse response = parser.parse("   ");
+        assertEquals("STOP", response.getDecision());
     }
 
     @Test

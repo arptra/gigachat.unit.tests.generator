@@ -13,7 +13,6 @@ import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
 import com.gigachat.unit.tests.generator.reasoning.model.AgentState;
-import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
 import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
@@ -23,7 +22,9 @@ import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFail
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Drives the compile → reasoning → apply loop until compilation succeeds or a
@@ -31,7 +32,7 @@ import java.util.Objects;
  */
 public class CompilationPipelineOrchestrator {
 
-    private static final int MAX_ITERATIONS = 3;
+    private static final int MAX_ITERATIONS = 10;
 
     private final CompilerInvoker compilerInvoker;
     private final ReasoningWorkflow reasoningWorkflow;
@@ -87,7 +88,7 @@ public class CompilationPipelineOrchestrator {
             CompilationErrorReport report = errorClassifier.classify(lastResult.stderr());
             String signature = deriveSignature(report, errorInfo);
             memory.addErrorSignature(signature);
-            if (memory.countOccurrences(signature) > 2) {
+            if (memory.countOccurrences(signature) >= 2) {
                 memory.setState(AgentState.S6_GIVE_UP);
                 throw new FixingFailureException("Repeated compilation errors detected. Giving up.", lastResult);
             }
@@ -96,31 +97,49 @@ public class CompilationPipelineOrchestrator {
             if (missingSymbol != null && !symbolExistsInSources(missingSymbol)) {
                 memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
                 memory.addKnownMissingSymbol(missingSymbol);
-                memory.addForbiddenAction(ToolActionType.ADD_IMPORT.name());
+                memory.addForbiddenAction("ADD_IMPORT");
             }
 
             ReasoningLoopContext loopContext = nextContextBuilder.build(errorInfo, projectContextCollector.collect(), cumulativeResult, report, memory);
             ReasoningResponse response = reasoningWorkflow.process(loopContext);
-            if (response == null || response.getDecision() == null) {
-                throw new FixingFailureException("Reasoning response missing decision", lastResult);
+            String decision = response == null ? "STOP" : response.getDecision();
+            if (decision == null || decision.isBlank()) {
+                decision = "STOP";
             }
-            memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
-                    response.getMemoryUpdates().getAppliedFixSignatures());
 
-            ToolActionType decision = ToolActionType.valueOf(response.getDecision());
-            if (decision == ToolActionType.STOP || memory.getState() == AgentState.S6_GIVE_UP) {
+            if ("REQUEST_CONTEXT".equals(decision)) {
+                memory.setState(AgentState.S2_1_NEED_MORE_CONTEXT);
+                ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
+                cumulativeResult = cumulativeResult.merge(iterationResult);
+                memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
+                        response.getMemoryUpdates().getAppliedFixSignatures(),
+                        extractContextCache(iterationResult));
+                memory.decrementContextBudget();
+                if (memory.getContextRequestBudgetRemaining() <= 0) {
+                    memory.setState(AgentState.S6_GIVE_UP);
+                    throw new FixingFailureException("Context request budget exhausted", lastResult);
+                }
+                continue;
+            } else if ("APPLY_FIX".equals(decision)) {
+                ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
+                cumulativeResult = cumulativeResult.merge(iterationResult);
+                memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
+                        response.getMemoryUpdates().getAppliedFixSignatures(),
+                        extractContextCache(iterationResult));
+                if (!iterationResult.getPerformedActions().isEmpty()) {
+                    memory.setState(AgentState.S4_FIX_APPLIED);
+                    memory.resetContextBudget();
+                }
+            } else if ("MARK_FALSE_DEPENDENCY".equals(decision)) {
+                memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
+                        response.getMemoryUpdates().getAppliedFixSignatures(),
+                        response.getMemoryUpdates().getContextCache());
+                memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
+                continue;
+            } else {
                 memory.setState(AgentState.S6_GIVE_UP);
                 throw new FixingFailureException("Reasoning agent stopped after repeated failures", lastResult);
             }
-            if (decision == ToolActionType.MARK_FALSE_DEPENDENCY) {
-                memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
-                continue;
-            }
-            ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
-            if (!iterationResult.getPerformedActions().isEmpty()) {
-                memory.setState(AgentState.S4_FIX_APPLIED);
-            }
-            cumulativeResult = cumulativeResult.merge(iterationResult);
         }
         throw new FixingFailureException("Reached maximum reasoning iterations without a successful compile", lastResult);
     }
@@ -167,5 +186,23 @@ public class CompilationPipelineOrchestrator {
             // fall through
         }
         return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, String> extractContextCache(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return java.util.Collections.emptyMap();
+        }
+        Object updates = result.getInformation().get("contextCacheUpdates");
+        if (updates instanceof Map<?, ?> map) {
+            java.util.Map<String, String> converted = new java.util.HashMap<>();
+            map.forEach((k, v) -> {
+                if (k != null && v != null) {
+                    converted.put(k.toString(), v.toString());
+                }
+            });
+            return converted;
+        }
+        return java.util.Collections.emptyMap();
     }
 }

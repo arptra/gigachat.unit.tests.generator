@@ -4,13 +4,14 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Represents the parsed decision returned by the LLM.
+ * Decision-based response from the LLM.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ReasoningResponse {
@@ -18,7 +19,7 @@ public class ReasoningResponse {
     @JsonProperty("decision")
     private String decision;
     @JsonProperty("actions")
-    private List<ReasoningStep> actions;
+    private List<ReasoningAction> actions;
     @JsonProperty("memory_updates")
     private MemoryUpdate memoryUpdates;
 
@@ -35,11 +36,11 @@ public class ReasoningResponse {
         this.decision = decision;
     }
 
-    public List<ReasoningStep> getActions() {
+    public List<ReasoningAction> getActions() {
         return actions;
     }
 
-    public void setActions(List<ReasoningStep> actions) {
+    public void setActions(List<ReasoningAction> actions) {
         this.actions = actions == null ? new ArrayList<>() : new ArrayList<>(actions);
     }
 
@@ -56,9 +57,9 @@ public class ReasoningResponse {
             return null;
         }
         List<ToolActionStep> steps = new ArrayList<>();
-        for (ReasoningStep step : actions) {
-            ToolActionType type = ToolActionType.valueOf(step.type());
-            steps.add(new ToolActionStep(type, step.toArguments()));
+        for (ReasoningAction action : actions) {
+            ToolActionType type = ToolActionType.valueOf(action.getType());
+            steps.add(new ToolActionStep(type, action.getArgs() == null ? Map.of() : action.getArgs()));
         }
         if (steps.size() == 1) {
             return new ToolAction(steps.get(0).getType(), null, steps.get(0));
@@ -66,9 +67,11 @@ public class ReasoningResponse {
         return new ToolAction(ToolActionType.COMPOSITE, steps, null);
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class MemoryUpdate {
         private Set<String> knownMissingSymbols = new HashSet<>();
         private Set<String> appliedFixSignatures = new HashSet<>();
+        private Map<String, String> contextCache = new HashMap<>();
 
         public Set<String> getKnownMissingSymbols() {
             return knownMissingSymbols;
@@ -85,21 +88,35 @@ public class ReasoningResponse {
         public void setAppliedFixSignatures(Set<String> appliedFixSignatures) {
             this.appliedFixSignatures = appliedFixSignatures == null ? new HashSet<>() : new HashSet<>(appliedFixSignatures);
         }
+
+        public Map<String, String> getContextCache() {
+            return contextCache;
+        }
+
+        public void setContextCache(Map<String, String> contextCache) {
+            this.contextCache = contextCache == null ? new HashMap<>() : new HashMap<>(contextCache);
+        }
     }
 
-    public record ReasoningStep(String type, String target, String details) {
-        public java.util.Map<String, Object> toArguments() {
-            java.util.Map<String, Object> args = new java.util.HashMap<>();
-            if (target != null) {
-                args.put("filePath", target);
-                args.put("target", target);
-            }
-            if (details != null) {
-                args.put("patch", details);
-                args.put("importFqcn", details);
-                args.put("details", details);
-            }
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ReasoningAction {
+        private String type;
+        private Map<String, Object> args = new HashMap<>();
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public Map<String, Object> getArgs() {
             return args;
+        }
+
+        public void setArgs(Map<String, Object> args) {
+            this.args = args == null ? new HashMap<>() : new HashMap<>(args);
         }
     }
 }

@@ -25,7 +25,7 @@ class CompilationReasoningServiceTest {
     void shouldCallLlmAndParseResponse() {
         String responseJson = """
                 {
-                  "decision": "ADD_IMPORT",
+                  "decision": "APPLY_FIX",
                   "actions": [
                     {"type": "ADD_IMPORT", "target": "src/test/java/TestFile.java", "details": "org.junit.jupiter.api.Test"}
                   ],
@@ -44,7 +44,7 @@ class CompilationReasoningServiceTest {
 
         ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null, new ReasoningMemory()));
 
-        assertEquals("ADD_IMPORT", response.getDecision());
+        assertEquals("APPLY_FIX", response.getDecision());
         assertEquals(1, response.getActions().size());
     }
 
@@ -70,7 +70,7 @@ class CompilationReasoningServiceTest {
         ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null, new ReasoningMemory()));
 
         assertEquals("STOP", response.getDecision());
-        assertEquals(2, llmClient.callCount);
+        assertEquals(1, llmClient.callCount);
     }
 
     private static class CapturingLlmClient implements LlmClient {

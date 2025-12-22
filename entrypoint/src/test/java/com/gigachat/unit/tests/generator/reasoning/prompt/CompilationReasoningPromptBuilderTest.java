@@ -36,8 +36,8 @@ class CompilationReasoningPromptBuilderTest {
         memory.addForbiddenAction("ADD_DEPENDENCY");
         String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, executionResult, null, memory));
 
-        assertTrue(prompt.contains("deterministic reasoning agent"));
-        assertTrue(prompt.contains("Allowed actions"));
+        assertTrue(prompt.contains("deterministic agent"));
+        assertTrue(prompt.contains("Allowed tool actions"));
         assertTrue(prompt.contains("decision"));
         assertTrue(prompt.contains("Compilation error info"));
         assertTrue(prompt.contains("cannot find symbol"));

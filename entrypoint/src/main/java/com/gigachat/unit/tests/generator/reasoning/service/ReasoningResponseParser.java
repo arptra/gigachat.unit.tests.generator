@@ -3,7 +3,6 @@ package com.gigachat.unit.tests.generator.reasoning.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
-import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 
 public class ReasoningResponseParser {
 
@@ -15,7 +14,7 @@ public class ReasoningResponseParser {
 
     public ReasoningResponse parse(String json) {
         if (json == null || json.isBlank()) {
-            throw new IllegalArgumentException("Response JSON is empty");
+            return stopFallback();
         }
         try {
             String cleaned = sanitize(json);
@@ -25,8 +24,8 @@ public class ReasoningResponseParser {
             }
             validate(response);
             return response;
-        } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("Failed to parse reasoning response JSON", exception);
+        } catch (Exception ignored) {
+            return stopFallback();
         }
     }
 
@@ -34,19 +33,13 @@ public class ReasoningResponseParser {
         String trimmed = raw.trim();
         if (trimmed.startsWith("```")) {
             int firstNewline = trimmed.indexOf('\n');
-            if (firstNewline > 0) {
-                trimmed = trimmed.substring(firstNewline + 1);
-            } else {
-                trimmed = trimmed.substring(3);
-            }
-            int fence = trimmed.lastIndexOf("``` ");
-            int closing = fence >= 0 ? fence : trimmed.lastIndexOf("```");
+            trimmed = firstNewline > 0 ? trimmed.substring(firstNewline + 1) : trimmed.substring(3);
+            int closing = Math.max(trimmed.lastIndexOf("``` "), trimmed.lastIndexOf("```"));
             if (closing >= 0) {
                 trimmed = trimmed.substring(0, closing);
             }
             trimmed = trimmed.trim();
         }
-
         if (!trimmed.startsWith("{")) {
             int start = trimmed.indexOf('{');
             int end = trimmed.lastIndexOf('}');
@@ -59,14 +52,19 @@ public class ReasoningResponseParser {
 
     private void validate(ReasoningResponse response) {
         if (response.getDecision() == null || response.getDecision().isBlank()) {
-            throw new IllegalArgumentException("Missing decision field");
+            throw new IllegalArgumentException("Missing decision");
         }
         String decision = response.getDecision();
-        if (!decision.equals(ToolActionType.APPLY_PATCH.name())
-                && !decision.equals(ToolActionType.ADD_IMPORT.name())
-                && !decision.equals(ToolActionType.MARK_FALSE_DEPENDENCY.name())
-                && !decision.equals(ToolActionType.STOP.name())) {
+        boolean validDecision = decision.equals("REQUEST_CONTEXT")
+                || decision.equals("APPLY_FIX")
+                || decision.equals("MARK_FALSE_DEPENDENCY")
+                || decision.equals("STOP");
+        if (!validDecision) {
             throw new IllegalArgumentException("Unsupported decision: " + decision);
+        }
+        boolean actionsEmpty = response.getActions() == null || response.getActions().isEmpty();
+        if (!decision.equals("STOP") && !decision.equals("MARK_FALSE_DEPENDENCY") && actionsEmpty) {
+            throw new IllegalArgumentException("Actions required for decision " + decision);
         }
         if (response.getActions() == null) {
             response.setActions(java.util.List.of());
@@ -74,5 +72,12 @@ public class ReasoningResponseParser {
         if (response.getMemoryUpdates() == null) {
             response.setMemoryUpdates(new ReasoningResponse.MemoryUpdate());
         }
+    }
+
+    private ReasoningResponse stopFallback() {
+        ReasoningResponse response = new ReasoningResponse();
+        response.setDecision("STOP");
+        response.setActions(java.util.List.of());
+        return response;
     }
 }

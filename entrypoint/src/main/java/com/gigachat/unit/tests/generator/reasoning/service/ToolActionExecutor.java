@@ -80,11 +80,15 @@ public class ToolActionExecutor {
             case SHOW_FILE -> handleShowFile(args);
             case SHOW_IMPORTS -> handleShowImports(args);
             case SEARCH_SYMBOL -> handleSearchSymbol(args);
+            case READ_CLASS -> handleReadClass(args);
+            case READ_METHOD -> handleReadMethod(args);
+            case LIST_METHODS -> handleListMethods(args);
             case RUN_TEST -> handleRunTests();
             case APPLY_PATCH -> applyModification(createApplyPatchAction(args));
             case ADD_IMPORT -> applyModification(createAddImportAction(args));
             case RECOMPILE -> handleRecompile();
-            case STOP, MARK_FALSE_DEPENDENCY -> ActionExecutionResult.empty();
+            case MARK_FALSE_DEPENDENCY -> handleMarkFalseDependency(args);
+            case STOP -> ActionExecutionResult.empty();
             case COMPOSITE -> ActionExecutionResult.empty();
         };
     }
@@ -92,6 +96,16 @@ public class ToolActionExecutor {
     private ActionExecutionResult applyModification(ProjectModificationAction action) {
         if (action == null) {
             return ActionExecutionResult.empty();
+        }
+        Path targetPath = null;
+        if (action instanceof ApplyPatchAction applyPatchAction) {
+            targetPath = applyPatchAction.getFilePath();
+        }
+        if (action instanceof AddImportAction addImportAction) {
+            targetPath = addImportAction.getFilePath();
+        }
+        if (targetPath != null && !isTestFile(targetPath)) {
+            return new ActionExecutionResult(Map.of("forbiddenActions", List.of(action.describe())), List.of());
         }
         action.apply();
         return new ActionExecutionResult(Map.of(), List.of(action.describe()));
@@ -152,6 +166,61 @@ public class ToolActionExecutor {
         return new ActionExecutionResult(Map.of("symbolSearchResults", matches));
     }
 
+    private ActionExecutionResult handleReadClass(Map<String, Object> args) {
+        String pathValue = readStringArg(args, "filePath", "path", "classPath");
+        if (pathValue == null) {
+            return ActionExecutionResult.empty();
+        }
+        Path path = resolve(pathValue);
+        String content = sourceFileEditor.readFile(path);
+        Map<String, String> cacheUpdate = Map.of(path.toString(), content);
+        return new ActionExecutionResult(Map.of("contextCacheUpdates", cacheUpdate));
+    }
+
+    private ActionExecutionResult handleReadMethod(Map<String, Object> args) {
+        String pathValue = readStringArg(args, "filePath", "path", "classPath");
+        String methodName = readStringArg(args, "method", "methodName");
+        if (pathValue == null || methodName == null) {
+            return ActionExecutionResult.empty();
+        }
+        Path path = resolve(pathValue);
+        String content = sourceFileEditor.readFile(path);
+        String snippet = extractMethod(content, methodName);
+        Map<String, String> cacheUpdate = Map.of(path + "#" + methodName, snippet);
+        return new ActionExecutionResult(Map.of("contextCacheUpdates", cacheUpdate));
+    }
+
+    private ActionExecutionResult handleListMethods(Map<String, Object> args) {
+        String pathValue = readStringArg(args, "filePath", "path", "classPath");
+        if (pathValue == null) {
+            return ActionExecutionResult.empty();
+        }
+        Path path = resolve(pathValue);
+        String content = sourceFileEditor.readFile(path);
+        List<String> methods = content.lines()
+                .filter(line -> line.contains("(") && line.contains(")") && line.contains("{"))
+                .map(String::trim)
+                .toList();
+        return new ActionExecutionResult(Map.of("contextCacheUpdates", Map.of(path + "#methods", String.join("\n", methods))));
+    }
+
+    private String extractMethod(String source, String methodName) {
+        StringBuilder builder = new StringBuilder();
+        boolean started = false;
+        for (String line : source.split("\\r?\\n")) {
+            if (!started && line.contains(methodName + "(")) {
+                started = true;
+            }
+            if (started) {
+                builder.append(line).append("\n");
+                if (line.contains("}")) {
+                    break;
+                }
+            }
+        }
+        return builder.toString().trim();
+    }
+
     private List<Map<String, Object>> searchInFile(Path file, String symbol) {
         try {
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
@@ -197,6 +266,14 @@ public class ToolActionExecutor {
             detail.put("stacktrace", executeResult.failedTests().stream().collect(Collectors.joining("\n")));
         }
         return listPayload("testRuns", detail);
+    }
+
+    private ActionExecutionResult handleMarkFalseDependency(Map<String, Object> args) {
+        String symbol = readStringArg(args, "symbol", "name", "symbolName");
+        if (symbol == null) {
+            return ActionExecutionResult.empty();
+        }
+        return new ActionExecutionResult(Map.of("knownMissingSymbols", List.of(symbol)));
     }
 
     private ProjectModificationAction createAddDependencyAction(Map<String, Object> args) {
