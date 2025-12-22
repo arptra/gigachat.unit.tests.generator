@@ -109,4 +109,8 @@ public class ActionExecutionResult {
         payload.put("informationCollected", getInformation());
         return payload;
     }
+
+    public static ActionExecutionResult error(String message) {
+        return new ActionExecutionResult(Map.of("errors", List.of(message)));
+    }
 }

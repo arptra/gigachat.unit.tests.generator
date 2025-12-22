@@ -14,7 +14,6 @@ import com.gigachat.unit.tests.generator.reasoning.service.action.ApplyPatchActi
 import com.gigachat.unit.tests.generator.reasoning.service.action.ProjectModificationAction;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -81,7 +80,7 @@ public class ToolActionExecutor {
             return ActionExecutionResult.empty();
         }
         ToolActionType type = step.getType();
-        Map<String, Object> args = step.getArguments();
+        Map<String, Object> args = ArgumentNormalizer.normalize(step.getArguments());
         return switch (type) {
             case SHOW_FILE -> handleShowFile(args);
             case SHOW_IMPORTS -> handleShowImports(args);
@@ -118,9 +117,9 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleShowFile(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "target");
+        String pathValue = requireString(args, "path");
         if (pathValue == null) {
-            return ActionExecutionResult.empty();
+            return ActionExecutionResult.error("Missing required argument: path");
         }
         Path path = resolve(pathValue);
         String content = sourceFileEditor.readFile(path);
@@ -131,9 +130,9 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleShowImports(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "target");
+        String pathValue = requireString(args, "path");
         if (pathValue == null) {
-            return ActionExecutionResult.empty();
+            return ActionExecutionResult.error("Missing required argument: path");
         }
         Path path = resolve(pathValue);
         List<String> imports = sourceFileEditor.readImports(path);
@@ -146,9 +145,9 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleSearchSymbol(Map<String, Object> args) {
-        String symbol = readStringArg(args, "symbol", "query", "name", "symbolName");
+        String symbol = requireString(args, "symbol");
         if (symbol == null || symbol.isBlank()) {
-            return ActionExecutionResult.empty();
+            return ActionExecutionResult.error("Missing required argument: symbol");
         }
         String simpleName = symbol.contains(".")
                 ? symbol.substring(symbol.lastIndexOf('.') + 1)
@@ -181,23 +180,29 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleReadClass(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "classPath");
-        if (pathValue == null) {
-            return ActionExecutionResult.empty();
+        String className = requireString(args, "className");
+        if (className == null) {
+            return ActionExecutionResult.error("Missing required argument: className");
         }
-        Path path = resolve(pathValue);
+        Path path = resolveClassToPath(className);
+        if (path == null || !Files.exists(path)) {
+            return ActionExecutionResult.error("Class not found in sources: " + className);
+        }
         String content = sourceFileEditor.readFile(path);
         Map<String, String> cacheUpdate = Map.of(path.toString(), content);
         return new ActionExecutionResult(Map.of("contextCacheUpdates", cacheUpdate));
     }
 
     private ActionExecutionResult handleReadMethod(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "classPath");
-        String methodName = readStringArg(args, "method", "methodName");
-        if (pathValue == null || methodName == null) {
-            return ActionExecutionResult.empty();
+        String className = requireString(args, "className");
+        String methodName = requireString(args, "methodName");
+        if (className == null || methodName == null) {
+            return ActionExecutionResult.error("Missing required arguments: className and methodName");
         }
-        Path path = resolve(pathValue);
+        Path path = resolveClassToPath(className);
+        if (path == null || !Files.exists(path)) {
+            return ActionExecutionResult.error("Class not found in sources: " + className);
+        }
         String content = sourceFileEditor.readFile(path);
         String snippet = extractMethod(content, methodName);
         Map<String, String> cacheUpdate = Map.of(path + "#" + methodName, snippet);
@@ -205,11 +210,14 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleListMethods(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "classPath");
-        if (pathValue == null) {
-            return ActionExecutionResult.empty();
+        String className = requireString(args, "className");
+        if (className == null) {
+            return ActionExecutionResult.error("Missing required argument: className");
         }
-        Path path = resolve(pathValue);
+        Path path = resolveClassToPath(className);
+        if (path == null || !Files.exists(path)) {
+            return ActionExecutionResult.error("Class not found in sources: " + className);
+        }
         String content = sourceFileEditor.readFile(path);
         List<String> methods = content.lines()
                 .filter(line -> line.contains("(") && line.contains(")") && line.contains("{"))
@@ -233,26 +241,6 @@ public class ToolActionExecutor {
             }
         }
         return builder.toString().trim();
-    }
-
-    private List<Map<String, Object>> searchInFile(Path file, String symbol) {
-        try {
-            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-            List<Map<String, Object>> results = new ArrayList<>();
-            for (int i = 0; i < lines.size(); i++) {
-                String line = lines.get(i);
-                if (line.contains(symbol)) {
-                    results.add(Map.of(
-                            "file", file.toString(),
-                            "line", i + 1,
-                            "code", line.trim()
-                    ));
-                }
-            }
-            return results;
-        } catch (IOException exception) {
-            return List.of();
-        }
     }
 
     private ActionExecutionResult handleRecompile() {
@@ -283,9 +271,9 @@ public class ToolActionExecutor {
     }
 
     private ActionExecutionResult handleMarkFalseDependency(Map<String, Object> args) {
-        String symbol = readStringArg(args, "symbol", "name", "symbolName");
+        String symbol = requireString(args, "symbol");
         if (symbol == null) {
-            return ActionExecutionResult.empty();
+            return ActionExecutionResult.error("Missing required argument: symbol");
         }
         return new ActionExecutionResult(Map.of("knownMissingSymbols", List.of(symbol)));
     }
@@ -295,8 +283,8 @@ public class ToolActionExecutor {
     }
 
     private ProjectModificationAction createApplyPatchAction(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "target");
-        String patch = readStringArg(args, "patch", "content", "diff");
+        String pathValue = requireString(args, "path");
+        String patch = requireString(args, "patch");
         if (patch == null || pathValue == null) {
             return null;
         }
@@ -308,8 +296,8 @@ public class ToolActionExecutor {
     }
 
     private ProjectModificationAction createAddImportAction(Map<String, Object> args) {
-        String pathValue = readStringArg(args, "filePath", "path", "target");
-        String importName = readStringArg(args, "import", "importFqcn", "fqcn");
+        String pathValue = requireString(args, "path");
+        String importName = requireString(args, "import");
         if (pathValue == null || importName == null) {
             return null;
         }
@@ -339,25 +327,26 @@ public class ToolActionExecutor {
         return new ActionExecutionResult(payload);
     }
 
-    private String readStringArg(Map<String, Object> args, String... keys) {
-        if (args == null || args.isEmpty()) {
-            return null;
-        }
-        for (String key : keys) {
-            Object value = args.get(key);
-            if (value != null) {
-                return value.toString();
-            }
-        }
-        return null;
-    }
-
     private Path resolve(String pathValue) {
         Path path = Path.of(pathValue);
         if (!path.isAbsolute()) {
             path = projectRoot.resolve(pathValue);
         }
         return path.normalize().toAbsolutePath();
+    }
+
+    private Path resolveClassToPath(String className) {
+        String relative = className.replace('.', '/') + ".java";
+        Path candidate = projectRoot.resolve("src/main/java").resolve(relative).normalize().toAbsolutePath();
+        if (Files.exists(candidate)) {
+            return candidate;
+        }
+        return null;
+    }
+
+    private String requireString(Map<String, Object> args, String key) {
+        Object value = args.get(key);
+        return value == null ? null : value.toString();
     }
 
     private boolean isTestFile(Path path) {
