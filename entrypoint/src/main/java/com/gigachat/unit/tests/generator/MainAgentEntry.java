@@ -9,6 +9,7 @@ import com.gigachat.unit.tests.generator.pipeline.TestPipeline;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.execute.JUnitExecutionInvoker;
 import com.gigachat.unit.tests.generator.util.ArgsParser;
+import com.gigachat.unit.tests.generator.util.TargetClassMatcher;
 
 import java.io.IOException;
 import java.util.List;
@@ -67,40 +68,11 @@ public class MainAgentEntry {
 
     private boolean matchesTargets(TestClassInfo info, List<String> targets) {
         for (String target : targets) {
-            if (target == null) {
-                continue;
-            }
-            String candidate = normaliseCandidate(target);
-            if (candidate.isEmpty()) {
-                continue;
-            }
-            String simpleName = candidate.contains(".")
-                    ? candidate.substring(candidate.lastIndexOf('.') + 1)
-                    : candidate;
-            String expectedTestName = simpleName.endsWith("Test") ? simpleName : simpleName + "Test";
-            if (matchesName(info.getClassName(), simpleName) || matchesName(info.getTestClassName(), expectedTestName)) {
-                return true;
-            }
-            if (matchesName(info.getTestClassName(), candidate)) {
-                return true;
-            }
-            if (matchesName(info.getClassName(), candidate) || matchesName(info.getTestClassName(), candidate)) {
+            if (TargetClassMatcher.matches(info, target)) {
                 return true;
             }
         }
         return false;
-    }
-
-    private boolean matchesName(String actual, String expected) {
-        return actual.equals(expected) || actual.equalsIgnoreCase(expected);
-    }
-
-    private String normaliseCandidate(String target) {
-        String candidate = target.trim().replace('/', '.');
-        if (candidate.endsWith(".java")) {
-            candidate = candidate.substring(0, candidate.length() - 5);
-        }
-        return candidate;
     }
 
     private void report(List<TestClassInfo> classes) {

@@ -15,6 +15,7 @@ import com.gigachat.unit.tests.generator.dto.ClassMetadata;
 import com.gigachat.unit.tests.generator.dto.FieldMetadata;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
+import com.gigachat.unit.tests.generator.util.TargetClassMatcher;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -46,7 +47,7 @@ public class JavaProjectScanner {
 
     public List<TestClassInfo> scan(AgentConfig config) throws IOException {
         Path projectPath = config.getProjectPath();
-        List<Path> moduleRoots = determineModuleRoots(projectPath, config.getIncludeModules());
+        List<Path> moduleRoots = determineModuleRoots(config);
         List<TestClassInfo> discoveredClasses = new ArrayList<>();
         for (Path moduleRoot : moduleRoots) {
             Path sourceRoot = resolveSourceRoot(moduleRoot);
@@ -67,7 +68,7 @@ public class JavaProjectScanner {
     public void scanSequentially(AgentConfig config, Consumer<List<TestClassInfo>> perFileConsumer) throws IOException {
         Objects.requireNonNull(perFileConsumer, "perFileConsumer");
         Path projectPath = config.getProjectPath();
-        List<Path> moduleRoots = determineModuleRoots(projectPath, config.getIncludeModules());
+        List<Path> moduleRoots = determineModuleRoots(config);
         for (Path moduleRoot : moduleRoots) {
             Path sourceRoot = resolveSourceRoot(moduleRoot);
             if (!Files.exists(sourceRoot)) {
@@ -120,7 +121,7 @@ public class JavaProjectScanner {
                 .toList();
         declarations.forEach(this::registerSignatures);
         declarations.stream()
-                .filter(declaration -> shouldInclude(declaration, packageName, config))
+                .filter(declaration -> shouldInclude(declaration, packageName, moduleRoot, config))
                 .map(declaration -> createTestClassInfo(compilationUnit, moduleRoot, packageName, declaration))
                 .forEach(collector::add);
     }
@@ -252,31 +253,82 @@ public class JavaProjectScanner {
 
     private boolean shouldInclude(ClassOrInterfaceDeclaration declaration,
                                   String packageName,
+                                  Path moduleRoot,
                                   AgentConfig config) {
         if (config == null) {
             return true;
         }
+        String className = declaration.getNameAsString();
+        String testClassName = className + "Test";
         String fullName = packageName.isBlank()
-                ? declaration.getNameAsString()
-                : packageName + '.' + declaration.getNameAsString();
+                ? className
+                : packageName + '.' + className;
         List<String> targetClasses = config.getTargetClasses();
         if (targetClasses != null && !targetClasses.isEmpty()) {
-            return targetClasses.contains(fullName);
+            Path targetPath = resolveTestTargetPath(moduleRoot, packageName, testClassName);
+            for (String target : targetClasses) {
+                if (TargetClassMatcher.matches(target,
+                        packageName,
+                        className,
+                        testClassName,
+                        moduleRoot,
+                        targetPath)) {
+                    return true;
+                }
+            }
+            return false;
         }
         return true;
     }
 
-    private List<Path> determineModuleRoots(Path projectPath, List<String> includeModules) throws IOException {
-        if (includeModules == null || includeModules.isEmpty()) {
-            return List.of(projectPath);
-        }
+    private Path resolveTestTargetPath(Path moduleRoot, String packageName, String testClassName) {
+        Path targetRoot = moduleRoot.resolve(Path.of("src", "test", "java"));
+        Path packagePath = packageName == null || packageName.isBlank()
+                ? targetRoot
+                : targetRoot.resolve(Path.of(packageName.replace('.', '/')));
+        return packagePath.resolve(testClassName + ".java");
+    }
+
+    private List<Path> determineModuleRoots(AgentConfig config) throws IOException {
+        Path projectPath = config.getProjectPath();
+        List<String> includeModules = config.getIncludeModules();
         List<Path> modules = new ArrayList<>();
-        for (String module : includeModules) {
-            Path modulePath = projectPath.resolve(module);
-            if (Files.exists(modulePath)) {
-                modules.add(modulePath);
+        if (includeModules != null && !includeModules.isEmpty()) {
+            for (String module : includeModules) {
+                Path modulePath = projectPath.resolve(module);
+                if (Files.exists(modulePath)) {
+                    modules.add(modulePath);
+                }
+            }
+        } else {
+            modules.add(projectPath);
+        }
+
+        List<String> targetClasses = config.getTargetClasses();
+        if (targetClasses != null) {
+            for (String target : targetClasses) {
+                if (target == null || target.isBlank()) {
+                    continue;
+                }
+                String trimmed = target.trim();
+                boolean moduleWildcard = trimmed.endsWith(".*");
+                String base = moduleWildcard ? trimmed.substring(0, trimmed.length() - 2) : trimmed;
+                String normalised = base.replace('\\', '/').replace('.', '/');
+                if (normalised.endsWith("/*")) {
+                    normalised = normalised.substring(0, normalised.length() - 2);
+                } else if (normalised.endsWith("/")) {
+                    normalised = normalised.substring(0, normalised.length() - 1);
+                }
+                if (normalised.isEmpty()) {
+                    continue;
+                }
+                Path moduleCandidate = projectPath.resolve(normalised);
+                if (Files.exists(moduleCandidate) && Files.isDirectory(moduleCandidate) && !modules.contains(moduleCandidate)) {
+                    modules.add(moduleCandidate);
+                }
             }
         }
+
         if (modules.isEmpty()) {
             return List.of(projectPath);
         }

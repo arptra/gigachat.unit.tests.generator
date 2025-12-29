@@ -135,6 +135,34 @@ class JavaProjectScannerTest {
         assertTrue(discovered.contains("LibraryComponent"));
     }
 
+    @Test
+    void supportsModuleWildcardTargets() throws IOException {
+        Path moduleRoot = workingDirectory.resolve("mtd");
+        Path sourceFolder = moduleRoot.resolve(Path.of("src", "main", "java", "com", "example", "mod"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("Alpha.java"), """
+                package com.example.mod;
+
+                public class Alpha {
+                    public void run() {}
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("mtd.*"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        TestClassInfo info = result.get(0);
+        assertEquals("Alpha", info.getClassName());
+        assertTrue(info.getTargetPath().toString().contains("mtd"));
+    }
+
     private String relativize(Path projectRoot, Path targetPath) {
         return projectRoot.relativize(targetPath).toString();
     }
