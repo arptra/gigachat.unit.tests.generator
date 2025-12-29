@@ -28,6 +28,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
+import com.gigachat.unit.tests.generator.pipeline.helpers.ExistingTestDetector;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
@@ -103,6 +104,7 @@ public class InitialGenerationStep {
     private final ExecutionFailureLogParser executionFailureLogParser;
     private final ExecutionReportParser executionReportParser;
     private final ReasoningWorkflow reasoningWorkflow;
+    private final ExistingTestDetector existingTestDetector;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -132,6 +134,7 @@ public class InitialGenerationStep {
         this.executionFailureLogParser = new ExecutionFailureLogParser();
         this.executionReportParser = new ExecutionReportParser();
         this.reasoningWorkflow = Objects.requireNonNull(reasoningWorkflow, "reasoningWorkflow");
+        this.existingTestDetector = new ExistingTestDetector();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -162,7 +165,13 @@ public class InitialGenerationStep {
             logger.warn("Class " + classInfo.getClassName() + " has no eligible methods for generation");
             return;
         }
-        List<TestMethodInfo> methods = classInfo.getMethods();
+        List<TestMethodInfo> methods = classInfo.getMethods().stream()
+                .filter(method -> !existingTestDetector.isTestMethodPresent(classInfo, method))
+                .toList();
+        if (methods.isEmpty()) {
+            logger.info("All requested test methods already exist for class " + classInfo.getTestClassName());
+            return;
+        }
         if (moduleConfig.parallelMode().paralleliseMethods()) {
             methods.parallelStream().forEach(method -> processMethod(config, classInfo, method, moduleConfig, report));
         } else {
