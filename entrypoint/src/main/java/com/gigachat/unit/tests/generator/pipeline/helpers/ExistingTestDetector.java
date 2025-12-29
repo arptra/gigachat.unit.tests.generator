@@ -2,46 +2,41 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
-import com.github.javaparser.ParseProblemException;
-import com.github.javaparser.StaticJavaParser;
-import com.github.javaparser.ast.CompilationUnit;
-import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
-import com.github.javaparser.ast.body.MethodDeclaration;
-
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Optional;
+import java.util.Objects;
 
 /**
  * Detects whether a generated test method already exists to avoid duplicate generation.
  */
 public class ExistingTestDetector {
 
+    private final TestGenerationRegistry registry;
+
+    public ExistingTestDetector(Path projectRoot) {
+        this(new TestGenerationRegistry(projectRoot));
+    }
+
+    public ExistingTestDetector(TestGenerationRegistry registry) {
+        this.registry = Objects.requireNonNull(registry, "registry");
+    }
+
     /**
      * Returns {@code true} when the given test method already exists inside the resolved test class file.
      */
     public boolean isTestMethodPresent(TestClassInfo classInfo, TestMethodInfo methodInfo) {
-        Path testFile = classInfo.resolveTestFile();
-        if (!Files.exists(testFile)) {
+        String methodSignature = extractMethodName(methodInfo.getSignature());
+        if (methodSignature == null || methodSignature.isBlank()) {
             return false;
         }
-        String methodName = extractMethodName(methodInfo.getSignature());
-        if (methodName == null || methodName.isBlank()) {
-            return false;
+        return registry.hasEntry(classInfo.resolveTestFile(), methodSignature);
+    }
+
+    public void recordSuccessfulTest(TestClassInfo classInfo, TestMethodInfo methodInfo) {
+        String methodSignature = extractMethodName(methodInfo.getSignature());
+        if (methodSignature == null || methodSignature.isBlank()) {
+            return;
         }
-        try {
-            CompilationUnit compilationUnit = StaticJavaParser.parse(testFile);
-            Optional<ClassOrInterfaceDeclaration> testClass = compilationUnit.getClassByName(classInfo.getTestClassName());
-            if (testClass.isEmpty()) {
-                return false;
-            }
-            return testClass.get().getMethods().stream()
-                    .map(MethodDeclaration::getNameAsString)
-                    .anyMatch(existingName -> existingName.equals(methodName));
-        } catch (IOException | ParseProblemException ignored) {
-            return false;
-        }
+        registry.record(classInfo.resolveTestFile(), methodSignature);
     }
 
     private String extractMethodName(String signature) {

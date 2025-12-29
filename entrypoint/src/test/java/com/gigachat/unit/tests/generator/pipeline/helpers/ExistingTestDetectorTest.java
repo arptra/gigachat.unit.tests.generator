@@ -1,5 +1,8 @@
 package com.gigachat.unit.tests.generator.pipeline.helpers;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import org.junit.jupiter.api.Test;
@@ -13,32 +16,49 @@ import java.util.List;
 
 class ExistingTestDetectorTest {
 
-    private final ExistingTestDetector detector = new ExistingTestDetector();
-
     @Test
-    void detectsExistingMethod(@TempDir Path tempDir) throws IOException {
-        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest",
-                "package com.example;\n\npublic class SampleTest {\n    @org.junit.jupiter.api.Test\n    void shouldDoThing() {}\n}\n");
+    void detectsExistingMethodFromRegistry(@TempDir Path tempDir) throws IOException {
+        TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
+        ExistingTestDetector detector = new ExistingTestDetector(registry);
+
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest");
         TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
         TestMethodInfo methodInfo = new TestMethodInfo("shouldDoThing()", "void", "{}");
 
-        org.junit.jupiter.api.Assertions.assertTrue(detector.isTestMethodPresent(classInfo, methodInfo));
+        detector.recordSuccessfulTest(classInfo, methodInfo);
+
+        assertTrue(detector.isTestMethodPresent(classInfo, methodInfo));
     }
 
     @Test
-    void skipsWhenMethodAbsent(@TempDir Path tempDir) throws IOException {
-        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest",
-                "package com.example;\n\npublic class SampleTest {\n}\n");
+    void skipsWhenMethodNotRecorded(@TempDir Path tempDir) throws IOException {
+        TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
+        ExistingTestDetector detector = new ExistingTestDetector(registry);
+
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest");
         TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
         TestMethodInfo methodInfo = new TestMethodInfo("shouldDoThing()", "void", "{}");
 
-        org.junit.jupiter.api.Assertions.assertFalse(detector.isTestMethodPresent(classInfo, methodInfo));
+        assertFalse(detector.isTestMethodPresent(classInfo, methodInfo));
     }
 
-    private Path prepareTestFile(Path root, String pkg, String className, String content) throws IOException {
+    @Test
+    void persistsAcrossDetectorInstances(@TempDir Path tempDir) throws IOException {
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest");
+        TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
+        ExistingTestDetector detector = new ExistingTestDetector(registry);
+        TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
+        TestMethodInfo methodInfo = new TestMethodInfo("shouldDoThing()", "void", "{}");
+        detector.recordSuccessfulTest(classInfo, methodInfo);
+
+        ExistingTestDetector secondDetector = new ExistingTestDetector(new TestGenerationRegistry(tempDir));
+        assertTrue(secondDetector.isTestMethodPresent(classInfo, methodInfo));
+    }
+
+    private Path prepareTestFile(Path root, String pkg, String className) throws IOException {
         Path file = root.resolve("src/test/java/" + pkg.replace('.', '/') + "/" + className + ".java");
         Files.createDirectories(file.getParent());
-        Files.writeString(file, content, StandardCharsets.UTF_8);
+        Files.writeString(file, "// placeholder", StandardCharsets.UTF_8);
         return file;
     }
 }

@@ -30,6 +30,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.ExistingTestDetector;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
+import com.gigachat.unit.tests.generator.pipeline.helpers.TestGenerationRegistry;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
@@ -104,7 +105,8 @@ public class InitialGenerationStep {
     private final ExecutionFailureLogParser executionFailureLogParser;
     private final ExecutionReportParser executionReportParser;
     private final ReasoningWorkflow reasoningWorkflow;
-    private final ExistingTestDetector existingTestDetector;
+    private ExistingTestDetector existingTestDetector;
+    private TestGenerationRegistry generationRegistry;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -134,11 +136,12 @@ public class InitialGenerationStep {
         this.executionFailureLogParser = new ExecutionFailureLogParser();
         this.executionReportParser = new ExecutionReportParser();
         this.reasoningWorkflow = Objects.requireNonNull(reasoningWorkflow, "reasoningWorkflow");
-        this.existingTestDetector = new ExistingTestDetector();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
         ErrorsReport report = new ErrorsReport();
+        this.generationRegistry = new TestGenerationRegistry(config.getProjectPath());
+        this.existingTestDetector = new ExistingTestDetector(generationRegistry);
         if (classes == null || classes.isEmpty()) {
             logger.warn("No classes to process in initial generation step");
             return report;
@@ -347,6 +350,7 @@ public class InitialGenerationStep {
                 lastExecuteResult = new ExecuteResult(true, List.of(), "", "");
             }
             success = true;
+            existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
             break;
         }
 
