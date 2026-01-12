@@ -116,7 +116,9 @@ public class JavaProjectScanner {
         String packageName = compilationUnit.getPackageDeclaration()
                 .map(declaration -> declaration.getName().asString())
                 .orElse("");
-        List<ClassOrInterfaceDeclaration> declarations = compilationUnit.findAll(ClassOrInterfaceDeclaration.class).stream()
+        List<ClassOrInterfaceDeclaration> declarations = compilationUnit.getTypes().stream()
+                .filter(ClassOrInterfaceDeclaration.class::isInstance)
+                .map(ClassOrInterfaceDeclaration.class::cast)
                 .filter(declaration -> !declaration.isInterface())
                 .toList();
         declarations.forEach(this::registerSignatures);
