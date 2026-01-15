@@ -124,6 +124,9 @@ public class TestReportAnalyzer {
         for (Element container : containers) {
             Elements candidates = container.select("div.test, tr, li");
             for (Element candidate : candidates) {
+                if (isDurationCandidate(candidate)) {
+                    continue;
+                }
                 String methodName = extractMethodName(candidate);
                 if (methodName == null) {
                     continue;
@@ -133,9 +136,14 @@ public class TestReportAnalyzer {
                 if (details == null && status == Status.FAILED) {
                     details = extractFailureFromContainer(candidate);
                 }
+                if (status == Status.UNKNOWN && details == null) {
+                    continue;
+                }
                 TestCase testCase = buildTestCase(className, methodName, status, details);
-                results.add(testCase);
-                totalFound++;
+                if (testCase != null) {
+                    results.add(testCase);
+                    totalFound++;
+                }
             }
         }
 
@@ -201,8 +209,14 @@ public class TestReportAnalyzer {
                 details = extractFailureFromContainer(anchor);
             }
             Status status = details != null ? Status.FAILED : Status.UNKNOWN;
-            results.add(buildTestCase(className, methodName, status, details));
-            totalFound++;
+            if (status == Status.UNKNOWN && details == null) {
+                continue;
+            }
+            TestCase testCase = buildTestCase(className, methodName, status, details);
+            if (testCase != null) {
+                results.add(testCase);
+                totalFound++;
+            }
         }
 
         if (debug) {
@@ -275,13 +289,16 @@ public class TestReportAnalyzer {
         }
 
         String trimmed = line.trim();
+        String type;
+        String message = "No message";
         int separatorIndex = trimmed.indexOf(':');
         if (separatorIndex == -1) {
-            return new FailureDetails(trimmed, "No message");
+            type = extractExceptionType(trimmed);
+            return new FailureDetails(type, message);
         }
 
-        String type = trimmed.substring(0, separatorIndex).trim();
-        String message = trimmed.substring(separatorIndex + 1).trim();
+        type = extractExceptionType(trimmed.substring(0, separatorIndex).trim());
+        message = trimmed.substring(separatorIndex + 1).trim();
         if (message.isEmpty()) {
             message = "No message";
         }
@@ -294,9 +311,12 @@ public class TestReportAnalyzer {
                                           FailureDetails details) {
         String normalizedMethod = normalizeMethodName(methodName);
         if (normalizedMethod == null) {
-            normalizedMethod = "UnknownTest";
+            return null;
         }
-        FailureDetails safeDetails = details != null ? details : new FailureDetails("UnknownError", "Unknown error");
+        FailureDetails safeDetails = details;
+        if (status == Status.UNKNOWN && safeDetails == null) {
+            return null;
+        }
         if (status != Status.FAILED) {
             safeDetails = new FailureDetails("UnknownError", "Unknown error");
         }
@@ -311,10 +331,42 @@ public class TestReportAnalyzer {
         if (trimmed.isEmpty()) {
             return null;
         }
+        String lower = trimmed.toLowerCase();
+        if (lower.contains("duration") || lower.contains("execution time") || lower.contains("total time")) {
+            return null;
+        }
         if (trimmed.endsWith("()")) {
             trimmed = trimmed.substring(0, trimmed.length() - 2);
         }
         return trimmed.replaceAll("\\s+", " ");
+    }
+
+    private static boolean isDurationCandidate(Element candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        String text = candidate.text().toLowerCase();
+        return text.contains("duration")
+                || text.contains("execution time")
+                || text.contains("total time")
+                || text.contains("total duration")
+                || text.contains("test duration");
+    }
+
+    private static String extractExceptionType(String value) {
+        if (value == null || value.isBlank()) {
+            return "UnknownError";
+        }
+        String trimmed = value.trim();
+        String type = trimmed;
+        int spaceIndex = trimmed.indexOf(' ');
+        if (spaceIndex != -1) {
+            type = trimmed.substring(0, spaceIndex);
+        }
+        if (!type.contains(".")) {
+            return type;
+        }
+        return type;
     }
 
     private static boolean hasDebugFlag(String[] args) {
