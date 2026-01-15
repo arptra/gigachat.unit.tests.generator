@@ -22,6 +22,7 @@ public class TestReportAnalyzer {
     private static final Path REPORTS_DIR = Paths.get("..", "build", "reports", "tests", "test", "classes");
 
     public static void main(String[] args) {
+        boolean debug = hasDebugFlag(args);
         if (!Files.exists(REPORTS_DIR)) {
             System.out.println("No test reports found at: " + REPORTS_DIR.toAbsolutePath());
             return;
@@ -49,13 +50,14 @@ public class TestReportAnalyzer {
         }
 
         for (Path reportFile : reportFiles) {
-            analyzeReport(reportFile, classCounts, methodCounts, errorTypeCounts, errorMessageCounts);
+            analyzeReport(reportFile, debug, classCounts, methodCounts, errorTypeCounts, errorMessageCounts);
         }
 
         printSummary(classCounts, methodCounts, errorTypeCounts, errorMessageCounts);
     }
 
     private static void analyzeReport(Path reportFile,
+                                      boolean debug,
                                       Map<String, Integer> classCounts,
                                       Map<String, Integer> methodCounts,
                                       Map<String, Integer> errorTypeCounts,
@@ -70,61 +72,192 @@ public class TestReportAnalyzer {
             return;
         }
 
-        Elements rows = document.select("table#tests tbody tr, table.test tbody tr");
-        if (rows.isEmpty()) {
-            rows = document.select("table#tests tr, table.test tr");
+        List<TestCase> testCases = extractTestCases(document, className, debug, reportFile);
+        if (testCases.isEmpty() && debug) {
+            System.out.println("DEBUG: No test cases extracted from " + reportFile.toAbsolutePath());
         }
 
-        for (Element row : rows) {
-            Elements cells = row.select("td");
-            if (cells.isEmpty()) {
-                continue;
-            }
-
-            String methodName = cells.get(0).text().trim();
-            if (methodName.isEmpty()) {
-                continue;
-            }
-
-            String status = cells.get(cells.size() - 1).text().trim().toLowerCase();
-
+        for (TestCase testCase : testCases) {
             incrementCount(classCounts, className);
-            incrementCount(methodCounts, simpleClassName + "#" + methodName);
+            incrementCount(methodCounts, simpleClassName + "#" + testCase.methodName());
 
-            if (status.contains("failed")) {
-                ErrorDetails details = extractErrorDetails(document, methodName);
-                incrementCount(errorTypeCounts, details.type());
-                incrementCount(errorMessageCounts, details.message());
+            if (testCase.status() == Status.FAILED) {
+                incrementCount(errorTypeCounts, testCase.errorType());
+                incrementCount(errorMessageCounts, testCase.errorMessage());
             }
         }
     }
 
-    private static ErrorDetails extractErrorDetails(Document document, String methodName) {
-        Element detail = document.getElementById(methodName);
-        if (detail == null) {
-            for (Element testDiv : document.select("div.test")) {
-                Element title = testDiv.selectFirst("h3");
-                if (title != null && title.text().contains(methodName)) {
-                    detail = testDiv;
-                    break;
+    private static List<TestCase> extractTestCases(Document document,
+                                                   String className,
+                                                   boolean debug,
+                                                   Path reportFile) {
+        Map<String, FailureDetails> failureDetails = extractFailures(document, debug, reportFile);
+        List<TestCase> cases = extractFromTestSections(document, className, failureDetails, debug, reportFile);
+        if (!cases.isEmpty()) {
+            return cases;
+        }
+
+        List<TestCase> fallbackCases = extractFromFallbackAnchors(document, className, failureDetails, debug, reportFile);
+        if (debug && fallbackCases.isEmpty() && !failureDetails.isEmpty()) {
+            System.out.println("DEBUG: Failures section found in " + reportFile.toAbsolutePath()
+                    + " but no failed tests extracted.");
+        }
+        return fallbackCases;
+    }
+
+    private static List<TestCase> extractFromTestSections(Document document,
+                                                          String className,
+                                                          Map<String, FailureDetails> failureDetails,
+                                                          boolean debug,
+                                                          Path reportFile) {
+        List<Element> containers = document.select("div.tab, div.tab-content, div#tab, section")
+                .stream()
+                .collect(Collectors.toList());
+        if (containers.isEmpty()) {
+            containers = List.of(document.body());
+        }
+
+        int totalFound = 0;
+        List<TestCase> results = new java.util.ArrayList<>();
+
+        for (Element container : containers) {
+            Elements candidates = container.select("div.test, tr, li");
+            for (Element candidate : candidates) {
+                String methodName = extractMethodName(candidate);
+                if (methodName == null) {
+                    continue;
                 }
+                Status status = detectStatus(candidate);
+                FailureDetails details = failureDetails.get(methodName);
+                if (details == null && status == Status.FAILED) {
+                    details = extractFailureFromContainer(candidate);
+                }
+                TestCase testCase = buildTestCase(className, methodName, status, details);
+                results.add(testCase);
+                totalFound++;
             }
         }
 
-        if (detail == null) {
-            return new ErrorDetails("UnknownError", "Unknown error");
+        if (debug) {
+            System.out.println("DEBUG: Strategy 1 (sections) for " + reportFile.toAbsolutePath()
+                    + " found " + totalFound + " test candidates.");
         }
 
-        Element stacktrace = detail.selectFirst(".stacktrace pre");
+        return results;
+    }
+
+    private static Map<String, FailureDetails> extractFailures(Document document,
+                                                               boolean debug,
+                                                               Path reportFile) {
+        Map<String, FailureDetails> failures = new LinkedHashMap<>();
+        Elements failureHeaders = document.select("h2, h3, h4");
+        for (Element header : failureHeaders) {
+            if (!header.text().toLowerCase().contains("failures")) {
+                continue;
+            }
+            Element section = header.parent();
+            if (section == null) {
+                continue;
+            }
+            Elements anchors = section.select("a[href^=#]");
+            for (Element anchor : anchors) {
+                String methodName = normalizeMethodName(anchor.text());
+                if (methodName == null) {
+                    continue;
+                }
+                Element target = document.getElementById(anchor.attr("href").substring(1));
+                FailureDetails details = extractFailureFromContainer(target != null ? target : anchor.parent());
+                failures.putIfAbsent(methodName, details);
+            }
+        }
+
+        if (debug) {
+            System.out.println("DEBUG: Strategy 2 (failures) for " + reportFile.toAbsolutePath()
+                    + " found " + failures.size() + " failed tests.");
+        }
+        return failures;
+    }
+
+    private static List<TestCase> extractFromFallbackAnchors(Document document,
+                                                             String className,
+                                                             Map<String, FailureDetails> failureDetails,
+                                                             boolean debug,
+                                                             Path reportFile) {
+        Elements anchors = document.select("[id], [name]");
+        int totalFound = 0;
+        List<TestCase> results = new java.util.ArrayList<>();
+
+        for (Element anchor : anchors) {
+            String methodName = normalizeMethodName(anchor.id());
+            if (methodName == null) {
+                methodName = normalizeMethodName(anchor.attr("name"));
+            }
+            if (methodName == null) {
+                continue;
+            }
+            FailureDetails details = failureDetails.get(methodName);
+            if (details == null) {
+                details = extractFailureFromContainer(anchor);
+            }
+            Status status = details != null ? Status.FAILED : Status.UNKNOWN;
+            results.add(buildTestCase(className, methodName, status, details));
+            totalFound++;
+        }
+
+        if (debug) {
+            System.out.println("DEBUG: Strategy 3 (fallback anchors) for " + reportFile.toAbsolutePath()
+                    + " found " + totalFound + " test candidates.");
+        }
+
+        return results;
+    }
+
+    private static String extractMethodName(Element candidate) {
+        if (candidate == null) {
+            return null;
+        }
+        String direct = normalizeMethodName(candidate.selectFirst("a, span, td, li, h3") != null
+                ? candidate.selectFirst("a, span, td, li, h3").text()
+                : null);
+        if (direct != null) {
+            return direct;
+        }
+        return normalizeMethodName(candidate.text());
+    }
+
+    private static Status detectStatus(Element element) {
+        if (element == null) {
+            return Status.UNKNOWN;
+        }
+        String classText = element.className().toLowerCase();
+        String text = element.text().toLowerCase();
+        if (classText.contains("failed") || text.contains("failed")) {
+            return Status.FAILED;
+        }
+        if (classText.contains("skipped") || text.contains("skipped")) {
+            return Status.SKIPPED;
+        }
+        if (classText.contains("success") || classText.contains("passed") || text.contains("passed")) {
+            return Status.PASSED;
+        }
+        return Status.UNKNOWN;
+    }
+
+    private static FailureDetails extractFailureFromContainer(Element container) {
+        if (container == null) {
+            return null;
+        }
+        Element stacktrace = container.selectFirst(".stacktrace pre");
         if (stacktrace == null) {
-            stacktrace = detail.selectFirst("pre");
+            stacktrace = container.selectFirst("pre");
         }
         if (stacktrace == null) {
-            Element error = detail.selectFirst(".error");
+            Element error = container.selectFirst(".error");
             if (error != null) {
                 return parseErrorLine(error.text());
             }
-            return new ErrorDetails("UnknownError", "Unknown error");
+            return null;
         }
 
         String firstLine = stacktrace.text().stripLeading();
@@ -136,15 +269,15 @@ public class TestReportAnalyzer {
         return parseErrorLine(firstLine);
     }
 
-    private static ErrorDetails parseErrorLine(String line) {
+    private static FailureDetails parseErrorLine(String line) {
         if (line == null || line.isBlank()) {
-            return new ErrorDetails("UnknownError", "Unknown error");
+            return new FailureDetails("UnknownError", "Unknown error");
         }
 
         String trimmed = line.trim();
         int separatorIndex = trimmed.indexOf(':');
         if (separatorIndex == -1) {
-            return new ErrorDetails(trimmed, "No message");
+            return new FailureDetails(trimmed, "No message");
         }
 
         String type = trimmed.substring(0, separatorIndex).trim();
@@ -152,7 +285,48 @@ public class TestReportAnalyzer {
         if (message.isEmpty()) {
             message = "No message";
         }
-        return new ErrorDetails(type, message);
+        return new FailureDetails(type, message);
+    }
+
+    private static TestCase buildTestCase(String className,
+                                          String methodName,
+                                          Status status,
+                                          FailureDetails details) {
+        String normalizedMethod = normalizeMethodName(methodName);
+        if (normalizedMethod == null) {
+            normalizedMethod = "UnknownTest";
+        }
+        FailureDetails safeDetails = details != null ? details : new FailureDetails("UnknownError", "Unknown error");
+        if (status != Status.FAILED) {
+            safeDetails = new FailureDetails("UnknownError", "Unknown error");
+        }
+        return new TestCase(className, normalizedMethod, status, safeDetails.type(), safeDetails.message());
+    }
+
+    private static String normalizeMethodName(String name) {
+        if (name == null) {
+            return null;
+        }
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (trimmed.endsWith("()")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 2);
+        }
+        return trimmed.replaceAll("\\s+", " ");
+    }
+
+    private static boolean hasDebugFlag(String[] args) {
+        if (args == null) {
+            return false;
+        }
+        for (String arg : args) {
+            if ("--debug".equalsIgnoreCase(arg)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void printSummary(Map<String, Integer> classCounts,
@@ -206,10 +380,27 @@ public class TestReportAnalyzer {
         return className.substring(index + 1);
     }
 
-    private record ErrorDetails(String type, String message) {
-        ErrorDetails {
+    private record FailureDetails(String type, String message) {
+        FailureDetails {
             Objects.requireNonNull(type, "type");
             Objects.requireNonNull(message, "message");
         }
+    }
+
+    private record TestCase(String className, String methodName, Status status, String errorType, String errorMessage) {
+        TestCase {
+            Objects.requireNonNull(className, "className");
+            Objects.requireNonNull(methodName, "methodName");
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(errorType, "errorType");
+            Objects.requireNonNull(errorMessage, "errorMessage");
+        }
+    }
+
+    private enum Status {
+        PASSED,
+        FAILED,
+        SKIPPED,
+        UNKNOWN
     }
 }
