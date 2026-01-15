@@ -1,0 +1,24 @@
+plugins {
+    id 'application'
+}
+
+group = 'com.gigachat.unit.tests.generator'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    implementation 'org.jsoup:jsoup:1.17.2'
+}
+
+application {
+    mainClass = 'analyzer.TestReportAnalyzer'
+}
