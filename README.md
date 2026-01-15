@@ -86,3 +86,11 @@ When credentials are missing the generator continues to operate with the determi
 ```bash
 ./gradlew :entrypoint:test --console=plain
 ```
+
+## Running the Test Report Analyzer
+
+Use the analyzer module to aggregate Gradle HTML test reports:
+
+```bash
+./gradlew :test-report-analyzer:run
+```
