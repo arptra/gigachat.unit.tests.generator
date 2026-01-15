@@ -319,6 +319,8 @@ public class TestReportAnalyzer {
         }
         if (status != Status.FAILED) {
             safeDetails = new FailureDetails("UnknownError", "Unknown error");
+        } else if (safeDetails == null) {
+            safeDetails = new FailureDetails("UnknownError", "Unknown error");
         }
         return new TestCase(className, normalizedMethod, status, safeDetails.type(), safeDetails.message());
     }
