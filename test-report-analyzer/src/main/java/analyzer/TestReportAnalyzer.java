@@ -95,10 +95,18 @@ public class TestReportAnalyzer {
         Map<String, FailureDetails> failureDetails = extractFailures(document, debug, reportFile);
         List<TestCase> cases = extractFromTestSections(document, className, failureDetails, debug, reportFile);
         if (!cases.isEmpty()) {
+            if (debug && hasFailureSignals(document) && cases.stream().noneMatch(testCase -> testCase.status() == Status.FAILED)) {
+                System.out.println("DEBUG: Failure signals found in " + reportFile.toAbsolutePath()
+                        + " but no failed tests extracted.");
+            }
             return cases;
         }
 
         List<TestCase> fallbackCases = extractFromFallbackAnchors(document, className, failureDetails, debug, reportFile);
+        if (debug && hasFailureSignals(document) && fallbackCases.stream().noneMatch(testCase -> testCase.status() == Status.FAILED)) {
+            System.out.println("DEBUG: Failure signals found in " + reportFile.toAbsolutePath()
+                    + " but no failed tests extracted.");
+        }
         if (debug && fallbackCases.isEmpty() && !failureDetails.isEmpty()) {
             System.out.println("DEBUG: Failures section found in " + reportFile.toAbsolutePath()
                     + " but no failed tests extracted.");
@@ -131,15 +139,12 @@ public class TestReportAnalyzer {
                 if (methodName == null) {
                     continue;
                 }
-                Status status = detectStatus(candidate);
                 FailureDetails details = failureDetails.get(methodName);
-                if (details == null && status == Status.FAILED) {
+                if (details == null) {
                     details = extractFailureFromContainer(candidate);
                 }
-                if (status == Status.UNKNOWN && details == null) {
-                    continue;
-                }
-                TestCase testCase = buildTestCase(className, methodName, status, details);
+                Status uiStatus = detectStatus(candidate);
+                TestCase testCase = buildTestCase(className, methodName, uiStatus, details, candidate);
                 if (testCase != null) {
                     results.add(testCase);
                     totalFound++;
@@ -208,11 +213,8 @@ public class TestReportAnalyzer {
             if (details == null) {
                 details = extractFailureFromContainer(anchor);
             }
-            Status status = details != null ? Status.FAILED : Status.UNKNOWN;
-            if (status == Status.UNKNOWN && details == null) {
-                continue;
-            }
-            TestCase testCase = buildTestCase(className, methodName, status, details);
+            Status uiStatus = details != null ? Status.FAILED : Status.UNKNOWN;
+            TestCase testCase = buildTestCase(className, methodName, uiStatus, details, anchor);
             if (testCase != null) {
                 results.add(testCase);
                 totalFound++;
@@ -288,7 +290,7 @@ public class TestReportAnalyzer {
             return new FailureDetails("UnknownError", "Unknown error");
         }
 
-        String trimmed = line.trim();
+        String trimmed = stripCausePrefix(line.trim());
         String type;
         String message = "No message";
         int separatorIndex = trimmed.indexOf(':');
@@ -307,22 +309,26 @@ public class TestReportAnalyzer {
 
     private static TestCase buildTestCase(String className,
                                           String methodName,
-                                          Status status,
-                                          FailureDetails details) {
+                                          Status uiStatus,
+                                          FailureDetails details,
+                                          Element sourceElement) {
         String normalizedMethod = normalizeMethodName(methodName);
         if (normalizedMethod == null) {
             return null;
         }
-        FailureDetails safeDetails = details;
-        if (status == Status.UNKNOWN && safeDetails == null) {
-            return null;
+        if (details != null) {
+            return new TestCase(className, normalizedMethod, Status.FAILED, details.type(), details.message());
         }
-        if (status != Status.FAILED) {
-            safeDetails = new FailureDetails("UnknownError", "Unknown error");
-        } else if (safeDetails == null) {
-            safeDetails = new FailureDetails("UnknownError", "Unknown error");
+        if (uiStatus == Status.SKIPPED) {
+            return new TestCase(className, normalizedMethod, Status.SKIPPED, "Skipped", "Test skipped");
         }
-        return new TestCase(className, normalizedMethod, status, safeDetails.type(), safeDetails.message());
+        if (uiStatus == Status.PASSED) {
+            return new TestCase(className, normalizedMethod, Status.PASSED, "None", "Passed");
+        }
+        if (isLikelyTestCandidate(sourceElement, normalizedMethod)) {
+            return new TestCase(className, normalizedMethod, Status.PASSED, "None", "Passed");
+        }
+        return null;
     }
 
     private static String normalizeMethodName(String name) {
@@ -359,16 +365,56 @@ public class TestReportAnalyzer {
         if (value == null || value.isBlank()) {
             return "UnknownError";
         }
-        String trimmed = value.trim();
+        String trimmed = stripCausePrefix(value.trim());
         String type = trimmed;
-        int spaceIndex = trimmed.indexOf(' ');
-        if (spaceIndex != -1) {
-            type = trimmed.substring(0, spaceIndex);
+        int separatorIndex = trimmed.indexOf(':');
+        if (separatorIndex != -1) {
+            type = trimmed.substring(0, separatorIndex).trim();
+        } else {
+            int spaceIndex = trimmed.indexOf(' ');
+            if (spaceIndex != -1) {
+                type = trimmed.substring(0, spaceIndex);
+            }
         }
-        if (!type.contains(".")) {
-            return type;
+        if (!type.contains(".") && (type.endsWith("Exception") || type.endsWith("Error"))) {
+            return "java.lang." + type;
         }
-        return type;
+        return type.isEmpty() ? "UnknownError" : type;
+    }
+
+    private static String stripCausePrefix(String value) {
+        String trimmed = value.trim();
+        if (trimmed.startsWith("Caused by:")) {
+            return trimmed.substring("Caused by:".length()).trim();
+        }
+        return trimmed;
+    }
+
+    private static boolean hasFailureSignals(Document document) {
+        if (document == null) {
+            return false;
+        }
+        String text = document.text().toLowerCase();
+        if (text.contains("failures") || text.contains("failed")) {
+            return true;
+        }
+        return !document.select("pre, .stacktrace, .error").isEmpty();
+    }
+
+    private static boolean isLikelyTestCandidate(Element element, String methodName) {
+        if (methodName == null || methodName.isBlank()) {
+            return false;
+        }
+        if (!methodName.matches(".*[a-zA-Z].*")) {
+            return false;
+        }
+        if (methodName.contains(" ") && !methodName.matches(".*\\(.*\\).*")) {
+            return false;
+        }
+        if (element == null) {
+            return false;
+        }
+        return element.selectFirst("a, h3, td, li, span") != null;
     }
 
     private static boolean hasDebugFlag(String[] args) {
