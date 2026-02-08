@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -161,6 +162,83 @@ class JavaProjectScannerTest {
         TestClassInfo info = result.get(0);
         assertEquals("Alpha", info.getClassName());
         assertTrue(info.getTargetPath().toString().contains("mtd"));
+    }
+
+
+    @Test
+    void diffModeScansOnlyChangedJavaFilesBetweenBranches() throws IOException {
+        Path projectRoot = workingDirectory.resolve("repo");
+        Path sourceFolder = projectRoot.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+
+        Path alpha = sourceFolder.resolve("Alpha.java");
+        Path beta = sourceFolder.resolve("Beta.java");
+        Files.writeString(alpha, """
+                package com.example.demo;
+
+                public class Alpha {
+                    public String value() {
+                        return "A";
+                    }
+                }
+                """);
+        Files.writeString(beta, """
+                package com.example.demo;
+
+                public class Beta {
+                    public String value() {
+                        return "B";
+                    }
+                }
+                """);
+
+        run(projectRoot, "git init");
+        run(projectRoot, "git config user.email test@example.com");
+        run(projectRoot, "git config user.name test");
+        run(projectRoot, "git add .");
+        run(projectRoot, "git commit -m init");
+        run(projectRoot, "git checkout -b feature/diff");
+        Files.writeString(alpha, """
+                package com.example.demo;
+
+                public class Alpha {
+                    public String value() {
+                        return "AA";
+                    }
+                }
+                """);
+        run(projectRoot, "git add .");
+        run(projectRoot, "git commit -m update-alpha");
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.DIFF_GEN_UNIT_TEST)
+                .projectPath(projectRoot)
+                .sourceBranch("feature/diff")
+                .targetBranch("master")
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("Alpha", result.get(0).getClassName());
+    }
+
+    private void run(Path directory, String command) throws IOException {
+        Process process = new ProcessBuilder("bash", "-lc", command)
+                .directory(directory.toFile())
+                .start();
+        try {
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+                throw new IOException("Command failed: " + command + "\nstdout: " + stdout + "\nstderr: " + stderr);
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while running command: " + command, ex);
+        }
     }
 
     private String relativize(Path projectRoot, Path targetPath) {

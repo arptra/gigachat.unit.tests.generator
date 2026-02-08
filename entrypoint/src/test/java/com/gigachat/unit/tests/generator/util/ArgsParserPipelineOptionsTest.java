@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ArgsParserPipelineOptionsTest {
 
@@ -54,4 +55,31 @@ class ArgsParserPipelineOptionsTest {
 
         assertEquals(AgentMode.CLEAN, config.getMode());
     }
+
+    @Test
+    void diffModeRequiresSourceAndTargetBranches() {
+        String[] args = {
+                "--mode", "diffGenUnitTest",
+                "--path", "./example-project"
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> parser.parse(args));
+    }
+
+    @Test
+    void diffModeParsesBranchArguments() {
+        String[] args = {
+                "--mode", "diffGenUnitTest",
+                "--path", "./example-project",
+                "--source-branch", "feature/test",
+                "--target-branch", "main"
+        };
+
+        AgentConfig config = parser.parse(args);
+
+        assertEquals(AgentMode.DIFF_GEN_UNIT_TEST, config.getMode());
+        assertEquals("feature/test", config.getSourceBranch());
+        assertEquals("main", config.getTargetBranch());
+    }
+
 }

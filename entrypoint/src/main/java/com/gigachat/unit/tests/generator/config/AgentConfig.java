@@ -17,6 +17,8 @@ public class AgentConfig {
     private final boolean scanWholeProject;
     private final List<String> targetClasses;
     private final boolean singleFileMode;
+    private final String sourceBranch;
+    private final String targetBranch;
     private final GigaChatClientConfig gigaChat;
     private final Map<String, Object> moduleOptions;
     private final PromptConfig promptConfig;
@@ -30,6 +32,8 @@ public class AgentConfig {
                 boolean scanWholeProject,
                 List<String> targetClasses,
                 boolean singleFileMode,
+                String sourceBranch,
+                String targetBranch,
                 GigaChatClientConfig gigaChat,
                 Map<String, Object> moduleOptions) {
         this.mode = Objects.requireNonNull(mode, "mode");
@@ -40,6 +44,8 @@ public class AgentConfig {
         this.scanWholeProject = scanWholeProject;
         this.targetClasses = sanitise(targetClasses);
         this.singleFileMode = singleFileMode;
+        this.sourceBranch = sanitiseBranch(sourceBranch);
+        this.targetBranch = sanitiseBranch(targetBranch);
         this.gigaChat = gigaChat == null ? GigaChatClientConfig.empty() : gigaChat;
         this.moduleOptions = moduleOptions == null ? Map.of() : Map.copyOf(moduleOptions);
         this.promptConfig = PromptConfig.from(this.moduleOptions);
@@ -78,6 +84,14 @@ public class AgentConfig {
         return singleFileMode;
     }
 
+    public String getSourceBranch() {
+        return sourceBranch;
+    }
+
+    public String getTargetBranch() {
+        return targetBranch;
+    }
+
     public GigaChatClientConfig getGigaChat() {
         return gigaChat;
     }
@@ -108,6 +122,8 @@ public class AgentConfig {
         builder.scanWholeProject(scanWholeProject);
         builder.targetClasses(new ArrayList<>(targetClasses));
         builder.singleFileMode(singleFileMode);
+        builder.sourceBranch(sourceBranch);
+        builder.targetBranch(targetBranch);
         builder.gigaChat(gigaChat);
         builder.moduleOptions(new LinkedHashMap<>(moduleOptions));
         return builder;
@@ -124,6 +140,8 @@ public class AgentConfig {
         builder.append("  \"scanWholeProject\": ").append(scanWholeProject).append(",\n");
         builder.append("  \"targetClasses\": ").append(renderArray(targetClasses)).append(",\n");
         builder.append("  \"singleFileMode\": ").append(singleFileMode).append(",\n");
+        builder.append("  \"sourceBranch\": ").append(renderNullable(sourceBranch)).append(",\n");
+        builder.append("  \"targetBranch\": ").append(renderNullable(targetBranch)).append(",\n");
         builder.append("  \"gigaChat\": {");
         builder.append("\n    \"authMode\": \"").append(gigaChat.authMode()).append("\",");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
@@ -176,6 +194,8 @@ public class AgentConfig {
         builder.append("targetClasses:").append(targetClasses.isEmpty() ? " []\n" : '\n');
         targetClasses.forEach(className -> builder.append("  - ").append(className).append('\n'));
         builder.append("singleFileMode: ").append(singleFileMode).append('\n');
+        builder.append("sourceBranch: ").append(renderYamlNullable(sourceBranch)).append('\n');
+        builder.append("targetBranch: ").append(renderYamlNullable(targetBranch)).append('\n');
         builder.append("gigaChat:\n");
         builder.append("  authMode: ").append(gigaChat.authMode()).append('\n');
         builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
@@ -242,5 +262,13 @@ public class AgentConfig {
 
     private String renderYamlNullable(Object value) {
         return value == null ? "null" : '"' + value.toString() + '"';
+    }
+
+    private String sanitiseBranch(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }
