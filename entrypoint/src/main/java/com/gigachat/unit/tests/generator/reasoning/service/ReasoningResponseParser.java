@@ -72,6 +72,19 @@ public class ReasoningResponseParser {
         if (!decision.equals("STOP") && !decision.equals("MARK_FALSE_DEPENDENCY") && actionsEmpty) {
             throw new IllegalArgumentException("Actions required for decision " + decision);
         }
+        if (decision.equals("APPLY_FIX")) {
+            if (response.getHypothesis() == null || response.getHypothesis().isBlank()) {
+                throw new IllegalArgumentException("Hypothesis is required for APPLY_FIX");
+            }
+            if (response.getExpectedDelta() == null || response.getExpectedDelta().isEmpty()) {
+                throw new IllegalArgumentException("expected_delta is required for APPLY_FIX");
+            }
+            for (ReasoningResponse.ReasoningAction action : response.getActions()) {
+                if (action == null || action.getPreconditions().isEmpty()) {
+                    throw new IllegalArgumentException("preconditions are required for APPLY_FIX actions");
+                }
+            }
+        }
         if (response.getActions() == null) {
             response.setActions(java.util.List.of());
         }

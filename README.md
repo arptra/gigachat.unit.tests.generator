@@ -104,3 +104,10 @@ When credentials are missing the generator continues to operate with the determi
 ```bash
 ./gradlew :entrypoint:test --console=plain
 ```
+
+## Reasoning Documentation
+
+Подробное описание текущего reasoning-флоу (`AS-IS`) и плана полной переработки (`TO-BE`) находится в:
+
+- `/Users/artapr/IdeaProjects/gigachat.unit.tests.generator/docs/reasoning/REASONING_FLOW_AS_IS_AND_TO_BE.md`
+- `/Users/artapr/IdeaProjects/gigachat.unit.tests.generator/docs/reasoning/IMPLEMENTATION_ITERATIONS.md` (журнал итераций внедрения)

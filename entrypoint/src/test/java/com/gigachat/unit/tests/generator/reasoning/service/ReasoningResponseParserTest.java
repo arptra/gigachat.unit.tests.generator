@@ -15,8 +15,10 @@ class ReasoningResponseParserTest {
         String json = """
                 {
                   "decision": "APPLY_FIX",
+                  "hypothesis": "Unique symbol resolution indicates missing import.",
+                  "expected_delta": {"compile_errors": -1, "symbol": "Missing"},
                   "actions": [
-                    {"type": "APPLY_PATCH", "args": {"filePath": "src/test/java/Sample.java", "patch": "@@ -1,1 +1,1 @@"}}
+                    {"type": "APPLY_PATCH", "preconditions": ["patch_applies_cleanly"], "args": {"filePath": "src/test/java/Sample.java", "patch": "@@ -1,1 +1,1 @@"}}
                   ],
                   "memory_updates": {
                     "knownMissingSymbols": ["Missing"],
@@ -59,8 +61,10 @@ class ReasoningResponseParserTest {
         String json = """
                 {
                   "decision": "apply_fix",
+                  "hypothesis": "Resolved candidate provides import.",
+                  "expected_delta": {"compile_errors": -1, "symbol": "Test"},
                   "actions": [
-                    {"type": "add_import", "target": "entrypoint/src/test/java/example/SampleTest.java", "details": "org.junit.jupiter.api.Test"}
+                    {"type": "add_import", "preconditions": ["symbol_resolved_unique"], "target": "entrypoint/src/test/java/example/SampleTest.java", "details": "org.junit.jupiter.api.Test"}
                   ],
                   "memory_updates": {}
                 }
@@ -75,5 +79,24 @@ class ReasoningResponseParserTest {
         assertEquals(ToolActionType.ADD_IMPORT, toolAction.getSingleStep().getType());
         assertEquals("entrypoint/src/test/java/example/SampleTest.java", toolAction.getSingleStep().getArguments().get("path"));
         assertEquals("org.junit.jupiter.api.Test", toolAction.getSingleStep().getArguments().get("import"));
+    }
+
+    @Test
+    void shouldRejectApplyFixWithoutPreconditions() {
+        String json = """
+                {
+                  "decision": "APPLY_FIX",
+                  "hypothesis": "Missing import.",
+                  "expected_delta": {"compile_errors": -1},
+                  "actions": [
+                    {"type": "ADD_IMPORT", "args": {"path": "src/test/java/Sample.java", "import": "org.junit.jupiter.api.Test"}}
+                  ],
+                  "memory_updates": {}
+                }
+                """;
+
+        ReasoningResponseParser parser = new ReasoningResponseParser();
+        ReasoningResponse response = parser.parse(json);
+        assertEquals("STOP", response.getDecision());
     }
 }

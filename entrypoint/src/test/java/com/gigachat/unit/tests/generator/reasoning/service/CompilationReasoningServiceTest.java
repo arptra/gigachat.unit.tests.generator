@@ -27,8 +27,10 @@ class CompilationReasoningServiceTest {
         String responseJson = """
                 {
                   "decision": "APPLY_FIX",
+                  "hypothesis": "Missing annotation import can be restored.",
+                  "expected_delta": {"compile_errors": -1, "symbol": "Test"},
                   "actions": [
-                    {"type": "ADD_IMPORT", "target": "src/test/java/TestFile.java", "details": "org.junit.jupiter.api.Test"}
+                    {"type": "ADD_IMPORT", "preconditions": ["symbol_resolved_unique"], "target": "src/test/java/TestFile.java", "details": "org.junit.jupiter.api.Test"}
                   ],
                   "memory_updates": {}
                 }

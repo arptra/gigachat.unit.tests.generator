@@ -15,6 +15,7 @@ import com.gigachat.unit.tests.generator.reasoning.service.action.ApplyPatchActi
 import com.gigachat.unit.tests.generator.reasoning.service.action.ProjectModificationAction;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -27,6 +28,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -35,6 +38,8 @@ import java.util.stream.Collectors;
  * actions. No human-facing logs are emitted; all outputs are captured for the next reasoning prompt.
  */
 public class ToolActionExecutor {
+
+    private static final Pattern CLASS_DECLARATION = Pattern.compile("(?m)^\\s*(public\\s+)?(final\\s+|abstract\\s+)?class\\s+\\w+.*\\{");
 
     private final BuildFileEditor buildFileEditor;
     private final SourceFileEditor sourceFileEditor;
@@ -100,6 +105,7 @@ public class ToolActionExecutor {
             case APPLY_PATCH -> applyModification(createApplyPatchAction(args));
             case ADD_IMPORT -> applyModification(createAddImportAction(args));
             case ADD_DEPENDENCY -> applyModification(createAddDependencyAction(args));
+            case ALIGN_MOCKS -> handleAlignMocks(args);
             case RECOMPILE -> handleRecompile();
             case MARK_FALSE_DEPENDENCY -> handleMarkFalseDependency(args);
             case STOP -> ActionExecutionResult.empty();
@@ -312,6 +318,310 @@ public class ToolActionExecutor {
             return ActionExecutionResult.error("Missing required argument: symbol");
         }
         return new ActionExecutionResult(Map.of("knownMissingSymbols", List.of(symbol)));
+    }
+
+    private ActionExecutionResult handleAlignMocks(Map<String, Object> args) {
+        String pathValue = requireString(args, "path");
+        Path target = resolve(pathValue == null ? testFile.toString() : pathValue);
+        if (!isTestFile(target)) {
+            return new ActionExecutionResult(Map.of("forbiddenActions", List.of("ALIGN_MOCKS -> " + target)), List.of());
+        }
+        String before = sourceFileEditor.readFile(target);
+        if (before.isBlank()) {
+            return ActionExecutionResult.error("Failed to read test file for ALIGN_MOCKS: " + target);
+        }
+
+        sourceFileEditor.addImport(target, "org.junit.jupiter.api.extension.ExtendWith");
+        sourceFileEditor.addImport(target, "org.mockito.junit.jupiter.MockitoExtension");
+        sourceFileEditor.addImport(target, "org.mockito.Mock");
+        sourceFileEditor.addImport(target, "org.mockito.InjectMocks");
+
+        String working = sourceFileEditor.readFile(target);
+        if (working.isBlank()) {
+            working = before;
+        }
+        String updated = ensureMockitoExtension(working);
+
+        String targetClass = requireString(args, "targetClass");
+        String targetIdentifier = requireString(args, "targetIdentifier");
+        if (targetClass != null && !targetClass.isBlank()) {
+            String type = simpleClassName(targetClass);
+            String identifier = targetIdentifier == null || targetIdentifier.isBlank()
+                    ? deriveIdentifier(type)
+                    : targetIdentifier;
+            updated = ensureAnnotatedField(updated, "@InjectMocks", type, identifier);
+        }
+
+        List<Map<String, String>> mockTargets = parseMockTargets(args.get("mockTargets"));
+        for (Map<String, String> mockTarget : mockTargets) {
+            String qualifiedType = mockTarget.get("qualifiedType");
+            String identifier = mockTarget.get("identifier");
+            if (qualifiedType == null || identifier == null) {
+                continue;
+            }
+            updated = ensureAnnotatedField(updated, "@Mock", simpleClassName(qualifiedType), identifier);
+        }
+        List<Map<String, Object>> mockStubs = parseMockStubs(args.get("mockStubs"));
+        if (!mockStubs.isEmpty()) {
+            updated = ensureMockitoStubs(updated, mockStubs);
+        }
+
+        if (Objects.equals(working, updated)) {
+            return ActionExecutionResult.error("Action had no effect: ALIGN_MOCKS " + target);
+        }
+        try {
+            Files.writeString(target, updated, StandardCharsets.UTF_8);
+        } catch (IOException exception) {
+            return ActionExecutionResult.error("Failed to write ALIGN_MOCKS result: " + exception.getMessage());
+        }
+        return new ActionExecutionResult(Map.of(), List.of("ALIGN_MOCKS " + target));
+    }
+
+    private String ensureMockitoExtension(String source) {
+        if (source == null || source.isBlank() || source.contains("@ExtendWith(MockitoExtension.class)")) {
+            return source;
+        }
+        Matcher matcher = CLASS_DECLARATION.matcher(source);
+        if (!matcher.find()) {
+            return source;
+        }
+        int insertAt = matcher.start();
+        String annotation = "@ExtendWith(MockitoExtension.class)\n";
+        return source.substring(0, insertAt) + annotation + source.substring(insertAt);
+    }
+
+    private String ensureAnnotatedField(String source, String annotation, String type, String identifier) {
+        if (source == null || source.isBlank() || type == null || type.isBlank() || identifier == null || identifier.isBlank()) {
+            return source;
+        }
+        Pattern fieldPattern = Pattern.compile("(?m)^\\s*(?:(?:private|protected|public)\\s+)?(?:(?:static|final|transient|volatile)\\s+)*"
+                + Pattern.quote(type)
+                + "\\s+"
+                + Pattern.quote(identifier)
+                + "\\s*(?:=[^;]*)?;\\s*$");
+        Matcher fieldMatcher = fieldPattern.matcher(source);
+        if (fieldMatcher.find()) {
+            int declarationStart = fieldMatcher.start();
+            int lineStart = source.lastIndexOf('\n', Math.max(declarationStart - 1, 0));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            int lineEnd = source.indexOf('\n', lineStart);
+            if (lineEnd < 0) {
+                lineEnd = source.length();
+            }
+            String indentation = leadingIndent(source.substring(lineStart, lineEnd));
+            int insertAt = lineStart;
+            boolean alreadyAnnotated = false;
+            int cursor = lineStart;
+            while (cursor > 0) {
+                int previousLineEnd = cursor - 1;
+                if (previousLineEnd >= 0 && source.charAt(previousLineEnd) == '\r') {
+                    previousLineEnd--;
+                }
+                int previousLineStart = source.lastIndexOf('\n', Math.max(previousLineEnd - 1, -1));
+                previousLineStart = previousLineStart < 0 ? 0 : previousLineStart + 1;
+                String previousLine = source.substring(previousLineStart, Math.max(previousLineEnd + 1, previousLineStart));
+                String trimmed = previousLine.trim();
+                if (trimmed.isBlank()) {
+                    break;
+                }
+                if (!trimmed.startsWith("@")) {
+                    break;
+                }
+                if (trimmed.equals(annotation) || trimmed.startsWith(annotation + "(")) {
+                    alreadyAnnotated = true;
+                }
+                insertAt = previousLineStart;
+                cursor = previousLineStart;
+            }
+            if (alreadyAnnotated) {
+                return source;
+            }
+            String prefix = indentation.isEmpty() ? "    " : indentation;
+            return source.substring(0, insertAt) + prefix + annotation + "\n" + source.substring(insertAt);
+        }
+        Matcher classMatcher = CLASS_DECLARATION.matcher(source);
+        if (!classMatcher.find()) {
+            return source;
+        }
+        int bodyStart = source.indexOf('{', classMatcher.start());
+        if (bodyStart < 0) {
+            return source;
+        }
+        String fieldBlock = "\n\n    " + annotation + "\n    private " + type + " " + identifier + ";";
+        int insertAt = bodyStart + 1;
+        return source.substring(0, insertAt) + fieldBlock + source.substring(insertAt);
+    }
+
+    private String leadingIndent(String line) {
+        if (line == null || line.isEmpty()) {
+            return "";
+        }
+        int index = 0;
+        while (index < line.length() && Character.isWhitespace(line.charAt(index)) && line.charAt(index) != '\n' && line.charAt(index) != '\r') {
+            index++;
+        }
+        return line.substring(0, index);
+    }
+
+    private List<Map<String, String>> parseMockTargets(Object rawTargets) {
+        if (!(rawTargets instanceof List<?> targets) || targets.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, String>> parsed = new ArrayList<>();
+        for (Object value : targets) {
+            if (!(value instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object qualifiedType = map.get("qualifiedType");
+            Object identifier = map.get("identifier");
+            if (qualifiedType == null || identifier == null) {
+                continue;
+            }
+            parsed.add(Map.of(
+                    "qualifiedType", qualifiedType.toString(),
+                    "identifier", identifier.toString()
+            ));
+        }
+        return List.copyOf(parsed);
+    }
+
+    private List<Map<String, Object>> parseMockStubs(Object rawStubs) {
+        if (!(rawStubs instanceof List<?> values) || values.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> parsed = new ArrayList<>();
+        for (Object value : values) {
+            if (!(value instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object identifier = map.get("identifier");
+            Object method = map.get("methodName");
+            if (identifier == null || method == null) {
+                continue;
+            }
+            List<String> argTypes = new ArrayList<>();
+            Object rawArgTypes = map.get("argTypes");
+            if (rawArgTypes instanceof List<?> list) {
+                for (Object arg : list) {
+                    if (arg != null && !arg.toString().isBlank()) {
+                        argTypes.add(arg.toString());
+                    }
+                }
+            }
+            parsed.add(Map.of(
+                    "identifier", identifier.toString(),
+                    "methodName", method.toString(),
+                    "argTypes", List.copyOf(argTypes)
+            ));
+        }
+        return List.copyOf(parsed);
+    }
+
+    private String ensureMockitoStubs(String source, List<Map<String, Object>> stubs) {
+        if (source == null || source.isBlank() || stubs == null || stubs.isEmpty() || methodName == null || methodName.isBlank()) {
+            return source;
+        }
+        Pattern methodPattern = Pattern.compile("(?m)^\\s*(?:(?:public|protected|private)\\s+)?(?:(?:static|final)\\s+)*[\\w<>\\[\\], ?]+\\s+"
+                + Pattern.quote(methodName)
+                + "\\s*\\([^\\n{};]*\\)\\s*\\{");
+        Matcher methodMatcher = methodPattern.matcher(source);
+        if (!methodMatcher.find()) {
+            return source;
+        }
+        int bodyStart = source.indexOf('{', methodMatcher.start());
+        if (bodyStart < 0) {
+            return source;
+        }
+        int lineStart = source.lastIndexOf('\n', Math.max(methodMatcher.start() - 1, 0));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        int lineEnd = source.indexOf('\n', lineStart);
+        if (lineEnd < 0) {
+            lineEnd = source.length();
+        }
+        String methodIndent = leadingIndent(source.substring(lineStart, lineEnd));
+        String statementIndent = (methodIndent.isEmpty() ? "    " : methodIndent) + "    ";
+
+        StringBuilder block = new StringBuilder();
+        for (Map<String, Object> stub : stubs) {
+            String identifier = requireString(stub, "identifier");
+            String invokedMethod = requireString(stub, "methodName");
+            @SuppressWarnings("unchecked")
+            List<String> argTypes = stub.get("argTypes") instanceof List<?> list
+                    ? list.stream().filter(Objects::nonNull).map(Object::toString).toList()
+                    : List.of();
+            if (identifier == null || invokedMethod == null) {
+                continue;
+            }
+            String marker = ".when(" + identifier + ")." + invokedMethod + "(";
+            if (source.contains(marker)) {
+                continue;
+            }
+            block.append("\n")
+                    .append(statementIndent)
+                    .append("org.mockito.Mockito.lenient().doAnswer(invocation -> org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation))")
+                    .append(".when(")
+                    .append(identifier)
+                    .append(").")
+                    .append(invokedMethod)
+                    .append("(")
+                    .append(buildMockitoMatchers(argTypes))
+                    .append(");");
+        }
+        if (block.isEmpty()) {
+            return source;
+        }
+        int insertAt = bodyStart + 1;
+        return source.substring(0, insertAt) + block + source.substring(insertAt);
+    }
+
+    private String buildMockitoMatchers(List<String> argTypes) {
+        if (argTypes == null || argTypes.isEmpty()) {
+            return "";
+        }
+        List<String> matchers = new ArrayList<>();
+        for (String argType : argTypes) {
+            String normalized = argType == null ? "" : argType.trim().toLowerCase(Locale.ROOT);
+            if (normalized.equals("int") || normalized.equals("java.lang.integer") || normalized.equals("integer")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyInt()");
+            } else if (normalized.equals("long") || normalized.equals("java.lang.long")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyLong()");
+            } else if (normalized.equals("boolean") || normalized.equals("java.lang.boolean")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyBoolean()");
+            } else if (normalized.equals("double") || normalized.equals("java.lang.double")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyDouble()");
+            } else if (normalized.equals("float") || normalized.equals("java.lang.float")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyFloat()");
+            } else if (normalized.equals("short") || normalized.equals("java.lang.short")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyShort()");
+            } else if (normalized.equals("byte") || normalized.equals("java.lang.byte")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyByte()");
+            } else if (normalized.equals("char") || normalized.equals("java.lang.character")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyChar()");
+            } else if (normalized.equals("java.lang.string") || normalized.equals("string")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyString()");
+            } else {
+                matchers.add("org.mockito.ArgumentMatchers.any()");
+            }
+        }
+        return String.join(", ", matchers);
+    }
+
+    private String simpleClassName(String className) {
+        if (className == null || className.isBlank()) {
+            return className;
+        }
+        int idx = className.lastIndexOf('.');
+        return idx < 0 ? className : className.substring(idx + 1);
+    }
+
+    private String deriveIdentifier(String type) {
+        if (type == null || type.isBlank()) {
+            return "target";
+        }
+        if (type.length() == 1) {
+            return type.toLowerCase(Locale.ROOT);
+        }
+        return type.substring(0, 1).toLowerCase(Locale.ROOT) + type.substring(1);
     }
 
     private ProjectModificationAction createAddDependencyAction(Map<String, Object> args) {

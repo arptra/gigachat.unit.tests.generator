@@ -37,6 +37,11 @@ public final class ArgumentNormalizer {
             case "classname" -> "className";
             case "methodname", "method" -> "methodName";
             case "symbol", "name" -> "symbol";
+            case "targetclass" -> "targetClass";
+            case "targetidentifier", "instance", "instancename" -> "targetIdentifier";
+            case "mocktargets", "targets" -> "mockTargets";
+            case "mockstubs", "stubs", "stubtargets" -> "mockStubs";
+            case "strategy", "mockstrategy" -> "strategy";
             case "import", "importfqcn", "fqcn" -> "import";
             case "patch", "diff", "content" -> "patch";
             case "dependency", "dependencynotation", "gav", "artifact", "coordinate", "coordinates" -> "dependency";

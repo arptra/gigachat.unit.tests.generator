@@ -20,6 +20,10 @@ public class ReasoningResponse {
 
     @JsonProperty("decision")
     private String decision;
+    @JsonProperty("hypothesis")
+    private String hypothesis;
+    @JsonProperty("expected_delta")
+    private ExpectedDelta expectedDelta;
     @JsonProperty("actions")
     private List<ReasoningAction> actions;
     @JsonProperty("memory_updates")
@@ -27,6 +31,7 @@ public class ReasoningResponse {
 
     public ReasoningResponse() {
         this.actions = new ArrayList<>();
+        this.expectedDelta = new ExpectedDelta();
         this.memoryUpdates = new MemoryUpdate();
     }
 
@@ -36,6 +41,22 @@ public class ReasoningResponse {
 
     public void setDecision(String decision) {
         this.decision = decision;
+    }
+
+    public String getHypothesis() {
+        return hypothesis;
+    }
+
+    public void setHypothesis(String hypothesis) {
+        this.hypothesis = hypothesis;
+    }
+
+    public ExpectedDelta getExpectedDelta() {
+        return expectedDelta == null ? new ExpectedDelta() : expectedDelta;
+    }
+
+    public void setExpectedDelta(ExpectedDelta expectedDelta) {
+        this.expectedDelta = expectedDelta == null ? new ExpectedDelta() : expectedDelta;
     }
 
     public List<ReasoningAction> getActions() {
@@ -91,6 +112,34 @@ public class ReasoningResponse {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ExpectedDelta {
+        @JsonProperty("compile_errors")
+        private Integer compileErrors;
+        @JsonProperty("symbol")
+        private String symbol;
+
+        public Integer getCompileErrors() {
+            return compileErrors;
+        }
+
+        public void setCompileErrors(Integer compileErrors) {
+            this.compileErrors = compileErrors;
+        }
+
+        public String getSymbol() {
+            return symbol;
+        }
+
+        public void setSymbol(String symbol) {
+            this.symbol = symbol;
+        }
+
+        public boolean isEmpty() {
+            return compileErrors == null && (symbol == null || symbol.isBlank());
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class MemoryUpdate {
         private Set<String> knownMissingSymbols = new HashSet<>();
         private Set<String> appliedFixSignatures = new HashSet<>();
@@ -125,6 +174,8 @@ public class ReasoningResponse {
     public static class ReasoningAction {
         private String type;
         private Map<String, Object> args = new HashMap<>();
+        @JsonProperty("preconditions")
+        private List<String> preconditions = new ArrayList<>();
         private Map<String, Object> extensions = new HashMap<>();
 
         public String getType() {
@@ -141,6 +192,14 @@ public class ReasoningResponse {
 
         public void setArgs(Map<String, Object> args) {
             this.args = args == null ? new HashMap<>() : new HashMap<>(args);
+        }
+
+        public List<String> getPreconditions() {
+            return preconditions == null ? List.of() : List.copyOf(preconditions);
+        }
+
+        public void setPreconditions(List<String> preconditions) {
+            this.preconditions = preconditions == null ? new ArrayList<>() : new ArrayList<>(preconditions);
         }
 
         @JsonAnySetter
@@ -176,6 +235,14 @@ public class ReasoningResponse {
                     putIfAbsent(merged, "import", firstOf("import", "importFqcn", "fqcn", "details"));
                 }
                 case ADD_DEPENDENCY -> putIfAbsent(merged, "dependency", firstOf("dependency", "dependencyNotation", "gav", "details"));
+                case ALIGN_MOCKS -> {
+                    putIfAbsent(merged, "path", firstOf("path", "filePath", "file", "target"));
+                    putIfAbsent(merged, "targetClass", firstOf("targetClass", "className", "class"));
+                    putIfAbsent(merged, "targetIdentifier", firstOf("targetIdentifier", "instanceName", "target"));
+                    putIfAbsent(merged, "mockTargets", firstOf("mockTargets", "targets"));
+                    putIfAbsent(merged, "mockStubs", firstOf("mockStubs", "stubs"));
+                    putIfAbsent(merged, "strategy", firstOf("strategy", "mockStrategy"));
+                }
                 default -> {
                     // no-op
                 }
