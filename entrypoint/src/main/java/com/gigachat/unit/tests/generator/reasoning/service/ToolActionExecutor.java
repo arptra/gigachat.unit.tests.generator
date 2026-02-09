@@ -40,6 +40,9 @@ import java.util.stream.Collectors;
 public class ToolActionExecutor {
 
     private static final Pattern CLASS_DECLARATION = Pattern.compile("(?m)^\\s*(public\\s+)?(final\\s+|abstract\\s+)?class\\s+\\w+.*\\{");
+    private static final Pattern TOP_LEVEL_TYPE_DECLARATION = Pattern.compile(
+            "^\\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed|static|strictfp)\\s+)*"
+                    + "(?:class|interface|enum|record|@interface)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
 
     private final BuildFileEditor buildFileEditor;
     private final SourceFileEditor sourceFileEditor;
@@ -938,11 +941,62 @@ public class ToolActionExecutor {
     }
 
     private Set<String> parseTopLevelTypes(String content) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\b(class|interface|enum|record|@interface)\\s+([A-Za-z0-9_]+)\\b").matcher(content);
         Set<String> types = new java.util.HashSet<>();
-        while (matcher.find()) {
-            types.add(matcher.group(2));
+        if (content == null || content.isBlank()) {
+            return types;
+        }
+        int braceDepth = 0;
+        String[] lines = content.split("\\R");
+        for (String line : lines) {
+            if (line == null) {
+                continue;
+            }
+            if (braceDepth == 0) {
+                Matcher declarationMatcher = TOP_LEVEL_TYPE_DECLARATION.matcher(line);
+                if (declarationMatcher.find()) {
+                    types.add(declarationMatcher.group(1));
+                }
+            }
+            braceDepth = updateBraceDepth(line, braceDepth);
         }
         return types;
+    }
+
+    private int updateBraceDepth(String line, int currentDepth) {
+        if (line == null || line.isEmpty()) {
+            return Math.max(currentDepth, 0);
+        }
+        int depth = Math.max(currentDepth, 0);
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        boolean escape = false;
+        for (int i = 0; i < line.length(); i++) {
+            char ch = line.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch == '\\' && (inSingleQuote || inDoubleQuote)) {
+                escape = true;
+                continue;
+            }
+            if (ch == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+            if (ch == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+            if (inSingleQuote || inDoubleQuote) {
+                continue;
+            }
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}' && depth > 0) {
+                depth--;
+            }
+        }
+        return depth;
     }
 }

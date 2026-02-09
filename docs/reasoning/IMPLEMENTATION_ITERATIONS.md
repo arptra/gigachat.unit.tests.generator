@@ -573,3 +573,37 @@
 ### Next Iteration
 
 1. Добавить типо-ориентированную генерацию `thenReturn(...)` для ключевых invocations (по `READ_METHOD/READ_CLASS` сигнатурам), чтобы уменьшить flaky execute-ошибки на бизнес-ассертах.
+
+---
+
+## Iteration 013
+
+- Date: 2026-02-09
+- Goal: устранить зависание в `ToolActionExecutor.parseTopLevelTypes` (репорт по строке с `matcher.find()`).
+
+### Changes
+
+1. Удалён regex-цикл `while (matcher.find())` по всему содержимому файла в `parseTopLevelTypes`.
+2. Реализован линейный построчный разбор top-level типов:
+   - детекция объявлений через `TOP_LEVEL_TYPE_DECLARATION`;
+   - контроль `braceDepth` для top-level контекста;
+   - безопасное обновление глубины скобок с учётом строковых/символьных литералов.
+3. Файл:
+   - `/Users/artapr/IdeaProjects/gigachat.unit.tests.generator/entrypoint/src/main/java/com/gigachat/unit/tests/generator/reasoning/service/ToolActionExecutor.java`
+
+### Verification
+
+1. `./gradlew :entrypoint:test --tests 'com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutorTest'` -> `BUILD SUCCESSFUL`.
+2. `./gradlew :entrypoint:test --tests 'com.gigachat.unit.tests.generator.reasoning.**.*'` -> `BUILD SUCCESSFUL`.
+
+### Stop Point
+
+- Потенциально зависающий участок в `parseTopLevelTypes` заменён на предсказуемый линейный проход без `Matcher.find()`-цикла.
+
+### Open Errors/Risks
+
+1. Парсер top-level типов остаётся эвристическим (не полноценный Java-parser), но для symbol index в reasoning этого достаточно.
+
+### Next Iteration
+
+1. Продолжить типо-ориентированное улучшение mock stubbing (`thenReturn`) поверх уже исправленного scaffold/stub pipeline.
