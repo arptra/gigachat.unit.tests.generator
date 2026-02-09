@@ -19,12 +19,10 @@ import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
 import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Drives the compile → reasoning → apply loop until compilation succeeds or a
@@ -75,7 +73,6 @@ public class CompilationPipelineOrchestrator {
         ActionExecutionResult cumulativeResult = ActionExecutionResult.empty();
         ReasoningMemory memory = new ReasoningMemory();
         memory.setState(AgentState.S0_INIT);
-        memory.addForbiddenAction("ADD_DEPENDENCY");
         for (int attempt = 0; attempt < MAX_ITERATIONS; attempt++) {
             memory.incrementAttempt();
             lastResult = compilerInvoker.compileWithoutCache(projectRoot, testFile, methodName);
@@ -88,16 +85,10 @@ public class CompilationPipelineOrchestrator {
             CompilationErrorReport report = errorClassifier.classify(lastResult.stderr());
             String signature = deriveSignature(report, errorInfo);
             memory.addErrorSignature(signature);
-            if (memory.countOccurrences(signature) >= 2) {
-                memory.setState(AgentState.S6_GIVE_UP);
-                throw new FixingFailureException("Repeated compilation errors detected. Giving up.", lastResult);
-            }
 
             String missingSymbol = findMissingSymbol(report);
-            if (missingSymbol != null && !symbolExistsInSources(missingSymbol)) {
-                memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
+            if (missingSymbol != null) {
                 memory.addKnownMissingSymbol(missingSymbol);
-                memory.addForbiddenAction("ADD_IMPORT");
             }
 
             ReasoningLoopContext loopContext = nextContextBuilder.build(errorInfo, projectContextCollector.collect(), cumulativeResult, report, memory);
@@ -106,6 +97,7 @@ public class CompilationPipelineOrchestrator {
             if (decision == null || decision.isBlank()) {
                 decision = "STOP";
             }
+            decision = decision.trim().toUpperCase(Locale.ROOT);
 
             if ("REQUEST_CONTEXT".equals(decision)) {
                 memory.setState(AgentState.S2_1_NEED_MORE_CONTEXT);
@@ -164,28 +156,6 @@ public class CompilationPipelineOrchestrator {
                 .filter(symbol -> symbol != null && !symbol.isBlank())
                 .findFirst()
                 .orElse(null);
-    }
-
-    private boolean symbolExistsInSources(String symbol) {
-        try {
-            Path sourceRoot = projectRoot.resolve("src/main/java").toAbsolutePath().normalize();
-            if (!Files.exists(sourceRoot)) {
-                return false;
-            }
-            try (var paths = Files.walk(sourceRoot)) {
-                for (Path path : (Iterable<Path>) paths
-                        .filter(candidate -> Files.isRegularFile(candidate) && candidate.toString().endsWith(".java"))
-                        ::iterator) {
-                    String content = Files.readString(path);
-                    if (content.contains(symbol)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (IOException ignored) {
-            // fall through
-        }
-        return false;
     }
 
     @SuppressWarnings("unchecked")

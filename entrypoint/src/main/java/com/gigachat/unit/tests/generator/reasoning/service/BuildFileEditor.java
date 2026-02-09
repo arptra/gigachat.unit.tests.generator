@@ -6,12 +6,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Provides simple editing capabilities for the build.gradle file to append dependencies
  * requested by the reasoning loop.
  */
 public class BuildFileEditor {
+
+    private static final Pattern DEPENDENCY_PATTERN = Pattern.compile("(testImplementation|implementation)\\s*(?:\\(|\\s+)['\\\"](?<dep>[^'\\\"]+)['\\\"]\\)?");
 
     private final Path projectRoot;
 
@@ -29,13 +33,15 @@ public class BuildFileEditor {
         if (dependencyNotation == null || dependencyNotation.isBlank()) {
             return List.of();
         }
-        Path buildFile = projectRoot.resolve("build.gradle");
-        if (!Files.exists(buildFile)) {
+        Path buildFile = resolveBuildFile();
+        if (buildFile == null || !Files.exists(buildFile)) {
             return List.of();
         }
         try {
             List<String> lines = Files.readAllLines(buildFile, StandardCharsets.UTF_8);
-            String dependencyLine = String.format("    testImplementation(\"%s\")", dependencyNotation.trim());
+            String dependencyLine = buildFile.getFileName().toString().endsWith(".kts")
+                    ? String.format("    testImplementation(\"%s\")", dependencyNotation.trim())
+                    : String.format("    testImplementation '%s'", dependencyNotation.trim());
             if (lines.stream().noneMatch(line -> line.contains(dependencyNotation))) {
                 int dependenciesIndex = findDependenciesBlock(lines);
                 if (dependenciesIndex == -1) {
@@ -65,16 +71,23 @@ public class BuildFileEditor {
     private List<String> readDeclaredDependencies(List<String> lines) {
         List<String> dependencies = new ArrayList<>();
         for (String line : lines) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("testImplementation(") || trimmed.startsWith("implementation(")) {
-                int start = trimmed.indexOf('"');
-                int end = trimmed.lastIndexOf('"');
-                if (start >= 0 && end > start) {
-                    dependencies.add(trimmed.substring(start + 1, end));
-                }
+            Matcher matcher = DEPENDENCY_PATTERN.matcher(line.trim());
+            if (matcher.find()) {
+                dependencies.add(matcher.group("dep"));
             }
         }
         return dependencies;
     }
-}
 
+    private Path resolveBuildFile() {
+        Path groovy = projectRoot.resolve("build.gradle");
+        if (Files.exists(groovy)) {
+            return groovy;
+        }
+        Path kotlin = projectRoot.resolve("build.gradle.kts");
+        if (Files.exists(kotlin)) {
+            return kotlin;
+        }
+        return null;
+    }
+}

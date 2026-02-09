@@ -9,6 +9,7 @@ import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfoBui
 import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionStep;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
+import com.gigachat.unit.tests.generator.reasoning.service.action.AddDependencyAction;
 import com.gigachat.unit.tests.generator.reasoning.service.action.AddImportAction;
 import com.gigachat.unit.tests.generator.reasoning.service.action.ApplyPatchAction;
 import com.gigachat.unit.tests.generator.reasoning.service.action.ProjectModificationAction;
@@ -17,9 +18,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -39,9 +41,12 @@ public class ToolActionExecutor {
     private final CompilerInvoker compilerInvoker;
     private final ExecutionInvoker executionInvoker;
     private final Path projectRoot;
+    private final Path moduleRoot;
     private final Path testFile;
     private final String testFileFqcn;
     private final String methodName;
+    private final List<Path> sourceRoots;
+    private final List<Path> testRoots;
     private Map<String, List<String>> projectSymbolIndex;
     private Map<String, List<String>> classpathSymbolIndex;
 
@@ -61,6 +66,9 @@ public class ToolActionExecutor {
         this.testFile = Objects.requireNonNull(testFile, "testFile");
         this.testFileFqcn = testFileFqcn;
         this.methodName = methodName;
+        this.moduleRoot = detectModuleRoot(this.projectRoot, this.testFile);
+        this.sourceRoots = discoverMainSourceRoots();
+        this.testRoots = discoverTestSourceRoots();
     }
 
     public ActionExecutionResult execute(ToolAction action) {
@@ -91,6 +99,7 @@ public class ToolActionExecutor {
             case RUN_TEST -> handleRunTests();
             case APPLY_PATCH -> applyModification(createApplyPatchAction(args));
             case ADD_IMPORT -> applyModification(createAddImportAction(args));
+            case ADD_DEPENDENCY -> applyModification(createAddDependencyAction(args));
             case RECOMPILE -> handleRecompile();
             case MARK_FALSE_DEPENDENCY -> handleMarkFalseDependency(args);
             case STOP -> ActionExecutionResult.empty();
@@ -112,7 +121,14 @@ public class ToolActionExecutor {
         if (targetPath != null && !isTestFile(targetPath)) {
             return new ActionExecutionResult(Map.of("forbiddenActions", List.of(action.describe())), List.of());
         }
+        String before = targetPath == null ? null : sourceFileEditor.readFile(targetPath);
         action.apply();
+        if (targetPath != null) {
+            String after = sourceFileEditor.readFile(targetPath);
+            if (Objects.equals(before, after)) {
+                return ActionExecutionResult.error("Action had no effect: " + action.describe());
+            }
+        }
         return new ActionExecutionResult(Map.of(), List.of(action.describe()));
     }
 
@@ -227,17 +243,37 @@ public class ToolActionExecutor {
     }
 
     private String extractMethod(String source, String methodName) {
+        if (source == null || source.isBlank() || methodName == null || methodName.isBlank()) {
+            return "";
+        }
+        String[] lines = source.split("\\r?\\n");
         StringBuilder builder = new StringBuilder();
-        boolean started = false;
-        for (String line : source.split("\\r?\\n")) {
-            if (!started && line.contains(methodName + "(")) {
-                started = true;
+        int startIndex = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].contains(methodName + "(")) {
+                startIndex = i;
+                break;
             }
-            if (started) {
-                builder.append(line).append("\n");
-                if (line.contains("}")) {
-                    break;
+        }
+        if (startIndex < 0) {
+            return "";
+        }
+        int depth = 0;
+        boolean opened = false;
+        for (int i = startIndex; i < lines.length; i++) {
+            String line = lines[i];
+            builder.append(line).append("\n");
+            for (int j = 0; j < line.length(); j++) {
+                char ch = line.charAt(j);
+                if (ch == '{') {
+                    depth++;
+                    opened = true;
+                } else if (ch == '}') {
+                    depth--;
                 }
+            }
+            if (opened && depth <= 0) {
+                break;
             }
         }
         return builder.toString().trim();
@@ -279,7 +315,11 @@ public class ToolActionExecutor {
     }
 
     private ProjectModificationAction createAddDependencyAction(Map<String, Object> args) {
-        return null;
+        String dependencyNotation = requireString(args, "dependency");
+        if (dependencyNotation == null || dependencyNotation.isBlank()) {
+            return null;
+        }
+        return new AddDependencyAction(buildFileEditor, dependencyNotation);
     }
 
     private ProjectModificationAction createApplyPatchAction(Map<String, Object> args) {
@@ -329,17 +369,33 @@ public class ToolActionExecutor {
 
     private Path resolve(String pathValue) {
         Path path = Path.of(pathValue);
-        if (!path.isAbsolute()) {
-            path = projectRoot.resolve(pathValue);
+        if (path.isAbsolute()) {
+            return path.normalize().toAbsolutePath();
         }
-        return path.normalize().toAbsolutePath();
+        Path moduleRelative = moduleRoot.resolve(pathValue).normalize().toAbsolutePath();
+        if (Files.exists(moduleRelative)) {
+            return moduleRelative;
+        }
+        Path projectRelative = projectRoot.resolve(pathValue).normalize().toAbsolutePath();
+        if (Files.exists(projectRelative)) {
+            return projectRelative;
+        }
+        Path siblingRelative = testFile.getParent() == null
+                ? moduleRelative
+                : testFile.getParent().resolve(pathValue).normalize().toAbsolutePath();
+        if (Files.exists(siblingRelative)) {
+            return siblingRelative;
+        }
+        return moduleRelative;
     }
 
     private Path resolveClassToPath(String className) {
         String relative = className.replace('.', '/') + ".java";
-        Path candidate = projectRoot.resolve("src/main/java").resolve(relative).normalize().toAbsolutePath();
-        if (Files.exists(candidate)) {
-            return candidate;
+        for (Path root : combinedSourceRoots()) {
+            Path candidate = root.resolve(relative).normalize().toAbsolutePath();
+            if (Files.exists(candidate)) {
+                return candidate;
+            }
         }
         return null;
     }
@@ -350,8 +406,16 @@ public class ToolActionExecutor {
     }
 
     private boolean isTestFile(Path path) {
-        Path testRoot = projectRoot.resolve("src/test").toAbsolutePath().normalize();
-        return path != null && path.toAbsolutePath().normalize().startsWith(testRoot);
+        if (path == null) {
+            return false;
+        }
+        Path normalized = path.toAbsolutePath().normalize();
+        for (Path testRoot : testRoots) {
+            if (normalized.startsWith(testRoot)) {
+                return true;
+            }
+        }
+        return hasTestSourceSetSegment(normalized);
     }
 
     private Map<String, List<String>> buildProjectSymbolIndex() {
@@ -359,9 +423,11 @@ public class ToolActionExecutor {
             return projectSymbolIndex;
         }
         Map<String, List<String>> index = new HashMap<>();
-        Path mainRoot = projectRoot.resolve("src/main/java").toAbsolutePath().normalize();
-        if (Files.exists(mainRoot)) {
-            try (var paths = Files.walk(mainRoot)) {
+        for (Path root : combinedSourceRoots()) {
+            if (!Files.exists(root)) {
+                continue;
+            }
+            try (var paths = Files.walk(root)) {
                 for (Path file : (Iterable<Path>) paths.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java"))::iterator) {
                     String content = sourceFileEditor.readFile(file);
                     String pkg = parsePackage(content);
@@ -385,9 +451,13 @@ public class ToolActionExecutor {
         }
         Map<String, List<String>> index = new HashMap<>();
         List<Path> entries = new ArrayList<>();
-        Path mainOutput = projectRoot.resolve("build/classes/java/main");
+        Path mainOutput = moduleRoot.resolve("build/classes/java/main");
         if (Files.exists(mainOutput)) {
             entries.add(mainOutput);
+        }
+        Path rootMainOutput = projectRoot.resolve("build/classes/java/main");
+        if (!rootMainOutput.equals(mainOutput) && Files.exists(rootMainOutput)) {
+            entries.add(rootMainOutput);
         }
         String cp = System.getProperty("java.class.path", "");
         for (String part : cp.split(java.io.File.pathSeparator)) {
@@ -440,6 +510,113 @@ public class ToolActionExecutor {
         } catch (IOException ignored) {
             // ignore
         }
+    }
+
+    private Path detectModuleRoot(Path root, Path anchorFile) {
+        Path fallback = root.toAbsolutePath().normalize();
+        if (anchorFile == null) {
+            return fallback;
+        }
+        Path normalized = anchorFile.toAbsolutePath().normalize();
+        for (int i = 0; i < normalized.getNameCount() - 2; i++) {
+            if (!"src".equals(normalized.getName(i).toString())) {
+                continue;
+            }
+            String sourceSet = normalized.getName(i + 1).toString().toLowerCase(Locale.ROOT);
+            if (!sourceSet.contains("main") && !sourceSet.contains("test")) {
+                continue;
+            }
+            Path prefix = normalized.getRoot() == null ? Path.of("") : normalized.getRoot();
+            for (int j = 0; j < i; j++) {
+                prefix = prefix.resolve(normalized.getName(j).toString());
+            }
+            if (prefix.toString().isBlank()) {
+                return fallback;
+            }
+            return prefix.toAbsolutePath().normalize();
+        }
+        return fallback;
+    }
+
+    private List<Path> discoverMainSourceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>();
+        addIfDirectory(roots, moduleRoot.resolve("src/main/java"));
+        addIfDirectory(roots, projectRoot.resolve("src/main/java"));
+        try (var paths = Files.walk(projectRoot, 6)) {
+            for (Path directory : (Iterable<Path>) paths.filter(Files::isDirectory)::iterator) {
+                if (isMainJavaRoot(directory)) {
+                    roots.add(directory.toAbsolutePath().normalize());
+                }
+            }
+        } catch (IOException ignored) {
+            // best effort
+        }
+        return List.copyOf(roots);
+    }
+
+    private List<Path> discoverTestSourceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>();
+        addIfDirectory(roots, moduleRoot.resolve("src/test/java"));
+        addIfDirectory(roots, projectRoot.resolve("src/test/java"));
+        try (var paths = Files.walk(projectRoot, 6)) {
+            for (Path directory : (Iterable<Path>) paths.filter(Files::isDirectory)::iterator) {
+                if (isTestJavaRoot(directory)) {
+                    roots.add(directory.toAbsolutePath().normalize());
+                }
+            }
+        } catch (IOException ignored) {
+            // best effort
+        }
+        return List.copyOf(roots);
+    }
+
+    private List<Path> combinedSourceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>(sourceRoots);
+        roots.addAll(testRoots);
+        return List.copyOf(roots);
+    }
+
+    private boolean isMainJavaRoot(Path path) {
+        return isJavaRoot(path) && "main".equalsIgnoreCase(path.getName(path.getNameCount() - 2).toString());
+    }
+
+    private boolean isTestJavaRoot(Path path) {
+        if (!isJavaRoot(path)) {
+            return false;
+        }
+        String sourceSet = path.getName(path.getNameCount() - 2).toString().toLowerCase(Locale.ROOT);
+        return sourceSet.contains("test");
+    }
+
+    private boolean isJavaRoot(Path path) {
+        if (path == null || path.getNameCount() < 3) {
+            return false;
+        }
+        int count = path.getNameCount();
+        return "java".equals(path.getName(count - 1).toString())
+                && "src".equals(path.getName(count - 3).toString());
+    }
+
+    private void addIfDirectory(Set<Path> collector, Path path) {
+        if (path != null && Files.isDirectory(path)) {
+            collector.add(path.toAbsolutePath().normalize());
+        }
+    }
+
+    private boolean hasTestSourceSetSegment(Path path) {
+        if (path == null) {
+            return false;
+        }
+        for (int i = 0; i < path.getNameCount() - 1; i++) {
+            if (!"src".equalsIgnoreCase(path.getName(i).toString())) {
+                continue;
+            }
+            String sourceSet = path.getName(i + 1).toString().toLowerCase(Locale.ROOT);
+            if (sourceSet.contains("test")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String parsePackage(String content) {

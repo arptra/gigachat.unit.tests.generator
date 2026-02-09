@@ -29,13 +29,14 @@ public class CompilationReasoningPromptBuilder {
         Set<String> forbidden = memory.getForbiddenActions();
         String allowedTools = Arrays.stream(ToolActionType.values())
                 .map(Enum::name)
+                .filter(name -> !"COMPOSITE".equals(name))
                 .filter(name -> !forbidden.contains(name))
                 .collect(Collectors.joining(", "));
 
         prompt.append("You are a deterministic agent fixing GENERATED TESTS only. ")
                 .append("Production code must NEVER be modified or invented. ")
                 .append("If information is missing, request context via READ_* or SEARCH_SYMBOL before proposing fixes. ")
-                .append("If context budget is exhausted or symbol is absent from sources, STOP safely.\n\n");
+                .append("If context budget is exhausted and no viable test-side fix remains, STOP safely.\n\n");
 
         prompt.append("STATE: ").append(memory.getState())
                 .append(" | ATTEMPT: ").append(memory.getAttempt())
@@ -50,7 +51,7 @@ public class CompilationReasoningPromptBuilder {
         prompt.append("Required JSON response ONLY:\n")
                 .append("{\n")
                 .append("  \"decision\": \"REQUEST_CONTEXT | APPLY_FIX | MARK_FALSE_DEPENDENCY | STOP\",\n")
-                .append("  \"actions\": [ { \"type\": \"READ_METHOD|READ_CLASS|LIST_METHODS|SEARCH_SYMBOL|SHOW_FILE|APPLY_PATCH|ADD_IMPORT|RECOMPILE\", \"args\": { ... } } ],\n")
+                .append("  \"actions\": [ { \"type\": \"READ_METHOD|READ_CLASS|LIST_METHODS|SEARCH_SYMBOL|SHOW_FILE|SHOW_IMPORTS|APPLY_PATCH|ADD_IMPORT|ADD_DEPENDENCY|RECOMPILE|RUN_TEST|MARK_FALSE_DEPENDENCY\", \"args\": { ... } } ],\n")
                 .append("  \"memory_updates\": { \"knownMissingSymbols\": [], \"appliedFixSignatures\": [], \"contextCache\": {\"key\":\"value\"} }\n")
                 .append("}\n");
         prompt.append("Return JSON only. No explanations.\n\n");

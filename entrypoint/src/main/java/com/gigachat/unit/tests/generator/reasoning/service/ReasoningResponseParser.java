@@ -1,8 +1,9 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+
+import java.util.Locale;
 
 public class ReasoningResponseParser {
 
@@ -20,7 +21,12 @@ public class ReasoningResponseParser {
             String cleaned = sanitize(json);
             ReasoningResponse response = mapper.readValue(cleaned, ReasoningResponse.class);
             if (response.getDecision() != null) {
-                response.setDecision(response.getDecision().toUpperCase());
+                String normalizedDecision = response.getDecision()
+                        .trim()
+                        .toUpperCase(Locale.ROOT)
+                        .replace('-', '_')
+                        .replace(' ', '_');
+                response.setDecision(normalizedDecision);
             }
             validate(response);
             return response;
@@ -34,7 +40,7 @@ public class ReasoningResponseParser {
         if (trimmed.startsWith("```")) {
             int firstNewline = trimmed.indexOf('\n');
             trimmed = firstNewline > 0 ? trimmed.substring(firstNewline + 1) : trimmed.substring(3);
-            int closing = Math.max(trimmed.lastIndexOf("``` "), trimmed.lastIndexOf("```"));
+            int closing = trimmed.lastIndexOf("```");
             if (closing >= 0) {
                 trimmed = trimmed.substring(0, closing);
             }

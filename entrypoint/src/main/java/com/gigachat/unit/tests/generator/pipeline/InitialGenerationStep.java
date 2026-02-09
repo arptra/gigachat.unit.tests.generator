@@ -60,6 +60,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -217,7 +218,8 @@ public class InitialGenerationStep {
 
         ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath());
         SourceFileEditor sourceFileEditor = new SourceFileEditor();
-        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath());
+        Path moduleRoot = resolveModuleRoot(config.getProjectPath(), classInfo.getTargetPath());
+        BuildFileEditor buildFileEditor = new BuildFileEditor(moduleRoot);
         boolean success = false;
         int attempt = 0;
         int maxAttempts = 5;
@@ -518,6 +520,34 @@ public class InitialGenerationStep {
                 classInfo.getTargetPath(),
                 classInfo.getTestClassName(),
                 snippet.methodName());
+    }
+
+    private Path resolveModuleRoot(Path projectRoot, Path targetPath) {
+        if (projectRoot == null) {
+            return Path.of(".").toAbsolutePath().normalize();
+        }
+        if (targetPath == null) {
+            return projectRoot.toAbsolutePath().normalize();
+        }
+        Path normalized = targetPath.toAbsolutePath().normalize();
+        for (int i = 0; i < normalized.getNameCount() - 2; i++) {
+            if (!"src".equals(normalized.getName(i).toString())) {
+                continue;
+            }
+            String sourceSet = normalized.getName(i + 1).toString().toLowerCase(Locale.ROOT);
+            if (!sourceSet.contains("main") && !sourceSet.contains("test")) {
+                continue;
+            }
+            Path prefix = normalized.getRoot() == null ? Path.of("") : normalized.getRoot();
+            for (int j = 0; j < i; j++) {
+                prefix = prefix.resolve(normalized.getName(j).toString());
+            }
+            if (prefix.toString().isBlank()) {
+                return projectRoot.toAbsolutePath().normalize();
+            }
+            return prefix.toAbsolutePath().normalize();
+        }
+        return projectRoot.toAbsolutePath().normalize();
     }
 
     private JSONObject buildRepairContext(JSONObject baseContext,

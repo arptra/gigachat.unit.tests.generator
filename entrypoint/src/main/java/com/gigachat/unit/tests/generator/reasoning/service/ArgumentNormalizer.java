@@ -39,6 +39,7 @@ public final class ArgumentNormalizer {
             case "symbol", "name" -> "symbol";
             case "import", "importfqcn", "fqcn" -> "import";
             case "patch", "diff", "content" -> "patch";
+            case "dependency", "dependencynotation", "gav", "artifact", "coordinate", "coordinates" -> "dependency";
             default -> null;
         };
     }

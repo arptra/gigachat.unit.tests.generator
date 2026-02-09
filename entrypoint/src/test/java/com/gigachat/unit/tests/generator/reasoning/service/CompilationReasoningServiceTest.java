@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class CompilationReasoningServiceTest {
 
@@ -46,6 +47,7 @@ class CompilationReasoningServiceTest {
 
         assertEquals("APPLY_FIX", response.getDecision());
         assertEquals(1, response.getActions().size());
+        assertNotNull(response.toToolAction());
     }
 
     @Test
@@ -70,7 +72,7 @@ class CompilationReasoningServiceTest {
         ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null, new ReasoningMemory()));
 
         assertEquals("STOP", response.getDecision());
-        assertEquals(1, llmClient.callCount);
+        assertEquals(2, llmClient.callCount);
     }
 
     private static class CapturingLlmClient implements LlmClient {
