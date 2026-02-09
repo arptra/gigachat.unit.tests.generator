@@ -25,6 +25,9 @@ public class ReasoningMemory {
     private final Set<String> appliedFixSignatures;
     private final Map<String, String> contextCache;
     private final Set<String> forbiddenActions;
+    private final Map<String, Integer> fixFingerprintAttempts;
+    private final Set<String> blockedFixFingerprints;
+    private int noProgressStreak;
 
     public ReasoningMemory() {
         this.attempt = 0;
@@ -35,6 +38,9 @@ public class ReasoningMemory {
         this.appliedFixSignatures = new HashSet<>();
         this.contextCache = new HashMap<>();
         this.forbiddenActions = new HashSet<>();
+        this.fixFingerprintAttempts = new HashMap<>();
+        this.blockedFixFingerprints = new HashSet<>();
+        this.noProgressStreak = 0;
     }
 
     public int getAttempt() {
@@ -137,6 +143,48 @@ public class ReasoningMemory {
         }
     }
 
+    public int incrementFixFingerprintAttempt(String fingerprint) {
+        if (fingerprint == null || fingerprint.isBlank()) {
+            return 0;
+        }
+        int next = fixFingerprintAttempts.getOrDefault(fingerprint, 0) + 1;
+        fixFingerprintAttempts.put(fingerprint, next);
+        return next;
+    }
+
+    public Map<String, Integer> getFixFingerprintAttempts() {
+        return Collections.unmodifiableMap(fixFingerprintAttempts);
+    }
+
+    public void blockFixFingerprint(String fingerprint) {
+        if (fingerprint != null && !fingerprint.isBlank()) {
+            blockedFixFingerprints.add(fingerprint);
+        }
+    }
+
+    public boolean isFixFingerprintBlocked(String fingerprint) {
+        if (fingerprint == null || fingerprint.isBlank()) {
+            return false;
+        }
+        return blockedFixFingerprints.contains(fingerprint);
+    }
+
+    public Set<String> getBlockedFixFingerprints() {
+        return Collections.unmodifiableSet(blockedFixFingerprints);
+    }
+
+    public int getNoProgressStreak() {
+        return noProgressStreak;
+    }
+
+    public void incrementNoProgressStreak() {
+        noProgressStreak++;
+    }
+
+    public void resetNoProgressStreak() {
+        noProgressStreak = 0;
+    }
+
     public ReasoningMemory copy() {
         ReasoningMemory clone = new ReasoningMemory();
         clone.attempt = this.attempt;
@@ -147,6 +195,9 @@ public class ReasoningMemory {
         clone.appliedFixSignatures.addAll(this.appliedFixSignatures);
         clone.contextCache.putAll(this.contextCache);
         clone.forbiddenActions.addAll(this.forbiddenActions);
+        clone.fixFingerprintAttempts.putAll(this.fixFingerprintAttempts);
+        clone.blockedFixFingerprints.addAll(this.blockedFixFingerprints);
+        clone.noProgressStreak = this.noProgressStreak;
         return clone;
     }
 

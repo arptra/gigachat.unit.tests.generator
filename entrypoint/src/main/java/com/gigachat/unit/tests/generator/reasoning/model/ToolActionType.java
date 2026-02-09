@@ -10,6 +10,8 @@ package com.gigachat.unit.tests.generator.reasoning.model;
  * SEARCH_SYMBOL: { "symbol": "<string>" }
  * APPLY_PATCH: { "path": "<testFilePath>", "patch": "<diff>" }
  * ADD_IMPORT: { "path": "<testFilePath>", "import": "<fqcn>" }
+ * ADD_DEPENDENCY: { "dependency": "<group:artifact:version>" }
+ * ALIGN_MOCKS: { "path": "<testFilePath>", "targetClass": "<fqcn>", "targetIdentifier": "<name>", "mockTargets": [{"qualifiedType":"...","identifier":"..."}] }
  * RECOMPILE/RUN_TEST/MARK_FALSE_DEPENDENCY/STOP: {}
  */
 public enum ToolActionType {
@@ -22,6 +24,8 @@ public enum ToolActionType {
     LIST_METHODS,
     APPLY_PATCH,
     ADD_IMPORT,
+    ADD_DEPENDENCY,
+    ALIGN_MOCKS,
     RECOMPILE,
     RUN_TEST,
     MARK_FALSE_DEPENDENCY,

@@ -13,9 +13,13 @@ import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 public class CompilationReasoningService {
+
+    private static final Pattern EXPLICIT_STOP_PATTERN = Pattern.compile("\"decision\"\\s*:\\s*\"stop\"", Pattern.CASE_INSENSITIVE);
 
     private final LlmClient llmClient;
     private final CompilationReasoningPromptBuilder promptBuilder;
@@ -31,30 +35,71 @@ public class CompilationReasoningService {
 
     public ReasoningResponse reasonAboutError(ReasoningLoopContext loopContext) {
         String prompt = promptBuilder.buildPrompt(loopContext);
-        TestClassInfo classInfo = new TestClassInfo(
+        TestClassInfo classInfo = placeholderClassInfo();
+        TestMethodInfo methodInfo = placeholderMethodInfo();
+        MockPlan mockPlan = placeholderPlan();
+
+        String raw = callModel(prompt, classInfo, methodInfo, mockPlan);
+        ReasoningResponse firstAttempt = parser.parse(raw);
+        if (!shouldRetry(raw, firstAttempt)) {
+            return firstAttempt;
+        }
+
+        String retryRaw = callModel(prompt, classInfo, methodInfo, mockPlan);
+        ReasoningResponse secondAttempt = parser.parse(retryRaw);
+        if (!shouldRetry(retryRaw, secondAttempt)) {
+            return secondAttempt;
+        }
+        return stopResponse();
+    }
+
+    private String callModel(String prompt, TestClassInfo classInfo, TestMethodInfo methodInfo, MockPlan mockPlan) {
+        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, mockPlan);
+        return snippet == null ? "" : snippet.methodBody();
+    }
+
+    private boolean shouldRetry(String rawResponse, ReasoningResponse response) {
+        if (response == null) {
+            return true;
+        }
+        String decision = response.getDecision() == null ? "" : response.getDecision().toUpperCase(Locale.ROOT);
+        if (decision.equals(ToolActionType.STOP.name())) {
+            return !isExplicitStop(rawResponse);
+        }
+        if (decision.equals("REQUEST_CONTEXT") || decision.equals("APPLY_FIX")) {
+            return response.toToolAction() == null;
+        }
+        return false;
+    }
+
+    private boolean isExplicitStop(String rawResponse) {
+        if (rawResponse == null || rawResponse.isBlank()) {
+            return false;
+        }
+        return EXPLICIT_STOP_PATTERN.matcher(rawResponse).find();
+    }
+
+    private ReasoningResponse stopResponse() {
+        ReasoningResponse response = new ReasoningResponse();
+        response.setDecision(ToolActionType.STOP.name());
+        return response;
+    }
+
+    private TestClassInfo placeholderClassInfo() {
+        return new TestClassInfo(
                 "ReasoningPlaceholder",
                 "ReasoningPlaceholderTest",
                 Paths.get("."),
                 List.of(),
                 List.of()
         );
-        TestMethodInfo methodInfo = new TestMethodInfo("reason()", "void", "");
-        MockPlan mockPlan = new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of());
+    }
 
-        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, mockPlan);
-        String raw = snippet == null ? "" : snippet.methodBody();
-        try {
-            return parser.parse(raw);
-        } catch (RuntimeException firstFailure) {
-            GeneratedTestSnippet retrySnippet = llmClient.generateTestSnippet(prompt, classInfo, methodInfo, mockPlan);
-            String retryRaw = retrySnippet == null ? "" : retrySnippet.methodBody();
-            try {
-                return parser.parse(retryRaw);
-            } catch (RuntimeException ignored) {
-                ReasoningResponse response = new ReasoningResponse();
-                response.setDecision(ToolActionType.STOP.name());
-                return response;
-            }
-        }
+    private TestMethodInfo placeholderMethodInfo() {
+        return new TestMethodInfo("reason()", "void", "");
+    }
+
+    private MockPlan placeholderPlan() {
+        return new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of());
     }
 }

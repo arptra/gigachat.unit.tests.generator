@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class CompilationReasoningServiceTest {
 
@@ -26,8 +27,10 @@ class CompilationReasoningServiceTest {
         String responseJson = """
                 {
                   "decision": "APPLY_FIX",
+                  "hypothesis": "Missing annotation import can be restored.",
+                  "expected_delta": {"compile_errors": -1, "symbol": "Test"},
                   "actions": [
-                    {"type": "ADD_IMPORT", "target": "src/test/java/TestFile.java", "details": "org.junit.jupiter.api.Test"}
+                    {"type": "ADD_IMPORT", "preconditions": ["symbol_resolved_unique"], "target": "src/test/java/TestFile.java", "details": "org.junit.jupiter.api.Test"}
                   ],
                   "memory_updates": {}
                 }
@@ -46,6 +49,7 @@ class CompilationReasoningServiceTest {
 
         assertEquals("APPLY_FIX", response.getDecision());
         assertEquals(1, response.getActions().size());
+        assertNotNull(response.toToolAction());
     }
 
     @Test
@@ -70,7 +74,7 @@ class CompilationReasoningServiceTest {
         ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null, new ReasoningMemory()));
 
         assertEquals("STOP", response.getDecision());
-        assertEquals(1, llmClient.callCount);
+        assertEquals(2, llmClient.callCount);
     }
 
     private static class CapturingLlmClient implements LlmClient {

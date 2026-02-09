@@ -16,6 +16,8 @@ public class AgentConfigBuilder {
     private boolean scanWholeProject;
     private final List<String> targetClasses = new ArrayList<>();
     private boolean singleFileMode;
+    private String sourceBranch;
+    private String targetBranch;
     private GigaChatClientConfig gigaChat = GigaChatClientConfig.empty();
     private final Map<String, Object> moduleOptions = new LinkedHashMap<>();
     private boolean verifySslCerts;
@@ -79,6 +81,16 @@ public class AgentConfigBuilder {
 
     public AgentConfigBuilder singleFileMode(boolean enabled) {
         this.singleFileMode = enabled;
+        return this;
+    }
+
+    public AgentConfigBuilder sourceBranch(String sourceBranch) {
+        this.sourceBranch = sourceBranch;
+        return this;
+    }
+
+    public AgentConfigBuilder targetBranch(String targetBranch) {
+        this.targetBranch = targetBranch;
         return this;
     }
 
@@ -196,6 +208,8 @@ public class AgentConfigBuilder {
                 scanWholeProject,
                 targetClasses,
                 singleFileMode,
+                sourceBranch,
+                targetBranch,
                 gigaChat,
                 moduleOptions
         );

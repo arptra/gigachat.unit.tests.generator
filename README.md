@@ -50,6 +50,24 @@ Pass a comma-separated list to `--class` to scan several classes in one run:
 
 The entrypoint filters discovered classes to the provided set and generates DTOs only for those targets.
 
+
+### Diff Generation Mode (`diffGenUnitTest`)
+
+Для генерации тестов только по изменениям между двумя ветками используйте режим `diffGenUnitTest`.
+
+В этом режиме агент:
+* строит git diff между веткой-источником (`--source-branch`) и целевой веткой (`--target-branch`),
+* выбирает только изменённые Java-классы,
+* запускает стандартный pipeline генерации юнит-тестов для найденных классов с учётом всех остальных флагов (`--compile`, `--execute`, `--single-file`, фильтры и т.д.).
+
+Пример запуска:
+
+```bash
+./gradlew :entrypoint:run --args="--mode diffGenUnitTest --path ./example-project --source-branch feature/my-change --target-branch main --compile --execute"
+```
+
+Параметры `--source-branch` и `--target-branch` обязательны для режима `diffGenUnitTest`.
+
 ### Cleaner Mode
 
 Pass `--clean` (or `--mode clean`) to enable the cleaner pipeline. The cleaner iterates through all
@@ -86,3 +104,10 @@ When credentials are missing the generator continues to operate with the determi
 ```bash
 ./gradlew :entrypoint:test --console=plain
 ```
+
+## Reasoning Documentation
+
+Подробное описание текущего reasoning-флоу (`AS-IS`) и плана полной переработки (`TO-BE`) находится в:
+
+- `/Users/artapr/IdeaProjects/gigachat.unit.tests.generator/docs/reasoning/REASONING_FLOW_AS_IS_AND_TO_BE.md`
+- `/Users/artapr/IdeaProjects/gigachat.unit.tests.generator/docs/reasoning/IMPLEMENTATION_ITERATIONS.md` (журнал итераций внедрения)

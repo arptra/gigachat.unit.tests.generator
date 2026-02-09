@@ -23,6 +23,8 @@ public class ArgsParser {
         Path privateKeyPath = null;
         boolean verifySslCerts = false;
         String modelName = null;
+        String sourceBranch = null;
+        String targetBranch = null;
 
         for (int i = 0; i < (args == null ? 0 : args.length); i++) {
             String argument = args[i];
@@ -68,10 +70,15 @@ public class ArgsParser {
                     verifySslCerts = value;
                 }
                 case "model" -> modelName = readValue(args, ++i, key);
+                case "source-branch" -> sourceBranch = readValue(args, ++i, key);
+                case "target-branch" -> targetBranch = readValue(args, ++i, key);
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);
             }
         }
 
+        builder.sourceBranch(sourceBranch);
+        builder.targetBranch(targetBranch);
+        validateDiffModeOptions(builder, sourceBranch, targetBranch);
         validateGigachatOptions(gigaChatToken, certificatePath, rootCertificatePath, privateKeyPath);
         builder.gigaChat(gigaChatToken,
                 gigaChatEndpoint,
@@ -110,12 +117,26 @@ public class ArgsParser {
         }
         return switch (value.toLowerCase()) {
             case "scan" -> AgentMode.SCAN;
+            case "diffgenunittest", "diff-gen-unit-test" -> AgentMode.DIFF_GEN_UNIT_TEST;
             case "test" -> AgentMode.TEST;
             case "repair" -> AgentMode.REPAIR;
             case "monitor" -> AgentMode.MONITOR;
             case "clean" -> AgentMode.CLEAN;
             default -> throw new IllegalArgumentException("Unknown mode: " + value);
         };
+    }
+
+    private void validateDiffModeOptions(AgentConfigBuilder builder, String sourceBranch, String targetBranch) {
+        AgentConfig snapshot = builder.build();
+        if (snapshot.getMode() != AgentMode.DIFF_GEN_UNIT_TEST) {
+            return;
+        }
+        if (sourceBranch == null || sourceBranch.isBlank()) {
+            throw new IllegalArgumentException("--source-branch is required for mode diffGenUnitTest");
+        }
+        if (targetBranch == null || targetBranch.isBlank()) {
+            throw new IllegalArgumentException("--target-branch is required for mode diffGenUnitTest");
+        }
     }
 
     private boolean hasValue(String[] args, int index) {

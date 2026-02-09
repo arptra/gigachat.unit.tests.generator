@@ -34,15 +34,27 @@ class CompilationReasoningPromptBuilderTest {
         ActionExecutionResult executionResult = new ActionExecutionResult(Map.of("hint", "value"), List.of("ADD_DEPENDENCY junit"));
         ReasoningMemory memory = new ReasoningMemory();
         memory.addForbiddenAction("ADD_DEPENDENCY");
-        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, executionResult, null, memory));
+        Map<String, Object> additionalContext = Map.of(
+                "testedMethod", Map.of("signature", "calculate(String)", "returnType", "int"),
+                "mockPlan", Map.of("strategy", "MOCKITO")
+        );
+        String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo,
+                summary,
+                executionResult,
+                null,
+                memory,
+                additionalContext));
 
         assertTrue(prompt.contains("deterministic agent"));
         assertTrue(prompt.contains("Allowed tool actions"));
+        assertTrue(prompt.contains("Allowed preconditions tokens"));
         assertTrue(prompt.contains("decision"));
         assertTrue(prompt.contains("Compilation error info"));
         assertTrue(prompt.contains("cannot find symbol"));
         assertTrue(prompt.contains("src/test/java/com/example/TestClass.java"));
         assertTrue(prompt.contains("src/main/java"));
         assertTrue(prompt.contains("junit:junit:5.0"));
+        assertTrue(prompt.contains("Reasoning session context"));
+        assertTrue(prompt.contains("calculate(String)"));
     }
 }

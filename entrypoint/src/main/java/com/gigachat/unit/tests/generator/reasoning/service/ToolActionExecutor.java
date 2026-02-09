@@ -9,22 +9,27 @@ import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfoBui
 import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionStep;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
+import com.gigachat.unit.tests.generator.reasoning.service.action.AddDependencyAction;
 import com.gigachat.unit.tests.generator.reasoning.service.action.AddImportAction;
 import com.gigachat.unit.tests.generator.reasoning.service.action.ApplyPatchAction;
 import com.gigachat.unit.tests.generator.reasoning.service.action.ProjectModificationAction;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -34,14 +39,22 @@ import java.util.stream.Collectors;
  */
 public class ToolActionExecutor {
 
+    private static final Pattern CLASS_DECLARATION = Pattern.compile("(?m)^\\s*(public\\s+)?(final\\s+|abstract\\s+)?class\\s+\\w+.*\\{");
+    private static final Pattern TOP_LEVEL_TYPE_DECLARATION = Pattern.compile(
+            "^\\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed|static|strictfp)\\s+)*"
+                    + "(?:class|interface|enum|record|@interface)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
+
     private final BuildFileEditor buildFileEditor;
     private final SourceFileEditor sourceFileEditor;
     private final CompilerInvoker compilerInvoker;
     private final ExecutionInvoker executionInvoker;
     private final Path projectRoot;
+    private final Path moduleRoot;
     private final Path testFile;
     private final String testFileFqcn;
     private final String methodName;
+    private final List<Path> sourceRoots;
+    private final List<Path> testRoots;
     private Map<String, List<String>> projectSymbolIndex;
     private Map<String, List<String>> classpathSymbolIndex;
 
@@ -61,6 +74,9 @@ public class ToolActionExecutor {
         this.testFile = Objects.requireNonNull(testFile, "testFile");
         this.testFileFqcn = testFileFqcn;
         this.methodName = methodName;
+        this.moduleRoot = detectModuleRoot(this.projectRoot, this.testFile);
+        this.sourceRoots = discoverMainSourceRoots();
+        this.testRoots = discoverTestSourceRoots();
     }
 
     public ActionExecutionResult execute(ToolAction action) {
@@ -91,6 +107,8 @@ public class ToolActionExecutor {
             case RUN_TEST -> handleRunTests();
             case APPLY_PATCH -> applyModification(createApplyPatchAction(args));
             case ADD_IMPORT -> applyModification(createAddImportAction(args));
+            case ADD_DEPENDENCY -> applyModification(createAddDependencyAction(args));
+            case ALIGN_MOCKS -> handleAlignMocks(args);
             case RECOMPILE -> handleRecompile();
             case MARK_FALSE_DEPENDENCY -> handleMarkFalseDependency(args);
             case STOP -> ActionExecutionResult.empty();
@@ -112,7 +130,14 @@ public class ToolActionExecutor {
         if (targetPath != null && !isTestFile(targetPath)) {
             return new ActionExecutionResult(Map.of("forbiddenActions", List.of(action.describe())), List.of());
         }
+        String before = targetPath == null ? null : sourceFileEditor.readFile(targetPath);
         action.apply();
+        if (targetPath != null) {
+            String after = sourceFileEditor.readFile(targetPath);
+            if (Objects.equals(before, after)) {
+                return ActionExecutionResult.error("Action had no effect: " + action.describe());
+            }
+        }
         return new ActionExecutionResult(Map.of(), List.of(action.describe()));
     }
 
@@ -227,17 +252,37 @@ public class ToolActionExecutor {
     }
 
     private String extractMethod(String source, String methodName) {
+        if (source == null || source.isBlank() || methodName == null || methodName.isBlank()) {
+            return "";
+        }
+        String[] lines = source.split("\\r?\\n");
         StringBuilder builder = new StringBuilder();
-        boolean started = false;
-        for (String line : source.split("\\r?\\n")) {
-            if (!started && line.contains(methodName + "(")) {
-                started = true;
+        int startIndex = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].contains(methodName + "(")) {
+                startIndex = i;
+                break;
             }
-            if (started) {
-                builder.append(line).append("\n");
-                if (line.contains("}")) {
-                    break;
+        }
+        if (startIndex < 0) {
+            return "";
+        }
+        int depth = 0;
+        boolean opened = false;
+        for (int i = startIndex; i < lines.length; i++) {
+            String line = lines[i];
+            builder.append(line).append("\n");
+            for (int j = 0; j < line.length(); j++) {
+                char ch = line.charAt(j);
+                if (ch == '{') {
+                    depth++;
+                    opened = true;
+                } else if (ch == '}') {
+                    depth--;
                 }
+            }
+            if (opened && depth <= 0) {
+                break;
             }
         }
         return builder.toString().trim();
@@ -278,8 +323,316 @@ public class ToolActionExecutor {
         return new ActionExecutionResult(Map.of("knownMissingSymbols", List.of(symbol)));
     }
 
+    private ActionExecutionResult handleAlignMocks(Map<String, Object> args) {
+        String pathValue = requireString(args, "path");
+        Path target = resolve(pathValue == null ? testFile.toString() : pathValue);
+        if (!isTestFile(target)) {
+            return new ActionExecutionResult(Map.of("forbiddenActions", List.of("ALIGN_MOCKS -> " + target)), List.of());
+        }
+        String before = sourceFileEditor.readFile(target);
+        if (before.isBlank()) {
+            return ActionExecutionResult.error("Failed to read test file for ALIGN_MOCKS: " + target);
+        }
+
+        sourceFileEditor.addImport(target, "org.junit.jupiter.api.extension.ExtendWith");
+        sourceFileEditor.addImport(target, "org.mockito.junit.jupiter.MockitoExtension");
+        sourceFileEditor.addImport(target, "org.mockito.Mock");
+        sourceFileEditor.addImport(target, "org.mockito.InjectMocks");
+
+        String working = sourceFileEditor.readFile(target);
+        if (working.isBlank()) {
+            working = before;
+        }
+        String updated = ensureMockitoExtension(working);
+
+        String targetClass = requireString(args, "targetClass");
+        String targetIdentifier = requireString(args, "targetIdentifier");
+        if (targetClass != null && !targetClass.isBlank()) {
+            String type = simpleClassName(targetClass);
+            String identifier = targetIdentifier == null || targetIdentifier.isBlank()
+                    ? deriveIdentifier(type)
+                    : targetIdentifier;
+            updated = ensureAnnotatedField(updated, "@InjectMocks", type, identifier);
+        }
+
+        List<Map<String, String>> mockTargets = parseMockTargets(args.get("mockTargets"));
+        for (Map<String, String> mockTarget : mockTargets) {
+            String qualifiedType = mockTarget.get("qualifiedType");
+            String identifier = mockTarget.get("identifier");
+            if (qualifiedType == null || identifier == null) {
+                continue;
+            }
+            updated = ensureAnnotatedField(updated, "@Mock", simpleClassName(qualifiedType), identifier);
+        }
+        List<Map<String, Object>> mockStubs = parseMockStubs(args.get("mockStubs"));
+        if (!mockStubs.isEmpty()) {
+            updated = ensureMockitoStubs(updated, mockStubs);
+        }
+
+        if (Objects.equals(working, updated)) {
+            return ActionExecutionResult.error("Action had no effect: ALIGN_MOCKS " + target);
+        }
+        try {
+            Files.writeString(target, updated, StandardCharsets.UTF_8);
+        } catch (IOException exception) {
+            return ActionExecutionResult.error("Failed to write ALIGN_MOCKS result: " + exception.getMessage());
+        }
+        return new ActionExecutionResult(Map.of(), List.of("ALIGN_MOCKS " + target));
+    }
+
+    private String ensureMockitoExtension(String source) {
+        if (source == null || source.isBlank() || source.contains("@ExtendWith(MockitoExtension.class)")) {
+            return source;
+        }
+        Matcher matcher = CLASS_DECLARATION.matcher(source);
+        if (!matcher.find()) {
+            return source;
+        }
+        int insertAt = matcher.start();
+        String annotation = "@ExtendWith(MockitoExtension.class)\n";
+        return source.substring(0, insertAt) + annotation + source.substring(insertAt);
+    }
+
+    private String ensureAnnotatedField(String source, String annotation, String type, String identifier) {
+        if (source == null || source.isBlank() || type == null || type.isBlank() || identifier == null || identifier.isBlank()) {
+            return source;
+        }
+        Pattern fieldPattern = Pattern.compile("(?m)^\\s*(?:(?:private|protected|public)\\s+)?(?:(?:static|final|transient|volatile)\\s+)*"
+                + Pattern.quote(type)
+                + "\\s+"
+                + Pattern.quote(identifier)
+                + "\\s*(?:=[^;]*)?;\\s*$");
+        Matcher fieldMatcher = fieldPattern.matcher(source);
+        if (fieldMatcher.find()) {
+            int declarationStart = fieldMatcher.start();
+            int lineStart = source.lastIndexOf('\n', Math.max(declarationStart - 1, 0));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            int lineEnd = source.indexOf('\n', lineStart);
+            if (lineEnd < 0) {
+                lineEnd = source.length();
+            }
+            String indentation = leadingIndent(source.substring(lineStart, lineEnd));
+            int insertAt = lineStart;
+            boolean alreadyAnnotated = false;
+            int cursor = lineStart;
+            while (cursor > 0) {
+                int previousLineEnd = cursor - 1;
+                if (previousLineEnd >= 0 && source.charAt(previousLineEnd) == '\r') {
+                    previousLineEnd--;
+                }
+                int previousLineStart = source.lastIndexOf('\n', Math.max(previousLineEnd - 1, -1));
+                previousLineStart = previousLineStart < 0 ? 0 : previousLineStart + 1;
+                String previousLine = source.substring(previousLineStart, Math.max(previousLineEnd + 1, previousLineStart));
+                String trimmed = previousLine.trim();
+                if (trimmed.isBlank()) {
+                    break;
+                }
+                if (!trimmed.startsWith("@")) {
+                    break;
+                }
+                if (trimmed.equals(annotation) || trimmed.startsWith(annotation + "(")) {
+                    alreadyAnnotated = true;
+                }
+                insertAt = previousLineStart;
+                cursor = previousLineStart;
+            }
+            if (alreadyAnnotated) {
+                return source;
+            }
+            String prefix = indentation.isEmpty() ? "    " : indentation;
+            return source.substring(0, insertAt) + prefix + annotation + "\n" + source.substring(insertAt);
+        }
+        Matcher classMatcher = CLASS_DECLARATION.matcher(source);
+        if (!classMatcher.find()) {
+            return source;
+        }
+        int bodyStart = source.indexOf('{', classMatcher.start());
+        if (bodyStart < 0) {
+            return source;
+        }
+        String fieldBlock = "\n\n    " + annotation + "\n    private " + type + " " + identifier + ";";
+        int insertAt = bodyStart + 1;
+        return source.substring(0, insertAt) + fieldBlock + source.substring(insertAt);
+    }
+
+    private String leadingIndent(String line) {
+        if (line == null || line.isEmpty()) {
+            return "";
+        }
+        int index = 0;
+        while (index < line.length() && Character.isWhitespace(line.charAt(index)) && line.charAt(index) != '\n' && line.charAt(index) != '\r') {
+            index++;
+        }
+        return line.substring(0, index);
+    }
+
+    private List<Map<String, String>> parseMockTargets(Object rawTargets) {
+        if (!(rawTargets instanceof List<?> targets) || targets.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, String>> parsed = new ArrayList<>();
+        for (Object value : targets) {
+            if (!(value instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object qualifiedType = map.get("qualifiedType");
+            Object identifier = map.get("identifier");
+            if (qualifiedType == null || identifier == null) {
+                continue;
+            }
+            parsed.add(Map.of(
+                    "qualifiedType", qualifiedType.toString(),
+                    "identifier", identifier.toString()
+            ));
+        }
+        return List.copyOf(parsed);
+    }
+
+    private List<Map<String, Object>> parseMockStubs(Object rawStubs) {
+        if (!(rawStubs instanceof List<?> values) || values.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> parsed = new ArrayList<>();
+        for (Object value : values) {
+            if (!(value instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object identifier = map.get("identifier");
+            Object method = map.get("methodName");
+            if (identifier == null || method == null) {
+                continue;
+            }
+            List<String> argTypes = new ArrayList<>();
+            Object rawArgTypes = map.get("argTypes");
+            if (rawArgTypes instanceof List<?> list) {
+                for (Object arg : list) {
+                    if (arg != null && !arg.toString().isBlank()) {
+                        argTypes.add(arg.toString());
+                    }
+                }
+            }
+            parsed.add(Map.of(
+                    "identifier", identifier.toString(),
+                    "methodName", method.toString(),
+                    "argTypes", List.copyOf(argTypes)
+            ));
+        }
+        return List.copyOf(parsed);
+    }
+
+    private String ensureMockitoStubs(String source, List<Map<String, Object>> stubs) {
+        if (source == null || source.isBlank() || stubs == null || stubs.isEmpty() || methodName == null || methodName.isBlank()) {
+            return source;
+        }
+        Pattern methodPattern = Pattern.compile("(?m)^\\s*(?:(?:public|protected|private)\\s+)?(?:(?:static|final)\\s+)*[\\w<>\\[\\], ?]+\\s+"
+                + Pattern.quote(methodName)
+                + "\\s*\\([^\\n{};]*\\)\\s*\\{");
+        Matcher methodMatcher = methodPattern.matcher(source);
+        if (!methodMatcher.find()) {
+            return source;
+        }
+        int bodyStart = source.indexOf('{', methodMatcher.start());
+        if (bodyStart < 0) {
+            return source;
+        }
+        int lineStart = source.lastIndexOf('\n', Math.max(methodMatcher.start() - 1, 0));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        int lineEnd = source.indexOf('\n', lineStart);
+        if (lineEnd < 0) {
+            lineEnd = source.length();
+        }
+        String methodIndent = leadingIndent(source.substring(lineStart, lineEnd));
+        String statementIndent = (methodIndent.isEmpty() ? "    " : methodIndent) + "    ";
+
+        StringBuilder block = new StringBuilder();
+        for (Map<String, Object> stub : stubs) {
+            String identifier = requireString(stub, "identifier");
+            String invokedMethod = requireString(stub, "methodName");
+            @SuppressWarnings("unchecked")
+            List<String> argTypes = stub.get("argTypes") instanceof List<?> list
+                    ? list.stream().filter(Objects::nonNull).map(Object::toString).toList()
+                    : List.of();
+            if (identifier == null || invokedMethod == null) {
+                continue;
+            }
+            String marker = ".when(" + identifier + ")." + invokedMethod + "(";
+            if (source.contains(marker)) {
+                continue;
+            }
+            block.append("\n")
+                    .append(statementIndent)
+                    .append("org.mockito.Mockito.lenient().doAnswer(invocation -> org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation))")
+                    .append(".when(")
+                    .append(identifier)
+                    .append(").")
+                    .append(invokedMethod)
+                    .append("(")
+                    .append(buildMockitoMatchers(argTypes))
+                    .append(");");
+        }
+        if (block.isEmpty()) {
+            return source;
+        }
+        int insertAt = bodyStart + 1;
+        return source.substring(0, insertAt) + block + source.substring(insertAt);
+    }
+
+    private String buildMockitoMatchers(List<String> argTypes) {
+        if (argTypes == null || argTypes.isEmpty()) {
+            return "";
+        }
+        List<String> matchers = new ArrayList<>();
+        for (String argType : argTypes) {
+            String normalized = argType == null ? "" : argType.trim().toLowerCase(Locale.ROOT);
+            if (normalized.equals("int") || normalized.equals("java.lang.integer") || normalized.equals("integer")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyInt()");
+            } else if (normalized.equals("long") || normalized.equals("java.lang.long")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyLong()");
+            } else if (normalized.equals("boolean") || normalized.equals("java.lang.boolean")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyBoolean()");
+            } else if (normalized.equals("double") || normalized.equals("java.lang.double")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyDouble()");
+            } else if (normalized.equals("float") || normalized.equals("java.lang.float")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyFloat()");
+            } else if (normalized.equals("short") || normalized.equals("java.lang.short")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyShort()");
+            } else if (normalized.equals("byte") || normalized.equals("java.lang.byte")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyByte()");
+            } else if (normalized.equals("char") || normalized.equals("java.lang.character")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyChar()");
+            } else if (normalized.equals("java.lang.string") || normalized.equals("string")) {
+                matchers.add("org.mockito.ArgumentMatchers.anyString()");
+            } else {
+                matchers.add("org.mockito.ArgumentMatchers.any()");
+            }
+        }
+        return String.join(", ", matchers);
+    }
+
+    private String simpleClassName(String className) {
+        if (className == null || className.isBlank()) {
+            return className;
+        }
+        int idx = className.lastIndexOf('.');
+        return idx < 0 ? className : className.substring(idx + 1);
+    }
+
+    private String deriveIdentifier(String type) {
+        if (type == null || type.isBlank()) {
+            return "target";
+        }
+        if (type.length() == 1) {
+            return type.toLowerCase(Locale.ROOT);
+        }
+        return type.substring(0, 1).toLowerCase(Locale.ROOT) + type.substring(1);
+    }
+
     private ProjectModificationAction createAddDependencyAction(Map<String, Object> args) {
-        return null;
+        String dependencyNotation = requireString(args, "dependency");
+        if (dependencyNotation == null || dependencyNotation.isBlank()) {
+            return null;
+        }
+        return new AddDependencyAction(buildFileEditor, dependencyNotation);
     }
 
     private ProjectModificationAction createApplyPatchAction(Map<String, Object> args) {
@@ -329,17 +682,33 @@ public class ToolActionExecutor {
 
     private Path resolve(String pathValue) {
         Path path = Path.of(pathValue);
-        if (!path.isAbsolute()) {
-            path = projectRoot.resolve(pathValue);
+        if (path.isAbsolute()) {
+            return path.normalize().toAbsolutePath();
         }
-        return path.normalize().toAbsolutePath();
+        Path moduleRelative = moduleRoot.resolve(pathValue).normalize().toAbsolutePath();
+        if (Files.exists(moduleRelative)) {
+            return moduleRelative;
+        }
+        Path projectRelative = projectRoot.resolve(pathValue).normalize().toAbsolutePath();
+        if (Files.exists(projectRelative)) {
+            return projectRelative;
+        }
+        Path siblingRelative = testFile.getParent() == null
+                ? moduleRelative
+                : testFile.getParent().resolve(pathValue).normalize().toAbsolutePath();
+        if (Files.exists(siblingRelative)) {
+            return siblingRelative;
+        }
+        return moduleRelative;
     }
 
     private Path resolveClassToPath(String className) {
         String relative = className.replace('.', '/') + ".java";
-        Path candidate = projectRoot.resolve("src/main/java").resolve(relative).normalize().toAbsolutePath();
-        if (Files.exists(candidate)) {
-            return candidate;
+        for (Path root : combinedSourceRoots()) {
+            Path candidate = root.resolve(relative).normalize().toAbsolutePath();
+            if (Files.exists(candidate)) {
+                return candidate;
+            }
         }
         return null;
     }
@@ -350,8 +719,16 @@ public class ToolActionExecutor {
     }
 
     private boolean isTestFile(Path path) {
-        Path testRoot = projectRoot.resolve("src/test").toAbsolutePath().normalize();
-        return path != null && path.toAbsolutePath().normalize().startsWith(testRoot);
+        if (path == null) {
+            return false;
+        }
+        Path normalized = path.toAbsolutePath().normalize();
+        for (Path testRoot : testRoots) {
+            if (normalized.startsWith(testRoot)) {
+                return true;
+            }
+        }
+        return hasTestSourceSetSegment(normalized);
     }
 
     private Map<String, List<String>> buildProjectSymbolIndex() {
@@ -359,9 +736,11 @@ public class ToolActionExecutor {
             return projectSymbolIndex;
         }
         Map<String, List<String>> index = new HashMap<>();
-        Path mainRoot = projectRoot.resolve("src/main/java").toAbsolutePath().normalize();
-        if (Files.exists(mainRoot)) {
-            try (var paths = Files.walk(mainRoot)) {
+        for (Path root : combinedSourceRoots()) {
+            if (!Files.exists(root)) {
+                continue;
+            }
+            try (var paths = Files.walk(root)) {
                 for (Path file : (Iterable<Path>) paths.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java"))::iterator) {
                     String content = sourceFileEditor.readFile(file);
                     String pkg = parsePackage(content);
@@ -385,9 +764,13 @@ public class ToolActionExecutor {
         }
         Map<String, List<String>> index = new HashMap<>();
         List<Path> entries = new ArrayList<>();
-        Path mainOutput = projectRoot.resolve("build/classes/java/main");
+        Path mainOutput = moduleRoot.resolve("build/classes/java/main");
         if (Files.exists(mainOutput)) {
             entries.add(mainOutput);
+        }
+        Path rootMainOutput = projectRoot.resolve("build/classes/java/main");
+        if (!rootMainOutput.equals(mainOutput) && Files.exists(rootMainOutput)) {
+            entries.add(rootMainOutput);
         }
         String cp = System.getProperty("java.class.path", "");
         for (String part : cp.split(java.io.File.pathSeparator)) {
@@ -442,6 +825,113 @@ public class ToolActionExecutor {
         }
     }
 
+    private Path detectModuleRoot(Path root, Path anchorFile) {
+        Path fallback = root.toAbsolutePath().normalize();
+        if (anchorFile == null) {
+            return fallback;
+        }
+        Path normalized = anchorFile.toAbsolutePath().normalize();
+        for (int i = 0; i < normalized.getNameCount() - 2; i++) {
+            if (!"src".equals(normalized.getName(i).toString())) {
+                continue;
+            }
+            String sourceSet = normalized.getName(i + 1).toString().toLowerCase(Locale.ROOT);
+            if (!sourceSet.contains("main") && !sourceSet.contains("test")) {
+                continue;
+            }
+            Path prefix = normalized.getRoot() == null ? Path.of("") : normalized.getRoot();
+            for (int j = 0; j < i; j++) {
+                prefix = prefix.resolve(normalized.getName(j).toString());
+            }
+            if (prefix.toString().isBlank()) {
+                return fallback;
+            }
+            return prefix.toAbsolutePath().normalize();
+        }
+        return fallback;
+    }
+
+    private List<Path> discoverMainSourceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>();
+        addIfDirectory(roots, moduleRoot.resolve("src/main/java"));
+        addIfDirectory(roots, projectRoot.resolve("src/main/java"));
+        try (var paths = Files.walk(projectRoot, 6)) {
+            for (Path directory : (Iterable<Path>) paths.filter(Files::isDirectory)::iterator) {
+                if (isMainJavaRoot(directory)) {
+                    roots.add(directory.toAbsolutePath().normalize());
+                }
+            }
+        } catch (IOException ignored) {
+            // best effort
+        }
+        return List.copyOf(roots);
+    }
+
+    private List<Path> discoverTestSourceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>();
+        addIfDirectory(roots, moduleRoot.resolve("src/test/java"));
+        addIfDirectory(roots, projectRoot.resolve("src/test/java"));
+        try (var paths = Files.walk(projectRoot, 6)) {
+            for (Path directory : (Iterable<Path>) paths.filter(Files::isDirectory)::iterator) {
+                if (isTestJavaRoot(directory)) {
+                    roots.add(directory.toAbsolutePath().normalize());
+                }
+            }
+        } catch (IOException ignored) {
+            // best effort
+        }
+        return List.copyOf(roots);
+    }
+
+    private List<Path> combinedSourceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>(sourceRoots);
+        roots.addAll(testRoots);
+        return List.copyOf(roots);
+    }
+
+    private boolean isMainJavaRoot(Path path) {
+        return isJavaRoot(path) && "main".equalsIgnoreCase(path.getName(path.getNameCount() - 2).toString());
+    }
+
+    private boolean isTestJavaRoot(Path path) {
+        if (!isJavaRoot(path)) {
+            return false;
+        }
+        String sourceSet = path.getName(path.getNameCount() - 2).toString().toLowerCase(Locale.ROOT);
+        return sourceSet.contains("test");
+    }
+
+    private boolean isJavaRoot(Path path) {
+        if (path == null || path.getNameCount() < 3) {
+            return false;
+        }
+        int count = path.getNameCount();
+        return "java".equals(path.getName(count - 1).toString())
+                && "src".equals(path.getName(count - 3).toString());
+    }
+
+    private void addIfDirectory(Set<Path> collector, Path path) {
+        if (path != null && Files.isDirectory(path)) {
+            collector.add(path.toAbsolutePath().normalize());
+        }
+    }
+
+    private boolean hasTestSourceSetSegment(Path path) {
+        if (path == null) {
+            return false;
+        }
+        for (int i = 0; i < path.getNameCount() - 1; i++) {
+            if (!"src".equalsIgnoreCase(path.getName(i).toString())) {
+                continue;
+            }
+            String sourceSet = path.getName(i + 1).toString().toLowerCase(Locale.ROOT);
+            if (sourceSet.contains("test")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String parsePackage(String content) {
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("package\\s+([a-zA-Z0-9_.]+)\\s*;").matcher(content);
         if (matcher.find()) {
@@ -451,11 +941,62 @@ public class ToolActionExecutor {
     }
 
     private Set<String> parseTopLevelTypes(String content) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\b(class|interface|enum|record|@interface)\\s+([A-Za-z0-9_]+)\\b").matcher(content);
         Set<String> types = new java.util.HashSet<>();
-        while (matcher.find()) {
-            types.add(matcher.group(2));
+        if (content == null || content.isBlank()) {
+            return types;
+        }
+        int braceDepth = 0;
+        String[] lines = content.split("\\R");
+        for (String line : lines) {
+            if (line == null) {
+                continue;
+            }
+            if (braceDepth == 0) {
+                Matcher declarationMatcher = TOP_LEVEL_TYPE_DECLARATION.matcher(line);
+                if (declarationMatcher.find()) {
+                    types.add(declarationMatcher.group(1));
+                }
+            }
+            braceDepth = updateBraceDepth(line, braceDepth);
         }
         return types;
+    }
+
+    private int updateBraceDepth(String line, int currentDepth) {
+        if (line == null || line.isEmpty()) {
+            return Math.max(currentDepth, 0);
+        }
+        int depth = Math.max(currentDepth, 0);
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        boolean escape = false;
+        for (int i = 0; i < line.length(); i++) {
+            char ch = line.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch == '\\' && (inSingleQuote || inDoubleQuote)) {
+                escape = true;
+                continue;
+            }
+            if (ch == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+            if (ch == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+            if (inSingleQuote || inDoubleQuote) {
+                continue;
+            }
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}' && depth > 0) {
+                depth--;
+            }
+        }
+        return depth;
     }
 }

@@ -39,14 +39,17 @@ import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
 import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
 import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
-import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.AgentState;
+import com.gigachat.unit.tests.generator.reasoning.model.FixSession;
+import com.gigachat.unit.tests.generator.reasoning.model.FixSessionTransition;
 import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningIterationSnapshot;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
+import com.gigachat.unit.tests.generator.reasoning.service.ReasoningDecisionPolicyEngine;
 import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
 import com.gigachat.unit.tests.generator.reasoning.service.BuildFileEditor;
@@ -60,6 +63,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -105,6 +109,7 @@ public class InitialGenerationStep {
     private final ExecutionFailureLogParser executionFailureLogParser;
     private final ExecutionReportParser executionReportParser;
     private final ReasoningWorkflow reasoningWorkflow;
+    private final ReasoningDecisionPolicyEngine reasoningDecisionPolicyEngine;
     private ExistingTestDetector existingTestDetector;
     private TestGenerationRegistry generationRegistry;
 
@@ -136,6 +141,7 @@ public class InitialGenerationStep {
         this.executionFailureLogParser = new ExecutionFailureLogParser();
         this.executionReportParser = new ExecutionReportParser();
         this.reasoningWorkflow = Objects.requireNonNull(reasoningWorkflow, "reasoningWorkflow");
+        this.reasoningDecisionPolicyEngine = new ReasoningDecisionPolicyEngine();
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -217,7 +223,8 @@ public class InitialGenerationStep {
 
         ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath());
         SourceFileEditor sourceFileEditor = new SourceFileEditor();
-        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath());
+        Path moduleRoot = resolveModuleRoot(config.getProjectPath(), classInfo.getTargetPath());
+        BuildFileEditor buildFileEditor = new BuildFileEditor(moduleRoot);
         boolean success = false;
         int attempt = 0;
         int maxAttempts = 5;
@@ -229,6 +236,12 @@ public class InitialGenerationStep {
         List<TestReportFailure> lastReportFailures = List.of();
 
         while (attempt < maxAttempts) {
+            FixSession fixSession = FixSession.create(classInfo.getTargetPath(), snippet.methodName() + "-outer-" + attempt);
+            Map<String, Object> staticReasoningContext = buildReasoningStaticContext(classInfo,
+                    methodInfo,
+                    snippet,
+                    analysisSummary,
+                    plan);
             ToolActionExecutor actionExecutor = createActionExecutor(config,
                     classInfo,
                     buildFileEditor,
@@ -238,7 +251,9 @@ public class InitialGenerationStep {
                     classInfo,
                     projectContextCollector,
                     actionExecutor,
-                    snippet);
+                    snippet,
+                    fixSession,
+                    staticReasoningContext);
             mergeResult = diffEngine.merge(classInfo, snippet);
             if (!mergeResult.changed()) {
                 logger.warn("Merge step did not change target class for method " + snippet.methodName());
@@ -255,9 +270,11 @@ public class InitialGenerationStep {
                             lastCompileResult.stderr()));
                     try {
                         lastCompileResult = fixingOrchestrator.runFixingLoop();
+                        logFixSessionJournal(fixingOrchestrator.getFixSession(), true);
                     } catch (FixingFailureException exception) {
                         logger.error("Reasoning loop failed to fix compilation errors: " + exception.getMessage(), exception);
                         lastCompileResult = exception.getLastResult();
+                        logFixSessionJournal(resolveFixSessionForLogging(exception, fixingOrchestrator), false);
                     }
                     if (!lastCompileResult.success()) {
                         revertMerge(classInfo, mergeResult);
@@ -304,15 +321,20 @@ public class InitialGenerationStep {
                             classInfo,
                             methodInfo,
                             lastCompileResult,
-                            lastExecuteResult);
+                            lastExecuteResult,
+                            fixSession,
+                            staticReasoningContext);
                     logReasoningResponse("execute", reasoningResponse);
                     if (reasoningResponse != null) {
-                        actionExecutor.execute(reasoningResponse.toToolAction());
+                        ActionExecutionResult executionActionResult = actionExecutor.execute(reasoningResponse.toToolAction());
+                        mergeActionResultIntoFixSession(fixSession, reasoningResponse, executionActionResult);
                         try {
                             lastCompileResult = fixingOrchestrator.runFixingLoop();
+                            logFixSessionJournal(fixingOrchestrator.getFixSession(), true);
                         } catch (FixingFailureException exception) {
                             logger.error("Reasoning loop failed during execution fixes: " + exception.getMessage(), exception);
                             lastCompileResult = exception.getLastResult();
+                            logFixSessionJournal(resolveFixSessionForLogging(exception, fixingOrchestrator), false);
                         }
                         if (lastCompileResult != null && lastCompileResult.success()) {
                             lastExecuteResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
@@ -508,7 +530,9 @@ public class InitialGenerationStep {
                                                                      TestClassInfo classInfo,
                                                                      ProjectContextCollector projectContextCollector,
                                                                      ToolActionExecutor actionExecutor,
-                                                                     GeneratedTestSnippet snippet) {
+                                                                     GeneratedTestSnippet snippet,
+                                                                     FixSession fixSession,
+                                                                     Map<String, Object> staticReasoningContext) {
         return new CompilationPipelineOrchestrator(compilerInvoker,
                 reasoningWorkflow,
                 projectContextCollector,
@@ -517,7 +541,119 @@ public class InitialGenerationStep {
                 config.getProjectPath(),
                 classInfo.getTargetPath(),
                 classInfo.getTestClassName(),
-                snippet.methodName());
+                snippet.methodName(),
+                fixSession,
+                staticReasoningContext);
+    }
+
+    private Map<String, Object> buildReasoningStaticContext(TestClassInfo classInfo,
+                                                            TestMethodInfo methodInfo,
+                                                            GeneratedTestSnippet snippet,
+                                                            Analyze.AnalysisSummary analysisSummary,
+                                                            MockPlan plan) {
+        Map<String, Object> context = new LinkedHashMap<>();
+
+        Map<String, Object> testedMethod = new LinkedHashMap<>();
+        testedMethod.put("signature", methodInfo == null ? "" : methodInfo.getSignature());
+        testedMethod.put("returnType", methodInfo == null ? "" : methodInfo.getReturnType());
+        testedMethod.put("body", truncateForPrompt(methodInfo == null ? "" : methodInfo.getBody(), 2500));
+        if (analysisSummary != null && analysisSummary.methodAnalysis() != null && analysisSummary.methodAnalysis().method() != null) {
+            testedMethod.put("name", analysisSummary.methodAnalysis().method().name());
+            testedMethod.put("analysisSignature", analysisSummary.methodAnalysis().method().signature());
+            testedMethod.put("analysisReturnType", analysisSummary.methodAnalysis().method().returnType());
+            testedMethod.put("dependencies", analysisSummary.methodAnalysis().dependencies().stream()
+                    .map(dep -> Map.<String, Object>of(
+                            "className", dep.className(),
+                            "variableName", dep.variableName(),
+                            "mockType", dep.mockType().name(),
+                            "externalDependency", dep.externalDependency()))
+                    .toList());
+            testedMethod.put("invocations", analysisSummary.methodAnalysis().invocations().stream()
+                    .map(invocation -> Map.<String, Object>of(
+                            "target", invocation.target(),
+                            "methodName", invocation.methodName(),
+                            "argTypes", invocation.argTypes()))
+                    .toList());
+        }
+        context.put("testedMethod", testedMethod);
+
+        Map<String, Object> mockContext = new LinkedHashMap<>();
+        MockPlan effectivePlan = plan == null ? new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of()) : plan;
+        mockContext.put("strategy", effectivePlan.strategy().name());
+        mockContext.put("shouldMock", effectivePlan.shouldMock());
+        mockContext.put("shouldNotMock", effectivePlan.shouldNotMock());
+        mockContext.put("targets", effectivePlan.targets().stream()
+                .map(target -> Map.<String, Object>of(
+                        "qualifiedType", target.qualifiedType(),
+                        "identifier", target.identifier()))
+                .toList());
+        context.put("mockPlan", mockContext);
+
+        Map<String, Object> generatedSnippet = new LinkedHashMap<>();
+        generatedSnippet.put("testClassName", classInfo == null ? "" : classInfo.getTestClassName());
+        generatedSnippet.put("testFilePath", classInfo == null || classInfo.getTargetPath() == null
+                ? ""
+                : classInfo.getTargetPath().toString());
+        generatedSnippet.put("methodName", snippet == null ? "" : snippet.methodName());
+        generatedSnippet.put("imports", snippet == null ? List.of() : snippet.imports());
+        generatedSnippet.put("methodBody", truncateForPrompt(snippet == null ? "" : snippet.methodBody(), 3500));
+        context.put("generatedTestSnippet", generatedSnippet);
+
+        if (analysisSummary != null) {
+            Map<String, Object> analysisContext = new LinkedHashMap<>();
+            analysisContext.put("hasExternalCollaborators", analysisSummary.hasExternalCollaborators());
+            analysisContext.put("invalidCalls", analysisSummary.invalidCalls());
+            analysisContext.put("verificationPolicy", analysisSummary.verificationPolicy());
+            if (analysisSummary.testTargetContext() != null) {
+                analysisContext.put("testTargetContext", Map.of(
+                        "className", analysisSummary.testTargetContext().className(),
+                        "instanceName", analysisSummary.testTargetContext().instanceName(),
+                        "requiresInstance", analysisSummary.testTargetContext().requiresInstance(),
+                        "isStatic", analysisSummary.testTargetContext().isStatic()
+                ));
+            }
+            context.put("analysisContext", analysisContext);
+        }
+
+        return context;
+    }
+
+    private String truncateForPrompt(String value, int limit) {
+        if (value == null) {
+            return "";
+        }
+        if (limit <= 0 || value.length() <= limit) {
+            return value;
+        }
+        return value.substring(0, limit) + "\n/* truncated for reasoning context */";
+    }
+
+    private Path resolveModuleRoot(Path projectRoot, Path targetPath) {
+        if (projectRoot == null) {
+            return Path.of(".").toAbsolutePath().normalize();
+        }
+        if (targetPath == null) {
+            return projectRoot.toAbsolutePath().normalize();
+        }
+        Path normalized = targetPath.toAbsolutePath().normalize();
+        for (int i = 0; i < normalized.getNameCount() - 2; i++) {
+            if (!"src".equals(normalized.getName(i).toString())) {
+                continue;
+            }
+            String sourceSet = normalized.getName(i + 1).toString().toLowerCase(Locale.ROOT);
+            if (!sourceSet.contains("main") && !sourceSet.contains("test")) {
+                continue;
+            }
+            Path prefix = normalized.getRoot() == null ? Path.of("") : normalized.getRoot();
+            for (int j = 0; j < i; j++) {
+                prefix = prefix.resolve(normalized.getName(j).toString());
+            }
+            if (prefix.toString().isBlank()) {
+                return projectRoot.toAbsolutePath().normalize();
+            }
+            return prefix.toAbsolutePath().normalize();
+        }
+        return projectRoot.toAbsolutePath().normalize();
     }
 
     private JSONObject buildRepairContext(JSONObject baseContext,
@@ -586,25 +722,183 @@ public class InitialGenerationStep {
                                                        TestClassInfo classInfo,
                                                        TestMethodInfo methodInfo,
                                                        CompileResult compileResult,
-                                                       ExecuteResult executeResult) {
+                                                       ExecuteResult executeResult,
+                                                       FixSession fixSession,
+                                                       Map<String, Object> staticReasoningContext) {
         try {
-            CompilationErrorInfo errorInfo = compileResult != null
+            boolean hasCompileFailure = compileResult != null && !compileResult.success();
+            CompilationErrorInfo errorInfo = hasCompileFailure
                     ? buildCompilationErrorInfo(compileResult, classInfo)
                     : buildExecutionErrorInfo(executeResult, classInfo, methodInfo);
             ProjectContextSummary summary = buildProjectContextSummary(config, classInfo);
             com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport = compileResult != null
+                    && !compileResult.success()
                     ? new CompilationErrorClassifier().classify(compileResult.stderr())
                     : null;
-            ReasoningMemory memory = new ReasoningMemory();
-            memory.setState(compileResult == null ? AgentState.S0_INIT : AgentState.S2_COMPILATION_FAILED);
+            ReasoningMemory memory = fixSession == null ? new ReasoningMemory() : fixSession.getMemory();
+            memory.setState(hasCompileFailure ? AgentState.S2_COMPILATION_FAILED : AgentState.S2_1_NEED_MORE_CONTEXT);
+            ActionExecutionResult cumulativeResult = fixSession == null
+                    ? ActionExecutionResult.empty()
+                    : fixSession.getCumulativeExecutionResult();
+            Map<String, Object> iterationContext = buildExecutionReasoningIterationContext(fixSession,
+                    staticReasoningContext,
+                    memory,
+                    executeResult,
+                    errorInfo);
             ReasoningLoopContext loopContext = new NextContextBuilder()
-                    .build(errorInfo, summary, ActionExecutionResult.empty(), errorReport, memory);
-            return reasoningWorkflow.process(loopContext);
+                    .build(errorInfo, summary, cumulativeResult, errorReport, memory, iterationContext);
+            ReasoningResponse response = reasoningWorkflow.process(loopContext);
+            return reasoningDecisionPolicyEngine.normalize(response,
+                    errorReport,
+                    errorInfo,
+                    cumulativeResult,
+                    memory,
+                    classInfo.getTargetPath(),
+                    iterationContext);
         } catch (Exception exception) {
             logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
                     + ": " + exception.getMessage(), exception);
             return null;
         }
+    }
+
+    private void mergeActionResultIntoFixSession(FixSession fixSession,
+                                                 ReasoningResponse response,
+                                                 ActionExecutionResult actionResult) {
+        if (fixSession == null) {
+            return;
+        }
+        ReasoningMemory memory = fixSession.getMemory();
+        if (response != null) {
+            memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
+                    response.getMemoryUpdates().getAppliedFixSignatures(),
+                    response.getMemoryUpdates().getContextCache());
+            String decision = response.getDecision() == null ? "" : response.getDecision().trim().toUpperCase(Locale.ROOT);
+            if ("REQUEST_CONTEXT".equals(decision)) {
+                memory.decrementContextBudget();
+            }
+        }
+        if (actionResult != null) {
+            fixSession.mergeExecutionResult(actionResult);
+            memory.applyUpdates(Set.of(), Set.of(), extractContextCache(actionResult));
+            extractForbiddenActions(actionResult).forEach(memory::addForbiddenAction);
+            if (!actionResult.getPerformedActions().isEmpty()) {
+                memory.setState(AgentState.S4_FIX_APPLIED);
+                memory.resetContextBudget();
+            }
+        }
+    }
+
+    private Map<String, Object> buildExecutionReasoningIterationContext(FixSession fixSession,
+                                                                        Map<String, Object> staticReasoningContext,
+                                                                        ReasoningMemory memory,
+                                                                        ExecuteResult executeResult,
+                                                                        CompilationErrorInfo errorInfo) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        if (staticReasoningContext != null && !staticReasoningContext.isEmpty()) {
+            context.put("repairTargetContext", staticReasoningContext);
+        }
+        if (fixSession != null) {
+            Map<String, Object> session = new LinkedHashMap<>();
+            session.put("id", fixSession.getId());
+            session.put("state", fixSession.getState().name());
+            session.put("attempt", memory == null ? 0 : memory.getAttempt());
+            session.put("contextBudgetRemaining", memory == null ? 0 : memory.getContextRequestBudgetRemaining());
+            session.put("currentError", errorInfo == null ? "" : errorInfo.getPrimaryMessage());
+            context.put("fixSession", session);
+            context.put("recentTransitions", tailTransitions(fixSession, 6));
+            context.put("recentSnapshots", tailSnapshots(fixSession, 5));
+        }
+        if (executeResult != null) {
+            Map<String, Object> failure = new LinkedHashMap<>();
+            failure.put("failedTests", executeResult.failedTests());
+            failure.put("stderr", executeResult.stderr());
+            failure.put("stdout", executeResult.stdout());
+            context.put("executeFailure", failure);
+        }
+        return context;
+    }
+
+    private List<Map<String, Object>> tailTransitions(FixSession fixSession, int limit) {
+        if (fixSession == null) {
+            return List.of();
+        }
+        List<FixSessionTransition> transitions = fixSession.getJournal().getTransitions();
+        if (transitions.isEmpty()) {
+            return List.of();
+        }
+        int start = Math.max(0, transitions.size() - Math.max(limit, 1));
+        List<Map<String, Object>> tail = new java.util.ArrayList<>();
+        for (int i = start; i < transitions.size(); i++) {
+            FixSessionTransition transition = transitions.get(i);
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("index", transition.getIndex());
+            entry.put("from", transition.getFrom() == null ? "" : transition.getFrom().name());
+            entry.put("to", transition.getTo() == null ? "" : transition.getTo().name());
+            entry.put("reason", transition.getReason());
+            tail.add(entry);
+        }
+        return List.copyOf(tail);
+    }
+
+    private List<Map<String, Object>> tailSnapshots(FixSession fixSession, int limit) {
+        if (fixSession == null) {
+            return List.of();
+        }
+        List<ReasoningIterationSnapshot> snapshots = fixSession.getJournal().getIterationSnapshots();
+        if (snapshots.isEmpty()) {
+            return List.of();
+        }
+        int start = Math.max(0, snapshots.size() - Math.max(limit, 1));
+        List<Map<String, Object>> tail = new java.util.ArrayList<>();
+        for (int i = start; i < snapshots.size(); i++) {
+            ReasoningIterationSnapshot snapshot = snapshots.get(i);
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("iteration", snapshot.getIteration());
+            entry.put("state", snapshot.getState() == null ? "" : snapshot.getState().name());
+            entry.put("decision", snapshot.getDecision());
+            entry.put("outcome", snapshot.getOutcome());
+            entry.put("errorSignature", snapshot.getErrorSignature());
+            entry.put("plannedActions", snapshot.getPlannedActions());
+            entry.put("performedActions", snapshot.getPerformedActions());
+            tail.add(entry);
+        }
+        return List.copyOf(tail);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> extractContextCache(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return Map.of();
+        }
+        Object updates = result.getInformation().get("contextCacheUpdates");
+        if (updates instanceof Map<?, ?> map) {
+            Map<String, String> converted = new LinkedHashMap<>();
+            map.forEach((k, v) -> {
+                if (k != null && v != null) {
+                    converted.put(k.toString(), v.toString());
+                }
+            });
+            return converted;
+        }
+        return Map.of();
+    }
+
+    private List<String> extractForbiddenActions(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return List.of();
+        }
+        Object raw = result.getInformation().get("forbiddenActions");
+        if (!(raw instanceof List<?> values)) {
+            return List.of();
+        }
+        List<String> forbidden = new java.util.ArrayList<>();
+        for (Object value : values) {
+            if (value != null && !value.toString().isBlank()) {
+                forbidden.add(value.toString());
+            }
+        }
+        return List.copyOf(forbidden);
     }
 
     private CompilationErrorInfo buildCompilationErrorInfo(CompileResult compileResult, TestClassInfo classInfo) {
@@ -661,6 +955,46 @@ public class InitialGenerationStep {
             return;
         }
         logger.info("Reasoning workflow result for " + stage + " failure: " + response);
+    }
+
+    private void logFixSessionJournal(FixSession fixSession, boolean success) {
+        if (fixSession == null) {
+            logger.warn("Fix session journal is unavailable.");
+            return;
+        }
+        List<ReasoningIterationSnapshot> snapshots = fixSession.getJournal().getIterationSnapshots();
+        List<FixSessionTransition> transitions = fixSession.getJournal().getTransitions();
+        logger.info("Fix session " + fixSession.getId()
+                + " completed with success=" + success
+                + ", state=" + fixSession.getState()
+                + ", iterations=" + snapshots.size()
+                + ", transitions=" + transitions.size());
+        for (FixSessionTransition transition : transitions) {
+            logger.info("Fix session " + fixSession.getId()
+                    + " transition#" + transition.getIndex()
+                    + " from=" + transition.getFrom()
+                    + " to=" + transition.getTo()
+                    + " reason=" + transition.getReason());
+        }
+        for (ReasoningIterationSnapshot snapshot : snapshots) {
+            logger.info("Fix session " + fixSession.getId()
+                    + " iteration=" + snapshot.getIteration()
+                    + " state=" + snapshot.getState()
+                    + " decision=" + snapshot.getDecision()
+                    + " outcome=" + snapshot.getOutcome()
+                    + " errorSignature=" + snapshot.getErrorSignature()
+                    + " plannedActions=" + snapshot.getPlannedActions()
+                    + " performedActions=" + snapshot.getPerformedActions()
+                    + " primaryError=" + snapshot.getPrimaryError());
+        }
+    }
+
+    private FixSession resolveFixSessionForLogging(FixingFailureException exception,
+                                                   CompilationPipelineOrchestrator orchestrator) {
+        if (exception != null && exception.getFixSession() != null) {
+            return exception.getFixSession();
+        }
+        return orchestrator == null ? null : orchestrator.getFixSession();
     }
 
     private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {

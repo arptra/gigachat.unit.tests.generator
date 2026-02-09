@@ -87,9 +87,9 @@ public class MainAgentEntry {
     }
 
     private void printUsage() {
-        System.out.println("Usage: --mode <scan|test|repair|monitor|clean> [--clean] [--path <projectDir>] [--project] [--class <fqcn>]" +
+        System.out.println("Usage: --mode <scan|diffGenUnitTest|test|repair|monitor|clean> [--clean] [--path <projectDir>] [--project] [--class <fqcn>]" +
                 " [--include-modules <names>] [--include-classes <names>] [--parallel]" +
-                " [--single-file] [--compile] [--execute]" +
+                " [--single-file] [--compile] [--execute] [--source-branch <branch>] [--target-branch <branch>]" +
                 " [--token <gigachatToken> | --cert <clientCert> --rootCert <rootCert> --key <privateKey>]" +
                 " [--endpoint <uri>]");
         System.out.println("Defaults: mode=scan, path=current working directory, project=false, parallel=false");
