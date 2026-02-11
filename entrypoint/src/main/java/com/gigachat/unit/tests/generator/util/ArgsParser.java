@@ -4,6 +4,9 @@ import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
 import com.gigachat.unit.tests.generator.config.AgentMode;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
@@ -23,6 +26,8 @@ public class ArgsParser {
         Path privateKeyPath = null;
         boolean verifySslCerts = false;
         String modelName = null;
+        String sourceBranch = null;
+        String targetBranch = null;
 
         for (int i = 0; i < (args == null ? 0 : args.length); i++) {
             String argument = args[i];
@@ -68,10 +73,20 @@ public class ArgsParser {
                     verifySslCerts = value;
                 }
                 case "model" -> modelName = readValue(args, ++i, key);
+                case "source-branch" -> sourceBranch = readValue(args, ++i, key);
+                case "target-branch" -> targetBranch = readValue(args, ++i, key);
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);
             }
         }
 
+        AgentMode selectedMode = builder.build().getMode();
+        if (selectedMode == AgentMode.DIFF_GEN_UNIT_TEST) {
+            BranchSelection branches = resolveDiffBranches(builder.build().getProjectPath(), sourceBranch, targetBranch);
+            sourceBranch = branches.sourceBranch();
+            targetBranch = branches.targetBranch();
+        }
+        builder.sourceBranch(sourceBranch);
+        builder.targetBranch(targetBranch);
         validateGigachatOptions(gigaChatToken, certificatePath, rootCertificatePath, privateKeyPath);
         builder.gigaChat(gigaChatToken,
                 gigaChatEndpoint,
@@ -110,12 +125,62 @@ public class ArgsParser {
         }
         return switch (value.toLowerCase()) {
             case "scan" -> AgentMode.SCAN;
+            case "diffgenunittest", "diff-gen-unit-test" -> AgentMode.DIFF_GEN_UNIT_TEST;
             case "test" -> AgentMode.TEST;
             case "repair" -> AgentMode.REPAIR;
             case "monitor" -> AgentMode.MONITOR;
             case "clean" -> AgentMode.CLEAN;
             default -> throw new IllegalArgumentException("Unknown mode: " + value);
         };
+    }
+
+    private BranchSelection resolveDiffBranches(Path projectPath, String sourceBranch, String targetBranch) {
+        String resolvedSource = normaliseBranch(sourceBranch);
+        String resolvedTarget = normaliseBranch(targetBranch);
+
+        if (resolvedSource == null) {
+            resolvedSource = currentGitBranch(projectPath);
+        }
+        if (resolvedSource == null) {
+            resolvedSource = "HEAD";
+        }
+        if (resolvedTarget == null) {
+            resolvedTarget = "master";
+        }
+        return new BranchSelection(resolvedSource, resolvedTarget);
+    }
+
+    private String normaliseBranch(String branch) {
+        if (branch == null) {
+            return null;
+        }
+        String trimmed = branch.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String currentGitBranch(Path projectPath) {
+        try {
+            ProcessBuilder processBuilder = new ProcessBuilder("git", "rev-parse", "--abbrev-ref", "HEAD");
+            processBuilder.directory(projectPath.toFile());
+            Process process = processBuilder.start();
+            String branch = null;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                branch = reader.readLine();
+            }
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                return null;
+            }
+            return normaliseBranch(branch);
+        } catch (IOException exception) {
+            return null;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    private record BranchSelection(String sourceBranch, String targetBranch) {
     }
 
     private boolean hasValue(String[] args, int index) {

@@ -37,3 +37,79 @@ tasks.register('MainAgentEntry.main', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     workingDir = project.rootProject.projectDir
 }
+
+String stringProp(Project project, String key) {
+    def value = project.findProperty(key)
+    if (value == null) {
+        return null
+    }
+    String text = value.toString().trim()
+    return text.isEmpty() ? null : text
+}
+
+boolean booleanProp(Project project, String key, boolean defaultValue) {
+    def value = project.findProperty(key)
+    if (value == null) {
+        return defaultValue
+    }
+    return Boolean.parseBoolean(value.toString())
+}
+
+void addArg(List<String> args, String key, String value) {
+    if (value == null || value.isBlank()) {
+        return
+    }
+    args.add("--${key}")
+    args.add(value)
+}
+
+List<String> buildDiffGenArgs(Project project) {
+    List<String> cliArgs = ['--mode', 'diffGenUnitTest']
+
+    addArg(cliArgs, 'path', stringProp(project, 'gigachat.path'))
+    addArg(cliArgs, 'include-modules', stringProp(project, 'gigachat.includeModules'))
+    addArg(cliArgs, 'include-classes', stringProp(project, 'gigachat.includeClasses'))
+    addArg(cliArgs, 'class', stringProp(project, 'gigachat.class'))
+
+    if (booleanProp(project, 'gigachat.singleFile', false)) {
+        cliArgs += ['--single-file']
+    }
+    if (booleanProp(project, 'gigachat.parallel', false)) {
+        cliArgs += ['--parallel', 'true']
+    }
+    if (booleanProp(project, 'gigachat.project', false)) {
+        cliArgs += ['--project', 'true']
+    }
+    if (booleanProp(project, 'gigachat.compile', false)) {
+        cliArgs += ['--compile']
+    }
+    if (booleanProp(project, 'gigachat.execute', false)) {
+        cliArgs += ['--execute']
+    }
+
+    addArg(cliArgs, 'source-branch', stringProp(project, 'gigachat.sourceBranch'))
+    addArg(cliArgs, 'target-branch', stringProp(project, 'gigachat.targetBranch'))
+
+    addArg(cliArgs, 'token', stringProp(project, 'gigachat.token'))
+    addArg(cliArgs, 'endpoint', stringProp(project, 'gigachat.endpoint'))
+    addArg(cliArgs, 'auth-url', stringProp(project, 'gigachat.authUrl'))
+    addArg(cliArgs, 'cert', stringProp(project, 'gigachat.cert'))
+    addArg(cliArgs, 'rootCert', stringProp(project, 'gigachat.rootCert'))
+    addArg(cliArgs, 'key', stringProp(project, 'gigachat.key'))
+
+    if (booleanProp(project, 'gigachat.ssl', false)) {
+        cliArgs += ['--ssl', 'true']
+    }
+    addArg(cliArgs, 'model', stringProp(project, 'gigachat.model'))
+
+    return cliArgs
+}
+
+tasks.register('diffGenUnitTest', JavaExec) {
+    group = 'verification'
+    description = 'Generates unit tests only for Java changes between branches.'
+    mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
+    classpath = sourceSets.main.runtimeClasspath
+    workingDir = project.rootProject.projectDir
+    args(buildDiffGenArgs(project))
+}

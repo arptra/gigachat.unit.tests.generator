@@ -8,6 +8,7 @@ import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
+import com.gigachat.unit.tests.generator.config.AgentMode;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
@@ -17,10 +18,14 @@ import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.util.TargetClassMatcher;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -48,6 +53,7 @@ public class JavaProjectScanner {
     public List<TestClassInfo> scan(AgentConfig config) throws IOException {
         Path projectPath = config.getProjectPath();
         List<Path> moduleRoots = determineModuleRoots(config);
+        Set<Path> diffFiles = resolveDiffJavaFiles(config);
         List<TestClassInfo> discoveredClasses = new ArrayList<>();
         for (Path moduleRoot : moduleRoots) {
             Path sourceRoot = resolveSourceRoot(moduleRoot);
@@ -57,6 +63,7 @@ public class JavaProjectScanner {
             try (Stream<Path> files = Files.walk(sourceRoot)) {
                 files.filter(Files::isRegularFile)
                         .filter(path -> path.toString().endsWith(".java"))
+                        .filter(path -> shouldProcessFile(path, diffFiles))
                         .forEach(path -> parseJavaFile(path, moduleRoot, config, discoveredClasses));
             } catch (java.io.UncheckedIOException ex) {
                 throw (IOException) ex.getCause();
@@ -69,6 +76,7 @@ public class JavaProjectScanner {
         Objects.requireNonNull(perFileConsumer, "perFileConsumer");
         Path projectPath = config.getProjectPath();
         List<Path> moduleRoots = determineModuleRoots(config);
+        Set<Path> diffFiles = resolveDiffJavaFiles(config);
         for (Path moduleRoot : moduleRoots) {
             Path sourceRoot = resolveSourceRoot(moduleRoot);
             if (!Files.exists(sourceRoot)) {
@@ -77,11 +85,54 @@ public class JavaProjectScanner {
             try (Stream<Path> files = Files.walk(sourceRoot)) {
                 files.filter(Files::isRegularFile)
                         .filter(path -> path.toString().endsWith(".java"))
+                        .filter(path -> shouldProcessFile(path, diffFiles))
                         .forEach(path -> parseAndEmit(path, moduleRoot, config, perFileConsumer));
             } catch (java.io.UncheckedIOException ex) {
                 throw (IOException) ex.getCause();
             }
         }
+    }
+
+    private boolean shouldProcessFile(Path javaFile, Set<Path> diffFiles) {
+        if (diffFiles == null || diffFiles.isEmpty()) {
+            return true;
+        }
+        return diffFiles.contains(javaFile.toAbsolutePath().normalize());
+    }
+
+    private Set<Path> resolveDiffJavaFiles(AgentConfig config) throws IOException {
+        if (config == null || config.getMode() != AgentMode.DIFF_GEN_UNIT_TEST) {
+            return Set.of();
+        }
+        String sourceBranch = config.getSourceBranch();
+        String targetBranch = config.getTargetBranch();
+        if (sourceBranch == null || targetBranch == null) {
+            return Set.of();
+        }
+        ProcessBuilder processBuilder = new ProcessBuilder("git", "diff", "--name-only", targetBranch + "..." + sourceBranch, "--", "*.java");
+        processBuilder.directory(config.getProjectPath().toFile());
+        Process process = processBuilder.start();
+        Set<Path> changed = new HashSet<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                changed.add(config.getProjectPath().resolve(trimmed).toAbsolutePath().normalize());
+            }
+        }
+        try {
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                throw new IOException("Failed to resolve git diff between branches: " + sourceBranch + " and " + targetBranch);
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while resolving git diff", ex);
+        }
+        return Set.copyOf(changed);
     }
 
     private void parseAndEmit(Path javaFile,

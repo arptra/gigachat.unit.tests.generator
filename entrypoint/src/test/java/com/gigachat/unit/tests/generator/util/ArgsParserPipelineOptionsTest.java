@@ -54,4 +54,34 @@ class ArgsParserPipelineOptionsTest {
 
         assertEquals(AgentMode.CLEAN, config.getMode());
     }
+
+    @Test
+    void diffModeUsesDefaultBranchesWhenNotProvided() {
+        String[] args = {
+                "--mode", "diffGenUnitTest",
+                "--path", "./example-project"
+        };
+
+        AgentConfig config = parser.parse(args);
+
+        assertEquals(AgentMode.DIFF_GEN_UNIT_TEST, config.getMode());
+        assertEquals("master", config.getTargetBranch());
+    }
+
+    @Test
+    void diffModeParsesBranchArguments() {
+        String[] args = {
+                "--mode", "diffGenUnitTest",
+                "--path", "./example-project",
+                "--source-branch", "feature/test",
+                "--target-branch", "main"
+        };
+
+        AgentConfig config = parser.parse(args);
+
+        assertEquals(AgentMode.DIFF_GEN_UNIT_TEST, config.getMode());
+        assertEquals("feature/test", config.getSourceBranch());
+        assertEquals("main", config.getTargetBranch());
+    }
+
 }

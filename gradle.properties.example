@@ -1,0 +1,41 @@
+# Copy this file to your project's gradle.properties and adjust values.
+# Launch task: ./gradlew diffGenUnitTest
+
+# Path to project that should be scanned/generate tests for (optional).
+# If empty, current project directory is used.
+# gigachat.path=./example-project
+
+# Scanner filters (optional)
+# Comma-separated module names, e.g. app,service
+gigachat.includeModules=
+# Comma-separated class include filters
+gigachat.includeClasses=
+# Comma-separated target classes/FQCNs
+# Example: com.example.service.UserService,com.example.lib.LibraryComponent
+gigachat.class=
+
+# Pipeline toggles
+gigachat.project=true
+gigachat.singleFile=false
+gigachat.parallel=false
+gigachat.compile=false
+gigachat.execute=false
+
+# Diff mode branches (optional)
+# If not set: source=current branch, target=master
+gigachat.sourceBranch=
+gigachat.targetBranch=
+
+# GigaChat auth (optional)
+# Token mode
+gigachat.token=
+gigachat.endpoint=
+gigachat.authUrl=
+# mTLS mode
+gigachat.cert=
+gigachat.rootCert=
+gigachat.key=
+
+# Optional connection/model flags
+gigachat.ssl=false
+gigachat.model=

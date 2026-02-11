@@ -19,3 +19,11 @@ subprojects {
         useJUnitPlatform()
     }
 }
+
+if (project.findProject(':entrypoint') != null) {
+    tasks.register('diffGenUnitTest') {
+        group = 'verification'
+        description = 'Runs diff-based unit test generation from the entrypoint module.'
+        dependsOn(':entrypoint:diffGenUnitTest')
+    }
+}
