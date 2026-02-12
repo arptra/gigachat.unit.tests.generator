@@ -18,6 +18,10 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 
 ### Gradle Task Mode (`./gradlew genAiTest`)
 
+
+> Внутри отдельного модуля `plugin` задачи реализованы на Groovy и вызывают Java API `EntryPointTaskApi` из модуля `entrypoint` через `new`.
+> Для конфигурации используется отдельный класс пропертей `GeneratorTaskProperties` (в модуле `plugin`).
+
 Эта задача запускает генерацию в режиме `scan` (эквивалент `--mode scan`) и так же читает параметры из `gradle.properties` (`gigachat.*`) или из `-P` флагов.
 
 ```bash

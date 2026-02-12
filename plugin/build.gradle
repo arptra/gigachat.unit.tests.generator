@@ -1,0 +1,58 @@
+plugins {
+    id 'groovy'
+}
+
+dependencies {
+    implementation project(':entrypoint')
+    implementation localGroovy()
+}
+
+defaultTasks 'genAiTest'
+
+List<String> propagatedKeys = [
+        'gigachat.path',
+        'gigachat.includeModules',
+        'gigachat.includeClasses',
+        'gigachat.class',
+        'gigachat.singleFile',
+        'gigachat.parallel',
+        'gigachat.project',
+        'gigachat.compile',
+        'gigachat.execute',
+        'gigachat.sourceBranch',
+        'gigachat.targetBranch',
+        'gigachat.token',
+        'gigachat.endpoint',
+        'gigachat.authUrl',
+        'gigachat.cert',
+        'gigachat.rootCert',
+        'gigachat.key',
+        'gigachat.ssl',
+        'gigachat.model'
+]
+
+void propagateProperties(JavaExec task, Project project, List<String> keys, String mode) {
+    task.systemProperty('gigachat.mode', mode)
+    keys.forEach { key ->
+        def value = project.findProperty(key)
+        if (value != null && !value.toString().trim().isEmpty()) {
+            task.systemProperty(key, value.toString())
+        }
+    }
+}
+
+tasks.register('genAiTest', JavaExec) {
+    group = 'verification'
+    description = 'Groovy task wrapper that runs scan generation via entrypoint API.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.gigachat.unit.tests.generator.plugin.GenAiTaskRunner'
+    propagateProperties(it, project, propagatedKeys, 'scan')
+}
+
+tasks.register('diffGenUnitTest', JavaExec) {
+    group = 'verification'
+    description = 'Groovy task wrapper that runs diff generation via entrypoint API.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.gigachat.unit.tests.generator.plugin.GenAiTaskRunner'
+    propagateProperties(it, project, propagatedKeys, 'diffGenUnitTest')
+}
