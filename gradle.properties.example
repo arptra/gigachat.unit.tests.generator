@@ -38,4 +38,6 @@ gigachat.key=
 
 # Optional connection/model flags
 gigachat.ssl=false
+# Enable unauthenticated HTTP proxy LLM client
+gigachat.proxy=false
 gigachat.model=

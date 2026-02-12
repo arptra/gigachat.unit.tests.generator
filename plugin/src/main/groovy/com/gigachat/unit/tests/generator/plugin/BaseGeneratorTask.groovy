@@ -42,6 +42,7 @@ abstract class BaseGeneratorTask extends DefaultTask {
         props.setRootCert(propertiesConfig.rootCert)
         props.setKey(propertiesConfig.key)
         props.setSsl(propertiesConfig.ssl)
+        props.setProxy(propertiesConfig.proxy)
         props.setModel(propertiesConfig.model)
 
         new EntryPointTaskApi().execute(props)

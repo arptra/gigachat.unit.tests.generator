@@ -22,6 +22,7 @@ class GeneratorTaskProperties {
     String rootCert
     String key
     boolean ssl
+    boolean proxy
     String model
 
     void loadFromProjectProperties(Project projectRef, String defaultMode) {
@@ -44,6 +45,7 @@ class GeneratorTaskProperties {
         rootCert = text(rootCert) ?: text(projectRef.findProperty('gigachat.rootCert'))
         key = text(key) ?: text(projectRef.findProperty('gigachat.key'))
         ssl = ssl || bool(projectRef.findProperty('gigachat.ssl'))
+        proxy = proxy || bool(projectRef.findProperty('gigachat.proxy'))
         model = text(model) ?: text(projectRef.findProperty('gigachat.model'))
     }
 

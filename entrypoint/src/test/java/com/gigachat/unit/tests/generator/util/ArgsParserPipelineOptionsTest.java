@@ -68,6 +68,21 @@ class ArgsParserPipelineOptionsTest {
         assertEquals("master", config.getTargetBranch());
     }
 
+
+    @Test
+    void proxyFlagEnablesProxyLlmClientOption() {
+        String[] args = {
+                "--mode", "scan",
+                "--path", "./example-project",
+                "--proxy"
+        };
+
+        AgentConfig config = parser.parse(args);
+
+        Object enabled = config.getModuleOptions().get("llm.proxy.enabled");
+        assertEquals(Boolean.TRUE, enabled);
+    }
+
     @Test
     void diffModeParsesBranchArguments() {
         String[] args = {

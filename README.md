@@ -95,6 +95,7 @@ gigachat.key=
 
 # Optional extras
 gigachat.ssl=false
+gigachat.proxy=false
 gigachat.model=
 ```
 
@@ -219,7 +220,7 @@ The entrypoint filters discovered classes to the provided set and generates DTOs
 * `gigachat.execute`
 * `gigachat.sourceBranch`
 * `gigachat.targetBranch`
-* `gigachat.token`, `gigachat.endpoint`, `gigachat.authUrl`, `gigachat.cert`, `gigachat.rootCert`, `gigachat.key`, `gigachat.ssl`, `gigachat.model`
+* `gigachat.token`, `gigachat.endpoint`, `gigachat.authUrl`, `gigachat.cert`, `gigachat.rootCert`, `gigachat.key`, `gigachat.ssl`, `gigachat.proxy`, `gigachat.model`
 
 
 ### Cleaner Mode
@@ -249,6 +250,7 @@ GigaChat client:
 Optional switches:
 
 * `--ssl` &mdash; enable strict certificate verification when talking to the GigaChat API (defaults to `false`).
+* `--proxy` &mdash; switch to unauthenticated HTTP proxy LLM client (no token/certificates required).
 * `--model` &mdash; override the model name (defaults to `GIGA_CHAT_MAX_2`).
 
 When credentials are missing the generator continues to operate with the deterministic stub so pipeline runs remain reproducible.

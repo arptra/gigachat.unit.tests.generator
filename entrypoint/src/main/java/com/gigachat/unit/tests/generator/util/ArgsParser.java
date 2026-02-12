@@ -28,6 +28,7 @@ public class ArgsParser {
         String modelName = null;
         String sourceBranch = null;
         String targetBranch = null;
+        boolean proxyMode = false;
 
         for (int i = 0; i < (args == null ? 0 : args.length); i++) {
             String argument = args[i];
@@ -75,6 +76,13 @@ public class ArgsParser {
                 case "model" -> modelName = readValue(args, ++i, key);
                 case "source-branch" -> sourceBranch = readValue(args, ++i, key);
                 case "target-branch" -> targetBranch = readValue(args, ++i, key);
+                case "proxy" -> {
+                    boolean value = true;
+                    if (hasValue(args, i)) {
+                        value = Boolean.parseBoolean(args[++i]);
+                    }
+                    proxyMode = value;
+                }
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);
             }
         }
@@ -87,6 +95,7 @@ public class ArgsParser {
         }
         builder.sourceBranch(sourceBranch);
         builder.targetBranch(targetBranch);
+        builder.moduleOption("llm.proxy.enabled", proxyMode);
         validateGigachatOptions(gigaChatToken, certificatePath, rootCertificatePath, privateKeyPath);
         builder.gigaChat(gigaChatToken,
                 gigaChatEndpoint,

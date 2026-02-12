@@ -27,6 +27,7 @@ public class EntryPointTaskProperties {
     private String key;
     private boolean ssl;
     private String model;
+    private boolean proxy;
 
     public String getMode() { return mode; }
     public void setMode(String mode) { this.mode = mode; }
@@ -68,4 +69,6 @@ public class EntryPointTaskProperties {
     public void setSsl(boolean ssl) { this.ssl = ssl; }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
+    public boolean isProxy() { return proxy; }
+    public void setProxy(boolean proxy) { this.proxy = proxy; }
 }

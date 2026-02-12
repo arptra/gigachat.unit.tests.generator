@@ -54,6 +54,11 @@ public class EntryPointTaskApi {
         addArg(args, "rootCert", properties.getRootCert());
         addArg(args, "key", properties.getKey());
 
+        if (properties.isProxy()) {
+            args.add("--proxy");
+            args.add("true");
+        }
+
         if (properties.isSsl()) {
             args.add("--ssl");
             args.add("true");

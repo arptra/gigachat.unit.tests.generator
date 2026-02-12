@@ -98,6 +98,9 @@ List<String> buildScanArgs(Project project) {
     if (booleanProp(project, 'gigachat.ssl', false)) {
         cliArgs += ['--ssl', 'true']
     }
+    if (booleanProp(project, 'gigachat.proxy', false)) {
+        cliArgs += ['--proxy', 'true']
+    }
     addArg(cliArgs, 'model', stringProp(project, 'gigachat.model'))
 
     return cliArgs
@@ -139,6 +142,9 @@ List<String> buildDiffGenArgs(Project project) {
 
     if (booleanProp(project, 'gigachat.ssl', false)) {
         cliArgs += ['--ssl', 'true']
+    }
+    if (booleanProp(project, 'gigachat.proxy', false)) {
+        cliArgs += ['--proxy', 'true']
     }
     addArg(cliArgs, 'model', stringProp(project, 'gigachat.model'))
 
