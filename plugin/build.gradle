@@ -1,156 +1,19 @@
-import org.gradle.api.DefaultTask
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.TaskAction
+plugins {
+    id 'groovy'
+    id 'java-gradle-plugin'
+}
 
-import java.net.URLClassLoader
+dependencies {
+    implementation project(':entrypoint')
+    implementation localGroovy()
+}
 
-/**
- * Groovy properties holder for generator tasks.
- */
-class GeneratorTaskProperties {
-    String mode
-    String path
-    List<String> includeModules = []
-    List<String> includeClasses = []
-    List<String> targetClasses = []
-    boolean singleFile
-    boolean parallel
-    boolean project
-    boolean compile
-    boolean execute
-    String sourceBranch
-    String targetBranch
-    String token
-    String endpoint
-    String authUrl
-    String cert
-    String rootCert
-    String key
-    boolean ssl
-    String model
-
-    void loadFromProjectProperties(Project project, String defaultMode) {
-        mode = text(mode) ?: defaultMode
-        path = text(path) ?: text(project.findProperty('gigachat.path'))
-        includeModules = includeModules ?: splitCsv(project.findProperty('gigachat.includeModules'))
-        includeClasses = includeClasses ?: splitCsv(project.findProperty('gigachat.includeClasses'))
-        targetClasses = targetClasses ?: splitCsv(project.findProperty('gigachat.class'))
-        singleFile = singleFile || bool(project.findProperty('gigachat.singleFile'))
-        parallel = parallel || bool(project.findProperty('gigachat.parallel'))
-        this.project = this.project || bool(project.findProperty('gigachat.project'))
-        compile = compile || bool(project.findProperty('gigachat.compile'))
-        execute = execute || bool(project.findProperty('gigachat.execute'))
-        sourceBranch = text(sourceBranch) ?: text(project.findProperty('gigachat.sourceBranch'))
-        targetBranch = text(targetBranch) ?: text(project.findProperty('gigachat.targetBranch'))
-        token = text(token) ?: text(project.findProperty('gigachat.token'))
-        endpoint = text(endpoint) ?: text(project.findProperty('gigachat.endpoint'))
-        authUrl = text(authUrl) ?: text(project.findProperty('gigachat.authUrl'))
-        cert = text(cert) ?: text(project.findProperty('gigachat.cert'))
-        rootCert = text(rootCert) ?: text(project.findProperty('gigachat.rootCert'))
-        key = text(key) ?: text(project.findProperty('gigachat.key'))
-        ssl = ssl || bool(project.findProperty('gigachat.ssl'))
-        model = text(model) ?: text(project.findProperty('gigachat.model'))
-    }
-
-    private static boolean bool(Object value) {
-        value != null && Boolean.parseBoolean(value.toString())
-    }
-
-    private static String text(Object value) {
-        if (value == null) {
-            return null
+gradlePlugin {
+    plugins {
+        gigachatGenerator {
+            id = 'com.gigachat.unit.tests.generator.plugin'
+            implementationClass = 'com.gigachat.unit.tests.generator.plugin.GigaChatGeneratorPlugin'
         }
-        String trimmed = value.toString().trim()
-        return trimmed.isEmpty() ? null : trimmed
-    }
-
-    private static List<String> splitCsv(Object value) {
-        String cleaned = text(value)
-        if (cleaned == null) {
-            return []
-        }
-        cleaned.split(',').collect { it.trim() }.findAll { !it.isEmpty() }
     }
 }
 
-abstract class BaseGeneratorTask extends DefaultTask {
-    @Internal
-    final GeneratorTaskProperties propertiesConfig = new GeneratorTaskProperties()
-
-    protected abstract String defaultMode()
-
-    void properties(Closure<?> closure) {
-        closure.delegate = propertiesConfig
-        closure.resolveStrategy = Closure.DELEGATE_FIRST
-        closure.call()
-    }
-
-    @TaskAction
-    void runGeneration() {
-        propertiesConfig.loadFromProjectProperties(project, defaultMode())
-        invokeEntryPointApi(propertiesConfig)
-    }
-
-    private void invokeEntryPointApi(GeneratorTaskProperties config) {
-        Project entrypointProject = project.project(':entrypoint')
-        List<File> runtimeFiles = entrypointProject.sourceSets.main.runtimeClasspath.files as List<File>
-        URL[] urls = runtimeFiles.collect { it.toURI().toURL() } as URL[]
-        URLClassLoader classLoader = new URLClassLoader(urls, this.class.classLoader)
-
-        Class<?> propsClass = classLoader.loadClass('com.gigachat.unit.tests.generator.api.EntryPointTaskProperties')
-        Object props = propsClass.getDeclaredConstructor().newInstance()
-
-        propsClass.getMethod('setMode', String.class).invoke(props, config.mode)
-        propsClass.getMethod('setPath', String.class).invoke(props, config.path)
-        propsClass.getMethod('setIncludeModules', List.class).invoke(props, config.includeModules)
-        propsClass.getMethod('setIncludeClasses', List.class).invoke(props, config.includeClasses)
-        propsClass.getMethod('setTargetClasses', List.class).invoke(props, config.targetClasses)
-        propsClass.getMethod('setSingleFile', Boolean.TYPE).invoke(props, config.singleFile)
-        propsClass.getMethod('setParallel', Boolean.TYPE).invoke(props, config.parallel)
-        propsClass.getMethod('setProject', Boolean.TYPE).invoke(props, config.project)
-        propsClass.getMethod('setCompile', Boolean.TYPE).invoke(props, config.compile)
-        propsClass.getMethod('setExecute', Boolean.TYPE).invoke(props, config.execute)
-        propsClass.getMethod('setSourceBranch', String.class).invoke(props, config.sourceBranch)
-        propsClass.getMethod('setTargetBranch', String.class).invoke(props, config.targetBranch)
-        propsClass.getMethod('setToken', String.class).invoke(props, config.token)
-        propsClass.getMethod('setEndpoint', String.class).invoke(props, config.endpoint)
-        propsClass.getMethod('setAuthUrl', String.class).invoke(props, config.authUrl)
-        propsClass.getMethod('setCert', String.class).invoke(props, config.cert)
-        propsClass.getMethod('setRootCert', String.class).invoke(props, config.rootCert)
-        propsClass.getMethod('setKey', String.class).invoke(props, config.key)
-        propsClass.getMethod('setSsl', Boolean.TYPE).invoke(props, config.ssl)
-        propsClass.getMethod('setModel', String.class).invoke(props, config.model)
-
-        Class<?> apiClass = classLoader.loadClass('com.gigachat.unit.tests.generator.api.EntryPointTaskApi')
-        Object api = apiClass.getDeclaredConstructor().newInstance()
-        apiClass.getMethod('execute', propsClass).invoke(api, props)
-    }
-}
-
-abstract class GenAiTask extends BaseGeneratorTask {
-    @Override
-    protected String defaultMode() {
-        return 'scan'
-    }
-}
-
-abstract class DiffGenUnitTestTask extends BaseGeneratorTask {
-    @Override
-    protected String defaultMode() {
-        return 'diffGenUnitTest'
-    }
-}
-
-defaultTasks 'genAiTest'
-
-tasks.register('genAiTest', GenAiTask) {
-    group = 'verification'
-    description = 'Groovy DefaultTask wrapper running scan generation through entrypoint API.'
-    dependsOn(':entrypoint:classes')
-}
-
-tasks.register('diffGenUnitTest', DiffGenUnitTestTask) {
-    group = 'verification'
-    description = 'Groovy DefaultTask wrapper running diff generation through entrypoint API.'
-    dependsOn(':entrypoint:classes')
-}
