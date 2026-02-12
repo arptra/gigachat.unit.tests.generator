@@ -26,4 +26,10 @@ if (project.findProject(':entrypoint') != null) {
         description = 'Runs diff-based unit test generation from the entrypoint module.'
         dependsOn(':entrypoint:diffGenUnitTest')
     }
+
+    tasks.register('genAiTest') {
+        group = 'verification'
+        description = 'Runs scan-mode AI unit test generation from the entrypoint module.'
+        dependsOn(':entrypoint:genAiTest')
+    }
 }

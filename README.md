@@ -15,6 +15,23 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --project"
 ```
 
+
+### Gradle Task Mode (`./gradlew genAiTest`)
+
+Эта задача запускает генерацию в режиме `scan` (эквивалент `--mode scan`) и так же читает параметры из `gradle.properties` (`gigachat.*`) или из `-P` флагов.
+
+```bash
+./gradlew genAiTest
+```
+
+Примеры:
+
+```bash
+./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.project=true
+./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.class=com.example.app.service.UserService
+./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.compile=true -Pgigachat.execute=true
+```
+
 ### Gradle Task Mode (`./gradlew diffGenUnitTest`)
 
 Проект можно подключить как модуль в другой Gradle-проект и вызывать генерацию напрямую через задачу:
@@ -38,7 +55,7 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 
 #### `gradle.properties` example (all supported `gigachat.*` keys)
 
-Use [gradle.properties.example](./gradle.properties.example) as a template.
+Use [gradle.properties.example](./gradle.properties.example) as a template for both `genAiTest` and `diffGenUnitTest`.
 
 ```properties
 # Path to scanned project (optional)

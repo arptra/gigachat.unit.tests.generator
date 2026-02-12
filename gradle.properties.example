@@ -1,5 +1,5 @@
 # Copy this file to your project's gradle.properties and adjust values.
-# Launch task: ./gradlew diffGenUnitTest
+# Launch task: ./gradlew genAiTest or ./gradlew diffGenUnitTest
 
 # Path to project that should be scanned/generate tests for (optional).
 # If empty, current project directory is used.
