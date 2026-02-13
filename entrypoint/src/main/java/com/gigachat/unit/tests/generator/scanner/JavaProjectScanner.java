@@ -51,8 +51,11 @@ public class JavaProjectScanner {
     }
 
     public List<TestClassInfo> scan(AgentConfig config) throws IOException {
-        Path projectPath = config.getProjectPath();
         List<Path> moduleRoots = determineModuleRoots(config);
+        TargetResolution targetResolution = resolveExplicitTargets(config, moduleRoots);
+        if (targetResolution.hasResolvedFiles()) {
+            return scanResolvedTargets(config, targetResolution);
+        }
         Set<Path> diffFiles = resolveDiffJavaFiles(config);
         List<TestClassInfo> discoveredClasses = new ArrayList<>();
         for (Path moduleRoot : moduleRoots) {
@@ -64,7 +67,7 @@ public class JavaProjectScanner {
                 files.filter(Files::isRegularFile)
                         .filter(path -> path.toString().endsWith(".java"))
                         .filter(path -> shouldProcessFile(path, diffFiles))
-                        .forEach(path -> parseJavaFile(path, moduleRoot, config, discoveredClasses));
+                        .forEach(path -> parseJavaFile(path, moduleRoot, config, discoveredClasses, null));
             } catch (java.io.UncheckedIOException ex) {
                 throw (IOException) ex.getCause();
             }
@@ -74,8 +77,14 @@ public class JavaProjectScanner {
 
     public void scanSequentially(AgentConfig config, Consumer<List<TestClassInfo>> perFileConsumer) throws IOException {
         Objects.requireNonNull(perFileConsumer, "perFileConsumer");
-        Path projectPath = config.getProjectPath();
         List<Path> moduleRoots = determineModuleRoots(config);
+        TargetResolution targetResolution = resolveExplicitTargets(config, moduleRoots);
+        if (targetResolution.hasResolvedFiles()) {
+            for (ResolvedTarget target : targetResolution.resolvedTargets()) {
+                parseAndEmit(target.file(), target.moduleRoot(), config, perFileConsumer, target);
+            }
+            return;
+        }
         Set<Path> diffFiles = resolveDiffJavaFiles(config);
         for (Path moduleRoot : moduleRoots) {
             Path sourceRoot = resolveSourceRoot(moduleRoot);
@@ -86,7 +95,7 @@ public class JavaProjectScanner {
                 files.filter(Files::isRegularFile)
                         .filter(path -> path.toString().endsWith(".java"))
                         .filter(path -> shouldProcessFile(path, diffFiles))
-                        .forEach(path -> parseAndEmit(path, moduleRoot, config, perFileConsumer));
+                        .forEach(path -> parseAndEmit(path, moduleRoot, config, perFileConsumer, null));
             } catch (java.io.UncheckedIOException ex) {
                 throw (IOException) ex.getCause();
             }
@@ -138,9 +147,10 @@ public class JavaProjectScanner {
     private void parseAndEmit(Path javaFile,
                               Path moduleRoot,
                               AgentConfig config,
-                              Consumer<List<TestClassInfo>> perFileConsumer) {
+                              Consumer<List<TestClassInfo>> perFileConsumer,
+                              ResolvedTarget target) {
         List<TestClassInfo> collector = new ArrayList<>();
-        parseJavaFile(javaFile, moduleRoot, config, collector);
+        parseJavaFile(javaFile, moduleRoot, config, collector, target);
         if (!collector.isEmpty()) {
             perFileConsumer.accept(List.copyOf(collector));
         }
@@ -149,10 +159,11 @@ public class JavaProjectScanner {
     protected void parseJavaFile(Path javaFile,
                                  Path moduleRoot,
                                  AgentConfig config,
-                                 List<TestClassInfo> collector) {
+                                 List<TestClassInfo> collector,
+                                 ResolvedTarget target) {
         try {
             javaParser.parse(javaFile).getResult().ifPresentOrElse(
-                    compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector),
+                    compilationUnit -> handleCompilationUnit(compilationUnit, moduleRoot, config, collector, target),
                     () -> System.err.println("Unable to parse file: " + javaFile)
             );
         } catch (IOException ex) {
@@ -163,7 +174,8 @@ public class JavaProjectScanner {
     protected void handleCompilationUnit(CompilationUnit compilationUnit,
                                          Path moduleRoot,
                                          AgentConfig config,
-                                         List<TestClassInfo> collector) {
+                                         List<TestClassInfo> collector,
+                                         ResolvedTarget target) {
         String packageName = compilationUnit.getPackageDeclaration()
                 .map(declaration -> declaration.getName().asString())
                 .orElse("");
@@ -173,16 +185,28 @@ public class JavaProjectScanner {
                 .filter(declaration -> !declaration.isInterface())
                 .toList();
         declarations.forEach(this::registerSignatures);
+        if (target != null) {
+            declarations.stream()
+                    .filter(declaration -> declaration.getNameAsString().equals(target.className()))
+                    .map(declaration -> createTestClassInfo(compilationUnit,
+                            moduleRoot,
+                            packageName,
+                            declaration,
+                            target.methodNames()))
+                    .forEach(collector::add);
+            return;
+        }
         declarations.stream()
                 .filter(declaration -> shouldInclude(declaration, packageName, moduleRoot, config))
-                .map(declaration -> createTestClassInfo(compilationUnit, moduleRoot, packageName, declaration))
+                .map(declaration -> createTestClassInfo(compilationUnit, moduleRoot, packageName, declaration, Set.of()))
                 .forEach(collector::add);
     }
 
     private TestClassInfo createTestClassInfo(CompilationUnit compilationUnit,
                                               Path moduleRoot,
                                               String packageName,
-                                              ClassOrInterfaceDeclaration declaration) {
+                                              ClassOrInterfaceDeclaration declaration,
+                                              Set<String> methodFilter) {
         Path targetRoot = moduleRoot.resolve(Path.of("src", "test", "java"));
         Path packagePath = packageName.isBlank()
                 ? targetRoot
@@ -192,6 +216,7 @@ public class JavaProjectScanner {
 
         List<TestMethodInfo> methods = declaration.getMethods().stream()
                 .filter(method -> !method.isPrivate())
+                .filter(method -> methodFilter == null || methodFilter.isEmpty() || methodFilter.contains(method.getNameAsString()))
                 .map(this::createTestMethodInfo)
                 .collect(Collectors.toCollection(ArrayList::new));
 
@@ -398,5 +423,135 @@ public class JavaProjectScanner {
             return src;
         }
         return moduleRoot;
+    }
+
+    private List<TestClassInfo> scanResolvedTargets(AgentConfig config, TargetResolution targetResolution) {
+        List<TestClassInfo> discoveredClasses = new ArrayList<>();
+        for (ResolvedTarget target : targetResolution.resolvedTargets()) {
+            parseJavaFile(target.file(), target.moduleRoot(), config, discoveredClasses, target);
+        }
+        return List.copyOf(discoveredClasses);
+    }
+
+    private TargetResolution resolveExplicitTargets(AgentConfig config, List<Path> moduleRoots) {
+        List<String> targetClasses = config.getTargetClasses();
+        if (targetClasses == null || targetClasses.isEmpty()) {
+            return TargetResolution.empty();
+        }
+        List<String> explicitTargets = targetClasses.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(target -> !target.isEmpty())
+                .filter(target -> !target.contains("*"))
+                .toList();
+        if (explicitTargets.isEmpty()) {
+            return TargetResolution.empty();
+        }
+
+        List<ResolvedTarget> resolvedTargets = new ArrayList<>();
+        List<String> unresolvedTargets = new ArrayList<>();
+        for (String rawTarget : explicitTargets) {
+            ParsedTarget parsedTarget = parseTarget(rawTarget);
+            ResolvedTarget resolved = resolveTargetToFile(moduleRoots, parsedTarget);
+            if (resolved == null) {
+                unresolvedTargets.add(rawTarget);
+                continue;
+            }
+            resolvedTargets.add(resolved);
+        }
+
+        if (!unresolvedTargets.isEmpty()) {
+            throw new IllegalArgumentException("Файл по пути(ям) не найден: " + unresolvedTargets);
+        }
+
+        return mergeResolvedTargets(resolvedTargets);
+    }
+
+    private TargetResolution mergeResolvedTargets(List<ResolvedTarget> resolvedTargets) {
+        if (resolvedTargets.isEmpty()) {
+            return TargetResolution.empty();
+        }
+        record Key(Path file, Path moduleRoot, String className) {}
+        java.util.Map<Key, Set<String>> merged = new java.util.LinkedHashMap<>();
+        final String allMethodsMarker = "__ALL_METHODS__";
+        for (ResolvedTarget target : resolvedTargets) {
+            Key key = new Key(target.file(), target.moduleRoot(), target.className());
+            Set<String> methods = merged.computeIfAbsent(key, ignored -> new LinkedHashSet<>());
+            if (methods.contains(allMethodsMarker)) {
+                continue;
+            }
+            if (target.methodNames().isEmpty()) {
+                methods.clear();
+                methods.add(allMethodsMarker);
+                continue;
+            }
+            methods.addAll(target.methodNames());
+        }
+        List<ResolvedTarget> unique = merged.entrySet().stream()
+                .map(entry -> {
+                    Set<String> methods = entry.getValue().contains(allMethodsMarker)
+                            ? Set.of()
+                            : Set.copyOf(entry.getValue());
+                    return new ResolvedTarget(entry.getKey().file(),
+                            entry.getKey().moduleRoot(),
+                            entry.getKey().className(),
+                            methods);
+                })
+                .toList();
+        return new TargetResolution(unique);
+    }
+
+    private ParsedTarget parseTarget(String rawTarget) {
+        String normalized = rawTarget.trim().replace('/', '.').replace('\\', '.');
+        if (normalized.endsWith(".java")) {
+            normalized = normalized.substring(0, normalized.length() - 5);
+        }
+        int separator = normalized.lastIndexOf('.');
+        if (separator <= 0) {
+            return new ParsedTarget(normalized, null);
+        }
+        String classCandidate = normalized.substring(0, separator);
+        String methodCandidate = normalized.substring(separator + 1);
+        if (!methodCandidate.isEmpty() && Character.isLowerCase(methodCandidate.charAt(0))) {
+            return new ParsedTarget(classCandidate, methodCandidate);
+        }
+        return new ParsedTarget(normalized, null);
+    }
+
+    private ResolvedTarget resolveTargetToFile(List<Path> moduleRoots, ParsedTarget target) {
+        for (Path moduleRoot : moduleRoots) {
+            Path sourceRoot = resolveSourceRoot(moduleRoot);
+            Path classFile = sourceRoot.resolve(target.classPath().replace('.', '/') + ".java").toAbsolutePath().normalize();
+            if (Files.exists(classFile) && Files.isRegularFile(classFile)) {
+                Set<String> methods = target.methodName() == null ? Set.of() : Set.of(target.methodName());
+                String className = simpleClassName(target.classPath());
+                return new ResolvedTarget(classFile, moduleRoot, className, methods);
+            }
+        }
+        return null;
+    }
+
+    private String simpleClassName(String classPath) {
+        int separator = classPath.lastIndexOf('.');
+        if (separator < 0 || separator == classPath.length() - 1) {
+            return classPath;
+        }
+        return classPath.substring(separator + 1);
+    }
+
+    private record ParsedTarget(String classPath, String methodName) {
+    }
+
+    private record ResolvedTarget(Path file, Path moduleRoot, String className, Set<String> methodNames) {
+    }
+
+    private record TargetResolution(List<ResolvedTarget> resolvedTargets) {
+        static TargetResolution empty() {
+            return new TargetResolution(List.of());
+        }
+
+        boolean hasResolvedFiles() {
+            return resolvedTargets != null && !resolvedTargets.isEmpty();
+        }
     }
 }

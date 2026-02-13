@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JavaProjectScannerTest {
@@ -162,6 +163,55 @@ class JavaProjectScannerTest {
         TestClassInfo info = result.get(0);
         assertEquals("Alpha", info.getClassName());
         assertTrue(info.getTargetPath().toString().contains("mtd"));
+    }
+
+    @Test
+    void supportsMethodTargetInClassArgument() throws IOException {
+        Path sourceFolder = workingDirectory.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Path javaFile = sourceFolder.resolve("SampleService.java");
+        Files.writeString(javaFile, """
+                package com.example.demo;
+
+                public class SampleService {
+                    public String findAll() {
+                        return "ok";
+                    }
+
+                    public String findOne() {
+                        return "one";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.SampleService.findOne"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("SampleService", result.get(0).getClassName());
+        assertEquals(1, result.get(0).getMethods().size());
+        assertEquals("public String findOne()", result.get(0).getMethods().get(0).getSignature());
+    }
+
+    @Test
+    void failsWhenExplicitClassPathCannotBeResolved() {
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.MissingService"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> scanner.scan(config));
+
+        assertTrue(exception.getMessage().contains("не найден"));
     }
 
 
