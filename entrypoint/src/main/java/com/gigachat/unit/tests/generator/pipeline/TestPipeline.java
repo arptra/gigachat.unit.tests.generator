@@ -12,6 +12,7 @@ import com.gigachat.unit.tests.generator.llm.GigaChatMtlsClient;
 import com.gigachat.unit.tests.generator.llm.GigaChatTokenClient;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
 import com.gigachat.unit.tests.generator.llm.LlmClientStub;
+import com.gigachat.unit.tests.generator.llm.ProxyHttpLlmClient;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
 import com.gigachat.unit.tests.generator.pipeline.helpers.DiffEngine;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
@@ -126,6 +127,11 @@ public class TestPipeline {
     }
 
     private LlmClient createLlmClient(AgentConfig config, PipelineLogger logger) {
+        boolean proxyEnabled = Boolean.TRUE.equals(config.getModuleOptions().get("llm.proxy.enabled"));
+        if (proxyEnabled) {
+            logger.info("Initialising proxy HTTP LLM client (no auth).");
+            return new ProxyHttpLlmClient(config.getGigaChat(), logger);
+        }
         try {
             if (config.getGigaChat().isTokenAuthConfigured()) {
                 logger.info("Initialising GigaChat client using bearer token authentication.");
