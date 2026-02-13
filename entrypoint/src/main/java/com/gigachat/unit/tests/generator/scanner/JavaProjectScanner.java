@@ -24,6 +24,7 @@ import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -186,14 +187,21 @@ public class JavaProjectScanner {
                 .toList();
         declarations.forEach(this::registerSignatures);
         if (target != null) {
-            declarations.stream()
+            List<TestClassInfo> resolved = declarations.stream()
                     .filter(declaration -> declaration.getNameAsString().equals(target.className()))
                     .map(declaration -> createTestClassInfo(compilationUnit,
                             moduleRoot,
                             packageName,
                             declaration,
                             target.methodNames()))
-                    .forEach(collector::add);
+                    .toList();
+            if (resolved.isEmpty()) {
+                throw new IllegalArgumentException("Класс не найден в файле для пути: " + target.rawTarget());
+            }
+            if (!target.methodNames().isEmpty() && resolved.stream().allMatch(info -> info.getMethods().isEmpty())) {
+                throw new IllegalArgumentException("Метод не найден по пути: " + target.rawTarget());
+            }
+            collector.addAll(resolved);
             return;
         }
         declarations.stream()
@@ -452,7 +460,7 @@ public class JavaProjectScanner {
         List<String> unresolvedTargets = new ArrayList<>();
         for (String rawTarget : explicitTargets) {
             ParsedTarget parsedTarget = parseTarget(rawTarget);
-            ResolvedTarget resolved = resolveTargetToFile(moduleRoots, parsedTarget);
+            ResolvedTarget resolved = resolveTargetToFile(config.getProjectPath(), moduleRoots, parsedTarget, rawTarget);
             if (resolved == null) {
                 unresolvedTargets.add(rawTarget);
                 continue;
@@ -471,11 +479,11 @@ public class JavaProjectScanner {
         if (resolvedTargets.isEmpty()) {
             return TargetResolution.empty();
         }
-        record Key(Path file, Path moduleRoot, String className) {}
+        record Key(Path file, Path moduleRoot, String className, String rawTarget) {}
         java.util.Map<Key, Set<String>> merged = new java.util.LinkedHashMap<>();
         final String allMethodsMarker = "__ALL_METHODS__";
         for (ResolvedTarget target : resolvedTargets) {
-            Key key = new Key(target.file(), target.moduleRoot(), target.className());
+            Key key = new Key(target.file(), target.moduleRoot(), target.className(), target.rawTarget());
             Set<String> methods = merged.computeIfAbsent(key, ignored -> new LinkedHashSet<>());
             if (methods.contains(allMethodsMarker)) {
                 continue;
@@ -495,7 +503,8 @@ public class JavaProjectScanner {
                     return new ResolvedTarget(entry.getKey().file(),
                             entry.getKey().moduleRoot(),
                             entry.getKey().className(),
-                            methods);
+                            methods,
+                            entry.getKey().rawTarget());
                 })
                 .toList();
         return new TargetResolution(unique);
@@ -506,26 +515,62 @@ public class JavaProjectScanner {
         if (normalized.endsWith(".java")) {
             normalized = normalized.substring(0, normalized.length() - 5);
         }
-        int separator = normalized.lastIndexOf('.');
-        if (separator <= 0) {
-            return new ParsedTarget(normalized, null);
-        }
-        String classCandidate = normalized.substring(0, separator);
-        String methodCandidate = normalized.substring(separator + 1);
-        if (!methodCandidate.isEmpty() && Character.isLowerCase(methodCandidate.charAt(0))) {
-            return new ParsedTarget(classCandidate, methodCandidate);
-        }
-        return new ParsedTarget(normalized, null);
+        return new ParsedTarget(normalized);
     }
 
-    private ResolvedTarget resolveTargetToFile(List<Path> moduleRoots, ParsedTarget target) {
+    private ResolvedTarget resolveTargetToFile(Path projectPath,
+                                               List<Path> moduleRoots,
+                                               ParsedTarget target,
+                                               String rawTarget) {
+        Map<Path, Path> sourceRoots = collectCandidateSourceRoots(projectPath, moduleRoots);
+        ResolutionCandidate classOnly = resolveByClassPath(sourceRoots, target.rawPath());
+        if (classOnly != null) {
+            return new ResolvedTarget(classOnly.file(), classOnly.moduleRoot(), simpleClassName(target.rawPath()), Set.of(), rawTarget);
+        }
+        int separator = target.rawPath().lastIndexOf('.');
+        if (separator > 0 && separator + 1 < target.rawPath().length()) {
+            String classPath = target.rawPath().substring(0, separator);
+            String methodName = target.rawPath().substring(separator + 1);
+            ResolutionCandidate withMethod = resolveByClassPath(sourceRoots, classPath);
+            if (withMethod != null) {
+                return new ResolvedTarget(withMethod.file(),
+                        withMethod.moduleRoot(),
+                        simpleClassName(classPath),
+                        Set.of(methodName),
+                        rawTarget);
+            }
+        }
+        return null;
+    }
+
+    private Map<Path, Path> collectCandidateSourceRoots(Path projectPath, List<Path> moduleRoots) {
+        Map<Path, Path> roots = new java.util.LinkedHashMap<>();
         for (Path moduleRoot : moduleRoots) {
-            Path sourceRoot = resolveSourceRoot(moduleRoot);
-            Path classFile = sourceRoot.resolve(target.classPath().replace('.', '/') + ".java").toAbsolutePath().normalize();
+            Path normalizedRoot = moduleRoot.toAbsolutePath().normalize();
+            roots.putIfAbsent(normalizedRoot, resolveSourceRoot(normalizedRoot));
+        }
+        Path normalizedProjectPath = projectPath.toAbsolutePath().normalize();
+        if (Files.exists(normalizedProjectPath) && Files.isDirectory(normalizedProjectPath)) {
+            try (Stream<Path> children = Files.list(normalizedProjectPath)) {
+                children.filter(Files::isDirectory)
+                        .forEach(child -> {
+                            Path sourceRoot = resolveSourceRoot(child);
+                            if (Files.exists(sourceRoot)) {
+                                roots.putIfAbsent(child.toAbsolutePath().normalize(), sourceRoot.toAbsolutePath().normalize());
+                            }
+                        });
+            } catch (IOException ignored) {
+            }
+        }
+        return roots;
+    }
+
+    private ResolutionCandidate resolveByClassPath(Map<Path, Path> sourceRoots, String classPath) {
+        String relative = classPath.replace('.', '/') + ".java";
+        for (Map.Entry<Path, Path> entry : sourceRoots.entrySet()) {
+            Path classFile = entry.getValue().resolve(relative).toAbsolutePath().normalize();
             if (Files.exists(classFile) && Files.isRegularFile(classFile)) {
-                Set<String> methods = target.methodName() == null ? Set.of() : Set.of(target.methodName());
-                String className = simpleClassName(target.classPath());
-                return new ResolvedTarget(classFile, moduleRoot, className, methods);
+                return new ResolutionCandidate(classFile, entry.getKey());
             }
         }
         return null;
@@ -539,10 +584,13 @@ public class JavaProjectScanner {
         return classPath.substring(separator + 1);
     }
 
-    private record ParsedTarget(String classPath, String methodName) {
+    private record ParsedTarget(String rawPath) {
     }
 
-    private record ResolvedTarget(Path file, Path moduleRoot, String className, Set<String> methodNames) {
+    private record ResolutionCandidate(Path file, Path moduleRoot) {
+    }
+
+    private record ResolvedTarget(Path file, Path moduleRoot, String className, Set<String> methodNames, String rawTarget) {
     }
 
     private record TargetResolution(List<ResolvedTarget> resolvedTargets) {

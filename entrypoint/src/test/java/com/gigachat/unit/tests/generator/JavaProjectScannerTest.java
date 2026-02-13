@@ -199,6 +199,62 @@ class JavaProjectScannerTest {
         assertEquals("public String findOne()", result.get(0).getMethods().get(0).getSignature());
     }
 
+
+    @Test
+    void resolvesExplicitClassPathInsideChildModule() throws IOException {
+        Path moduleRoot = workingDirectory.resolve("module-a");
+        Path sourceFolder = moduleRoot.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("SampleService.java"), """
+                package com.example.demo;
+
+                public class SampleService {
+                    public String findAll() {
+                        return "ok";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.SampleService"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("SampleService", result.get(0).getClassName());
+        assertTrue(result.get(0).getTargetPath().toString().contains("module-a"));
+    }
+
+    @Test
+    void failsWhenExplicitMethodCannotBeResolvedInClass() throws IOException {
+        Path sourceFolder = workingDirectory.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("SampleService.java"), """
+                package com.example.demo;
+
+                public class SampleService {
+                    public String findAll() {
+                        return "ok";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.SampleService.findOne"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> scanner.scan(config));
+
+        assertTrue(exception.getMessage().contains("Метод не найден"));
+    }
     @Test
     void failsWhenExplicitClassPathCannotBeResolved() {
         AgentConfig config = new AgentConfigBuilder()
