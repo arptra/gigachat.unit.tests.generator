@@ -31,11 +31,10 @@ class DanglingTestAnnotationRuleTest {
         DanglingTestAnnotationRule rule = new DanglingTestAnnotationRule();
         TestFileContext context = new TestFileContext(testFile, new JavaParser());
 
-        rule.apply(context);
-        context.saveIfDirty();
+        boolean changed = rule.apply(context);
 
-        String updated = Files.readString(testFile);
-        assertFalse(updated.contains("@Test"));
+        assertTrue(changed, "Rule should delete empty test classes with dangling annotations");
+        assertFalse(Files.exists(testFile), "File should be removed when no methods remain");
     }
 
     @Test
@@ -118,5 +117,24 @@ class DanglingTestAnnotationRuleTest {
         String updated = Files.readString(testFile);
         int occurrences = updated.split("@Test", -1).length - 1;
         assertTrue(occurrences == 1);
+    }
+
+    @Test
+    void deletesTestClassWithoutMethods() throws IOException {
+        Path testFile = projectDir.resolve("src/test/java/com/example/EmptyTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, String.join(System.lineSeparator(),
+                "package com.example;",
+                "class EmptyTest {",
+                "    // no methods here",
+                "}"));
+
+        DanglingTestAnnotationRule rule = new DanglingTestAnnotationRule();
+        TestFileContext context = new TestFileContext(testFile, new JavaParser());
+
+        boolean changed = rule.apply(context);
+
+        assertTrue(changed, "Expected rule to delete empty test class");
+        assertFalse(Files.exists(testFile), "Test file should be removed when no methods are present");
     }
 }

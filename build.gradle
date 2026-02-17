@@ -6,6 +6,7 @@ subprojects {
 
     repositories {
         mavenCentral()
+        maven { url 'https://repo.gradle.org/gradle/libs-releases' }
     }
 
     java {
@@ -16,5 +17,19 @@ subprojects {
 
     tasks.withType(Test).configureEach {
         useJUnitPlatform()
+    }
+}
+
+if (project.findProject(':plugin') != null) {
+    tasks.register('diffGenUnitTest') {
+        group = 'verification'
+        description = 'Runs diff-based unit test generation from the entrypoint module.'
+        dependsOn(':entrypoint:diffGenUnitTest')
+    }
+
+    tasks.register('genAiTest') {
+        group = 'verification'
+        description = 'Runs scan-mode AI unit test generation from the entrypoint module.'
+        dependsOn(':entrypoint:genAiTest')
     }
 }

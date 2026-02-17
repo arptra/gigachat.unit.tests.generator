@@ -7,12 +7,20 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Compiles generated test classes.
- */
-public interface CompilerInvoker {
+    /**
+     * Compiles generated test classes.
+     */
+    public interface CompilerInvoker {
 
-    CompileResult compile(Path projectRoot, Path testClassFile, String methodName);
+        CompileResult compile(Path projectRoot, Path testClassFile, String methodName);
+
+        /**
+         * Compiles generated tests while bypassing any compilation cache so each invocation reflects
+         * the latest project state.
+         */
+        default CompileResult compileWithoutCache(Path projectRoot, Path testClassFile, String methodName) {
+            return compile(projectRoot, testClassFile, methodName);
+        }
 
     default List<CompileResult> compileParallel(Path projectRoot, List<Path> testClassFiles, String methodName) {
         Objects.requireNonNull(projectRoot, "projectRoot");

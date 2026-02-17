@@ -6,6 +6,9 @@ import com.gigachat.unit.tests.generator.cleaner.TestFileContext;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+
+import com.github.javaparser.ast.body.MethodDeclaration;
 
 /**
  * Removes stray {@code @Test} annotations that are not followed by a declaration. These
@@ -14,6 +17,11 @@ import java.util.List;
 public final class DanglingTestAnnotationRule implements CleanerRule {
     @Override
     public boolean apply(TestFileContext context) throws IOException {
+        boolean removedEmptyClass = removeEmptyTestClass(context);
+        if (removedEmptyClass) {
+            return true;
+        }
+
         String source = context.getSource();
         String[] lines = source.split("\r?\n", -1);
         List<String> updated = new ArrayList<>(lines.length);
@@ -34,6 +42,21 @@ public final class DanglingTestAnnotationRule implements CleanerRule {
             context.updateSource(String.join(System.lineSeparator(), updated));
         }
         return changed;
+    }
+
+    private boolean removeEmptyTestClass(TestFileContext context) throws IOException {
+        Optional<com.github.javaparser.ast.CompilationUnit> compilationUnit = context.getCompilationUnit();
+        if (compilationUnit.isEmpty()) {
+            return false;
+        }
+        boolean hasMethods = !compilationUnit.get()
+                .findAll(MethodDeclaration.class)
+                .isEmpty();
+        if (hasMethods) {
+            return false;
+        }
+        context.deleteFile();
+        return true;
     }
 
     private int findNextSignificant(String[] lines, int start) {
