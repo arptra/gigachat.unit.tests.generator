@@ -145,6 +145,13 @@ public final class TargetClassMatcher {
         if (candidate.endsWith(".java")) {
             candidate = candidate.substring(0, candidate.length() - 5);
         }
+        int separator = candidate.lastIndexOf('.');
+        if (separator > 0 && separator + 1 < candidate.length()) {
+            String tail = candidate.substring(separator + 1);
+            if (!tail.isEmpty() && Character.isLowerCase(tail.charAt(0))) {
+                candidate = candidate.substring(0, separator);
+            }
+        }
         return candidate;
     }
 }

@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JavaProjectScannerTest {
@@ -162,6 +163,111 @@ class JavaProjectScannerTest {
         TestClassInfo info = result.get(0);
         assertEquals("Alpha", info.getClassName());
         assertTrue(info.getTargetPath().toString().contains("mtd"));
+    }
+
+    @Test
+    void supportsMethodTargetInClassArgument() throws IOException {
+        Path sourceFolder = workingDirectory.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Path javaFile = sourceFolder.resolve("SampleService.java");
+        Files.writeString(javaFile, """
+                package com.example.demo;
+
+                public class SampleService {
+                    public String findAll() {
+                        return "ok";
+                    }
+
+                    public String findOne() {
+                        return "one";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.SampleService.findOne"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("SampleService", result.get(0).getClassName());
+        assertEquals(1, result.get(0).getMethods().size());
+        assertEquals("public String findOne()", result.get(0).getMethods().get(0).getSignature());
+    }
+
+
+    @Test
+    void resolvesExplicitClassPathInsideChildModule() throws IOException {
+        Path moduleRoot = workingDirectory.resolve("module-a");
+        Path sourceFolder = moduleRoot.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("SampleService.java"), """
+                package com.example.demo;
+
+                public class SampleService {
+                    public String findAll() {
+                        return "ok";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.SampleService"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("SampleService", result.get(0).getClassName());
+        assertTrue(result.get(0).getTargetPath().toString().contains("module-a"));
+    }
+
+    @Test
+    void failsWhenExplicitMethodCannotBeResolvedInClass() throws IOException {
+        Path sourceFolder = workingDirectory.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("SampleService.java"), """
+                package com.example.demo;
+
+                public class SampleService {
+                    public String findAll() {
+                        return "ok";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.SampleService.findOne"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> scanner.scan(config));
+
+        assertTrue(exception.getMessage().contains("Метод не найден"));
+    }
+    @Test
+    void failsWhenExplicitClassPathCannotBeResolved() {
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.demo.MissingService"))
+                .build();
+
+        JavaProjectScanner scanner = new JavaProjectScanner();
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> scanner.scan(config));
+
+        assertTrue(exception.getMessage().contains("не найден"));
     }
 
 
