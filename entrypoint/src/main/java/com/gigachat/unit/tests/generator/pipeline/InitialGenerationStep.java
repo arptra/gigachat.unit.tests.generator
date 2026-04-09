@@ -322,6 +322,15 @@ public class InitialGenerationStep {
                         existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
                         break;
                     }
+                    if (!executionRepairResult.shouldRegenerate()) {
+                        logger.warn("Execution reasoning did not fully fix method "
+                                + snippet.methodName()
+                                + ", but compilation stayed valid. Keeping the current test and skipping full regeneration.");
+                        return;
+                    }
+                    logger.warn("Execution reasoning introduced or exposed compilation problems for method "
+                            + snippet.methodName()
+                            + "; switching to full regeneration.");
                     revertMerge(classInfo, mergeResult);
                     repairContext = buildRepairContext(repairContext,
                             lastCompileResult,
@@ -602,6 +611,7 @@ public class InitialGenerationStep {
                 executeResult,
                 failureParseResult,
                 reportFailures);
+        logExecutionReasoningStart(snippet.methodName(), executeResult, cumulativeResult);
         CompileResult currentCompileResult = compileResult;
         ExecuteResult currentExecuteResult = executeResult;
         ExecutionFailureParseResult currentFailureParseResult = failureParseResult;
@@ -611,8 +621,16 @@ public class InitialGenerationStep {
             memory.incrementAttempt();
             String signature = deriveExecutionErrorSignature(currentExecuteResult, currentReportFailures);
             memory.addErrorSignature(signature);
+            logger.info("[EXECUTION_REASONING] Attempt "
+                    + memory.getAttempt()
+                    + " for "
+                    + snippet.methodName()
+                    + "; signature="
+                    + signature);
             if (memory.countOccurrences(signature) >= 3) {
-                logger.warn("Execution reasoning detected repeated runtime failures for method " + snippet.methodName());
+                logger.warn("[EXECUTION_REASONING] Repeated runtime failure signature detected for method "
+                        + snippet.methodName()
+                        + ". Stopping execution reasoning without regeneration.");
                 break;
             }
 
@@ -626,10 +644,14 @@ public class InitialGenerationStep {
                     currentFailureParseResult,
                     currentReportFailures);
             logReasoningResponse("execute", response);
+            logExecutionReasoningDecision(snippet.methodName(), response);
             String decision = response == null || response.getDecision() == null
                     ? "STOP"
                     : response.getDecision().trim().toUpperCase();
             if ("STOP".equals(decision)) {
+                logger.warn("[EXECUTION_REASONING] Agent returned STOP for method "
+                        + snippet.methodName()
+                        + ". Keeping current test state and not regenerating.");
                 break;
             }
 
@@ -638,9 +660,12 @@ public class InitialGenerationStep {
                 cumulativeResult = cumulativeResult.merge(iterationResult);
                 applyMemoryUpdates(memory, response, iterationResult);
                 memory.setState(AgentState.S2_1_NEED_MORE_CONTEXT);
+                logExecutionReasoningActionResult("REQUEST_CONTEXT", snippet.methodName(), iterationResult);
                 memory.decrementContextBudget();
                 if (memory.getContextRequestBudgetRemaining() <= 0) {
-                    logger.warn("Execution reasoning exhausted context budget for method " + snippet.methodName());
+                    logger.warn("[EXECUTION_REASONING] Context budget exhausted for method "
+                            + snippet.methodName()
+                            + ". Keeping current test state and not regenerating.");
                     break;
                 }
                 continue;
@@ -649,10 +674,16 @@ public class InitialGenerationStep {
             if ("MARK_FALSE_DEPENDENCY".equals(decision)) {
                 applyMemoryUpdates(memory, response, ActionExecutionResult.empty());
                 memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
+                logger.info("[EXECUTION_REASONING] Marked dependency as false/missing for method " + snippet.methodName());
                 continue;
             }
 
             if (!"APPLY_FIX".equals(decision)) {
+                logger.warn("[EXECUTION_REASONING] Unsupported decision "
+                        + decision
+                        + " for method "
+                        + snippet.methodName()
+                        + ". Stopping execution reasoning.");
                 break;
             }
 
@@ -660,11 +691,19 @@ public class InitialGenerationStep {
             cumulativeResult = cumulativeResult.merge(iterationResult);
             applyMemoryUpdates(memory, response, iterationResult);
             memory.setState(AgentState.S4_FIX_APPLIED);
+            logExecutionReasoningActionResult("APPLY_FIX", snippet.methodName(), iterationResult);
             currentCompileResult = compilerInvoker.compileWithoutCache(config.getProjectPath(),
                     classInfo.getTargetPath(),
                     snippet.methodName());
+            logger.info("[EXECUTION_REASONING] Recompile after execution fix for "
+                    + snippet.methodName()
+                    + " -> success="
+                    + currentCompileResult.success());
             if (!currentCompileResult.success()) {
                 try {
+                    logger.warn("[EXECUTION_REASONING] Execution fix caused compilation failure for "
+                            + snippet.methodName()
+                            + ". Trying compile-fix loop before regeneration.");
                     currentCompileResult = fixingOrchestrator.runFixingLoop();
                 } catch (FixingFailureException exception) {
                     logger.error("Compilation fixing loop failed during execution repair: " + exception.getMessage(), exception);
@@ -672,19 +711,27 @@ public class InitialGenerationStep {
                 }
                 if (currentCompileResult == null || !currentCompileResult.success()) {
                     return new ExecutionRepairResult(false,
+                            true,
                             currentCompileResult,
                             currentExecuteResult,
                             currentFailureParseResult,
                             currentReportFailures,
                             cumulativeResult);
                 }
+                logger.info("[EXECUTION_REASONING] Compilation recovered after execution fix for " + snippet.methodName());
             }
 
             currentExecuteResult = executionInvoker.execute(config.getProjectPath(),
                     classInfo.getTargetPath(),
                     snippet.methodName());
+            logger.info("[EXECUTION_REASONING] Reran test after fix for "
+                    + snippet.methodName()
+                    + " -> success="
+                    + currentExecuteResult.success());
             if (currentExecuteResult.success()) {
+                logger.info("[EXECUTION_REASONING] Execution fixed successfully for method " + snippet.methodName());
                 return new ExecutionRepairResult(true,
+                        false,
                         currentCompileResult,
                         currentExecuteResult,
                         new ExecutionFailureParseResult(List.of(), Optional.empty()),
@@ -702,9 +749,13 @@ public class InitialGenerationStep {
                     currentFailureParseResult,
                     currentReportFailures));
             memory.setState(AgentState.S2_2_EXECUTION_FAILED);
+            logger.warn("[EXECUTION_REASONING] Test is still failing at runtime for method "
+                    + snippet.methodName()
+                    + ". Continuing execution reasoning without regeneration.");
         }
 
         return new ExecutionRepairResult(false,
+                false,
                 currentCompileResult,
                 currentExecuteResult,
                 currentFailureParseResult,
@@ -871,6 +922,69 @@ public class InitialGenerationStep {
                 ? "unknown"
                 : executeResult.failedTests().get(0);
         return failedTest + "|" + executeResult.stderr();
+    }
+
+    private void logExecutionReasoningStart(String methodName,
+                                            ExecuteResult executeResult,
+                                            ActionExecutionResult cumulativeResult) {
+        logger.info("[EXECUTION_REASONING] Starting execution reasoning for method " + methodName);
+        if (executeResult != null) {
+            logger.info("[EXECUTION_REASONING] Initial runtime failure summary for "
+                    + methodName
+                    + ": failedTests="
+                    + executeResult.failedTests());
+        }
+        if (cumulativeResult != null && !cumulativeResult.getInformation().isEmpty()) {
+            logger.info("[EXECUTION_REASONING] Collected execution context keys for "
+                    + methodName
+                    + ": "
+                    + cumulativeResult.getInformation().keySet());
+        }
+    }
+
+    private void logExecutionReasoningDecision(String methodName, ReasoningResponse response) {
+        if (response == null) {
+            logger.warn("[EXECUTION_REASONING] No reasoning response for method " + methodName);
+            return;
+        }
+        logger.info("[EXECUTION_REASONING] Decision for "
+                + methodName
+                + ": "
+                + response.getDecision()
+                + "; actions="
+                + summariseReasoningActions(response));
+    }
+
+    private void logExecutionReasoningActionResult(String phase,
+                                                   String methodName,
+                                                   ActionExecutionResult result) {
+        if (result == null) {
+            logger.info("[EXECUTION_REASONING] " + phase + " for " + methodName + " produced no action result.");
+            return;
+        }
+        logger.info("[EXECUTION_REASONING] "
+                + phase
+                + " for "
+                + methodName
+                + " -> performedActions="
+                + result.getPerformedActions()
+                + ", infoKeys="
+                + result.getInformation().keySet());
+    }
+
+    private String summariseReasoningActions(ReasoningResponse response) {
+        if (response == null || response.getActions() == null || response.getActions().isEmpty()) {
+            return "[]";
+        }
+        return response.getActions().stream()
+                .map(action -> {
+                    String type = action.getType() == null ? "UNKNOWN" : action.getType();
+                    Map<String, Object> args = action.getArgs() == null ? Map.of() : action.getArgs();
+                    return type + args;
+                })
+                .reduce((left, right) -> left + ", " + right)
+                .map(value -> "[" + value + "]")
+                .orElse("[]");
     }
 
     private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
@@ -1338,6 +1452,7 @@ public class InitialGenerationStep {
     }
 
     private record ExecutionRepairResult(boolean success,
+                                         boolean shouldRegenerate,
                                          CompileResult compileResult,
                                          ExecuteResult executeResult,
                                          ExecutionFailureParseResult failureParseResult,
