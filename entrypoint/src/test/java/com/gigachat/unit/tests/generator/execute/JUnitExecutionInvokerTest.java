@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,5 +49,40 @@ class JUnitExecutionInvokerTest {
 
         assertTrue(command.contains(":module-a:test"));
         assertTrue(command.contains("com.example.service.UserServiceTest.shouldRegisterUser"));
+    }
+
+    @Test
+    void shouldStreamExecutionOutputIntoPipelineLog() throws Exception {
+        Path gradlew = tempDir.resolve("gradlew");
+        Files.writeString(gradlew, """
+                #!/bin/sh
+                echo "streamed stdout line"
+                echo "streamed stderr line" >&2
+                exit 1
+                """);
+        assertTrue(gradlew.toFile().setExecutable(true));
+
+        Path testFile = tempDir.resolve("src/test/java/com/example/service/UserServiceTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package com.example.service;
+
+                class UserServiceTest {
+                }
+                """);
+
+        JUnitExecutionInvoker invoker = new JUnitExecutionInvoker(new PipelineLogger(tempDir));
+
+        ExecuteResult result = invoker.execute(tempDir, testFile, "shouldRegisterUser");
+
+        assertFalse(result.success());
+        assertTrue(result.stdout().contains("streamed stdout line"));
+        assertTrue(result.stderr().contains("streamed stderr line"));
+
+        String logs = Files.readString(tempDir.resolve(".agent/logs/pipeline.log"));
+        assertTrue(logs.contains("[EXECUTION] Command: "));
+        assertTrue(logs.contains("[EXECUTION][stdout] streamed stdout line"));
+        assertTrue(logs.contains("[EXECUTION][stderr] streamed stderr line"));
+        assertTrue(logs.contains("[EXECUTION] Process finished with exitCode=1"));
     }
 }

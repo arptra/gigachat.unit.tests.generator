@@ -1,5 +1,8 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
@@ -44,6 +47,7 @@ import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
 import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
 import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
@@ -294,6 +298,7 @@ public class InitialGenerationStep {
             }
 
             if (moduleConfig.executeEnabled()) {
+                logger.info("[EXECUTION_REASONING] Stage=RUN_GENERATED_TEST method=" + snippet.methodName());
                 lastExecuteResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
                 if (!lastExecuteResult.success()) {
                     logger.warn("Execution failed for method " + snippet.methodName());
@@ -302,8 +307,15 @@ public class InitialGenerationStep {
                             lastExecuteResult.failedTests(),
                             lastExecuteResult.stdout(),
                             lastExecuteResult.stderr()));
+                    logger.info("[EXECUTION_REASONING] Stage=PARSE_RUNTIME_FAILURE method=" + snippet.methodName());
                     lastFailureParseResult = parseExecutionLog(lastExecuteResult);
                     lastReportFailures = parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
+                    logger.info("[EXECUTION_REASONING] Parsed runtime failure for "
+                            + snippet.methodName()
+                            + ": consoleFailures="
+                            + lastFailureParseResult.failures().size()
+                            + ", reportFailures="
+                            + lastReportFailures.size());
                     ExecutionRepairResult executionRepairResult = repairExecutionFailure(config,
                             classInfo,
                             methodInfo,
@@ -312,6 +324,7 @@ public class InitialGenerationStep {
                             fixingOrchestrator,
                             lastCompileResult,
                             lastExecuteResult,
+                            snippet.methodName(),
                             lastFailureParseResult,
                             lastReportFailures,
                             snippet);
@@ -601,6 +614,7 @@ public class InitialGenerationStep {
                                                          CompilationPipelineOrchestrator fixingOrchestrator,
                                                          CompileResult compileResult,
                                                          ExecuteResult executeResult,
+                                                         String generatedMethodName,
                                                          ExecutionFailureParseResult failureParseResult,
                                                          List<TestReportFailure> reportFailures,
                                                          GeneratedTestSnippet snippet) {
@@ -639,6 +653,7 @@ public class InitialGenerationStep {
             ReasoningResponse response = triggerReasoningWorkflow(config,
                     classInfo,
                     methodInfo,
+                    generatedMethodName,
                     currentCompileResult,
                     currentExecuteResult,
                     cumulativeResult,
@@ -669,7 +684,9 @@ public class InitialGenerationStep {
             }
 
             if ("REQUEST_CONTEXT".equals(decision)) {
-                ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
+                ToolAction toolAction = response.toToolAction();
+                logExecutionReasoningToolAction("REQUEST_CONTEXT", snippet.methodName(), toolAction);
+                ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
                 cumulativeResult = cumulativeResult.merge(iterationResult);
                 applyMemoryUpdates(memory, response, iterationResult);
                 memory.setState(AgentState.S2_1_NEED_MORE_CONTEXT);
@@ -700,7 +717,9 @@ public class InitialGenerationStep {
                 break;
             }
 
-            ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
+            ToolAction toolAction = response.toToolAction();
+            logExecutionReasoningToolAction("APPLY_FIX", snippet.methodName(), toolAction);
+            ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
             cumulativeResult = cumulativeResult.merge(iterationResult);
             applyMemoryUpdates(memory, response, iterationResult);
             memory.setState(AgentState.S4_FIX_APPLIED);
@@ -779,6 +798,7 @@ public class InitialGenerationStep {
     private ReasoningResponse triggerReasoningWorkflow(AgentConfig config,
                                                        TestClassInfo classInfo,
                                                        TestMethodInfo methodInfo,
+                                                       String generatedMethodName,
                                                        CompileResult compileResult,
                                                        ExecuteResult executeResult,
                                                        ActionExecutionResult actionResult,
@@ -796,7 +816,7 @@ public class InitialGenerationStep {
                     : null;
             ReasoningLoopContext loopContext = new NextContextBuilder()
                     .build(errorInfo, summary, actionResult, errorReport, memory);
-            return invokeExecutionReasoning(loopContext);
+            return invokeExecutionReasoning(config.getProjectPath(), generatedMethodName, loopContext);
         } catch (Exception exception) {
             logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
                     + ": " + exception.getMessage(), exception);
@@ -804,7 +824,9 @@ public class InitialGenerationStep {
         }
     }
 
-    private ReasoningResponse invokeExecutionReasoning(ReasoningLoopContext loopContext) {
+    private ReasoningResponse invokeExecutionReasoning(Path projectRoot,
+                                                       String generatedMethodName,
+                                                       ReasoningLoopContext loopContext) {
         CompilationReasoningPromptBuilder promptBuilder = new CompilationReasoningPromptBuilder();
         ReasoningResponseParser responseParser = new ReasoningResponseParser();
         String basePrompt = promptBuilder.buildPrompt(loopContext)
@@ -829,11 +851,31 @@ public class InitialGenerationStep {
 
         String prompt = basePrompt;
         for (int attempt = 1; attempt <= 3; attempt++) {
+            Path promptFile = writeExecutionReasoningArtifact(projectRoot, generatedMethodName, attempt, "prompt", prompt);
+            logger.info("[EXECUTION_REASONING] Stage=SEND_TO_GIGACHAT method="
+                    + generatedMethodName
+                    + ", attempt="
+                    + attempt
+                    + ", promptFile="
+                    + describeArtifactPath(promptFile));
             logger.info("[EXECUTION_REASONING] LLM prompt attempt " + attempt + ":\n" + prompt);
             GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, placeholderClass, placeholderMethod, emptyPlan);
             String raw = snippet == null ? "" : snippet.methodBody();
+            Path responseFile = writeExecutionReasoningArtifact(projectRoot, generatedMethodName, attempt, "response", raw);
+            logger.info("[EXECUTION_REASONING] Stage=RECEIVE_FROM_GIGACHAT method="
+                    + generatedMethodName
+                    + ", attempt="
+                    + attempt
+                    + ", responseFile="
+                    + describeArtifactPath(responseFile)
+                    + ", responseLength="
+                    + raw.length());
             logger.info("[EXECUTION_REASONING] LLM raw response attempt " + attempt + ":\n" + raw);
             try {
+                logger.info("[EXECUTION_REASONING] Stage=PARSE_GIGACHAT_RESPONSE method="
+                        + generatedMethodName
+                        + ", attempt="
+                        + attempt);
                 ReasoningResponse parsed = responseParser.parseStrict(raw);
                 logger.info("[EXECUTION_REASONING] Parsed LLM response attempt "
                         + attempt
@@ -956,7 +998,14 @@ public class InitialGenerationStep {
             logger.warn("Reasoning workflow returned no response for " + stage + " failure.");
             return;
         }
-        logger.info("Reasoning workflow result for " + stage + " failure: " + response);
+        logger.info("Reasoning workflow result for "
+                + stage
+                + " failure: decision="
+                + response.getDecision()
+                + ", actions="
+                + summariseReasoningActions(response)
+                + ", memoryUpdates="
+                + summariseMemoryUpdates(response));
     }
 
     private void applyMemoryUpdates(ReasoningMemory memory,
@@ -1063,6 +1112,25 @@ public class InitialGenerationStep {
                 + result.getInformation().keySet());
     }
 
+    private void logExecutionReasoningToolAction(String phase,
+                                                 String methodName,
+                                                 ToolAction toolAction) {
+        if (toolAction == null) {
+            logger.warn("[EXECUTION_REASONING] "
+                    + phase
+                    + " for "
+                    + methodName
+                    + " did not include executable tool actions.");
+            return;
+        }
+        logger.info("[EXECUTION_REASONING] "
+                + phase
+                + " tool action for "
+                + methodName
+                + ": "
+                + toolAction);
+    }
+
     private String summariseReasoningActions(ReasoningResponse response) {
         if (response == null || response.getActions() == null || response.getActions().isEmpty()) {
             return "[]";
@@ -1076,6 +1144,60 @@ public class InitialGenerationStep {
                 .reduce((left, right) -> left + ", " + right)
                 .map(value -> "[" + value + "]")
                 .orElse("[]");
+    }
+
+    private String summariseMemoryUpdates(ReasoningResponse response) {
+        if (response == null) {
+            return "{}";
+        }
+        ReasoningResponse.MemoryUpdate updates = response.getMemoryUpdates();
+        return "{knownMissingSymbols="
+                + updates.getKnownMissingSymbols()
+                + ", appliedFixSignatures="
+                + updates.getAppliedFixSignatures()
+                + ", contextCacheKeys="
+                + updates.getContextCache().keySet()
+                + "}";
+    }
+
+    private Path writeExecutionReasoningArtifact(Path projectRoot,
+                                                 String generatedMethodName,
+                                                 int attempt,
+                                                 String suffix,
+                                                 String content) {
+        Path artifactDir = projectRoot.resolve(".agent").resolve("logs").resolve("execution-reasoning");
+        try {
+            Files.createDirectories(artifactDir);
+            Path artifact = artifactDir.resolve(sanitizeExecutionArtifactName(generatedMethodName)
+                    + "-attempt-"
+                    + attempt
+                    + "."
+                    + suffix
+                    + ".txt");
+            Files.writeString(artifact,
+                    content == null ? "" : content,
+                    StandardCharsets.UTF_8);
+            return artifact.toAbsolutePath().normalize();
+        } catch (IOException exception) {
+            logger.warn("[EXECUTION_REASONING] Failed to persist "
+                    + suffix
+                    + " artifact for "
+                    + generatedMethodName
+                    + " attempt "
+                    + attempt
+                    + ": "
+                    + exception.getMessage());
+            return null;
+        }
+    }
+
+    private String sanitizeExecutionArtifactName(String value) {
+        String candidate = value == null || value.isBlank() ? "unknown-method" : value;
+        return candidate.replaceAll("[^A-Za-z0-9._-]+", "_");
+    }
+
+    private String describeArtifactPath(Path artifact) {
+        return artifact == null ? "unavailable" : artifact.toString();
     }
 
     private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {

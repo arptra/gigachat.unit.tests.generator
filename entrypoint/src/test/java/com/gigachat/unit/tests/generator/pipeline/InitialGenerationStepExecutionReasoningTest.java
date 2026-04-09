@@ -163,10 +163,20 @@ class InitialGenerationStepExecutionReasoningTest {
         Path logFile = tempDir.resolve(".agent/logs/pipeline.log");
         String logs = Files.readString(logFile);
         assertTrue(logs.contains("[EXECUTION_REASONING] Starting execution reasoning"));
+        assertTrue(logs.contains("Stage=SEND_TO_GIGACHAT method=shouldExecutePerform, attempt=1"));
+        assertTrue(logs.contains("Stage=RECEIVE_FROM_GIGACHAT method=shouldExecutePerform, attempt=1"));
         assertTrue(logs.contains("[EXECUTION_REASONING] LLM prompt attempt 1"));
         assertTrue(logs.contains("[EXECUTION_REASONING] LLM raw response attempt 1"));
         assertTrue(logs.contains("[EXECUTION_REASONING] Decision for shouldExecutePerform: STOP"));
         assertTrue(logs.contains("skipping full regeneration"));
+
+        Path artifactDir = tempDir.resolve(".agent/logs/execution-reasoning");
+        assertTrue(Files.exists(artifactDir.resolve("shouldExecutePerform-attempt-1.prompt.txt")));
+        assertTrue(Files.exists(artifactDir.resolve("shouldExecutePerform-attempt-1.response.txt")));
+        assertTrue(Files.readString(artifactDir.resolve("shouldExecutePerform-attempt-1.prompt.txt"))
+                .contains("Execution-only constraint"));
+        assertTrue(Files.readString(artifactDir.resolve("shouldExecutePerform-attempt-1.response.txt"))
+                .contains("\"decision\":\"STOP\""));
     }
 
     private static class CountingLlmClient implements LlmClient {

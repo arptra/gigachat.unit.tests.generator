@@ -14,7 +14,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.stream.Collectors;
 
 /**
  * Executes generated tests using Gradle.
@@ -42,40 +41,48 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         ProcessBuilder processBuilder = new ProcessBuilder();
         processBuilder.command(command);
         processBuilder.directory(projectRoot.toFile());
-        logger.info("Starting test execution for "
+        logger.info("[EXECUTION] Starting test execution for "
                 + (executeWholeSuite ? "all tests" : determineTestPattern(projectRoot, testClassFile, methodName))
                 + " in " + testClassFile);
+        logger.info("[EXECUTION] Command: " + String.join(" ", command));
+        logger.info("[EXECUTION] Working directory: " + projectRoot.toAbsolutePath().normalize());
         try {
             Process process = processBuilder.start();
-            CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(() -> readStream(process.getInputStream()));
-            CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(() -> readStream(process.getErrorStream()));
+            logger.info("[EXECUTION] Process started with pid=" + process.pid());
+            CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(() -> readStream(process.getInputStream(),
+                    "stdout",
+                    false));
+            CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(() -> readStream(process.getErrorStream(),
+                    "stderr",
+                    true));
             int exitCode = process.waitFor();
             String stdout = stdoutFuture.get();
             String stderr = stderrFuture.get();
+            logger.info("[EXECUTION] Process finished with exitCode=" + exitCode);
             if (exitCode != 0) {
-                logger.warn("Test execution returned non-zero exit code: " + exitCode);
+                logger.warn("[EXECUTION] Test execution returned non-zero exit code: " + exitCode);
                 return new ExecuteResult(false,
                         failedTests(projectRoot, testClassFile, methodName, executeWholeSuite),
                         stdout,
                         stderr.isBlank() ? "Gradle test execution exited with code " + exitCode : stderr);
             }
-            logger.info("Test execution finished successfully for " + testClassFile);
+            logger.info("[EXECUTION] Test execution finished successfully for " + testClassFile);
             return new ExecuteResult(true, List.of(), stdout, stderr);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            logger.error("Execution interrupted for " + testClassFile, exception);
+            logger.error("[EXECUTION] Execution interrupted for " + testClassFile, exception);
             return new ExecuteResult(false,
                     failedTests(projectRoot, testClassFile, methodName, executeWholeSuite),
                     "",
                     exception.getMessage());
         } catch (ExecutionException exception) {
-            logger.error("Execution output collection failed for " + testClassFile, exception);
+            logger.error("[EXECUTION] Execution output collection failed for " + testClassFile, exception);
             return new ExecuteResult(false,
                     failedTests(projectRoot, testClassFile, methodName, executeWholeSuite),
                     "",
                     exception.getMessage());
         } catch (IOException exception) {
-            logger.error("Execution failed for " + testClassFile, exception);
+            logger.error("[EXECUTION] Execution failed for " + testClassFile, exception);
             return new ExecuteResult(false,
                     failedTests(projectRoot, testClassFile, methodName, executeWholeSuite),
                     "",
@@ -92,7 +99,7 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
             command.add("gradle");
         }
         command.add("--no-daemon");
-        command.add("-q");
+        command.add("--console=plain");
         command.add(resolveGradleTestTask(projectRoot, testClassFile));
         if (!executeWholeSuite) {
             command.add("--tests");
@@ -195,11 +202,30 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         }
     }
 
-    private String readStream(java.io.InputStream stream) {
+    private String readStream(java.io.InputStream stream, String channel, boolean stderrChannel) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-            return reader.lines().collect(Collectors.joining(System.lineSeparator()));
+            StringBuilder output = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (output.length() > 0) {
+                    output.append(System.lineSeparator());
+                }
+                output.append(line);
+                logStreamLine(channel, line, stderrChannel);
+            }
+            return output.toString();
         } catch (IOException exception) {
+            logger.warn("[EXECUTION][" + channel + "] Failed to read process output: " + exception.getMessage());
             return "";
         }
+    }
+
+    private void logStreamLine(String channel, String line, boolean stderrChannel) {
+        String message = "[EXECUTION][" + channel + "] " + line;
+        if (stderrChannel) {
+            logger.warn(message);
+            return;
+        }
+        logger.info(message);
     }
 }
