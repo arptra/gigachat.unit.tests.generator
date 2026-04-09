@@ -70,7 +70,7 @@ class CompilationReasoningServiceTest {
         ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null, new ReasoningMemory()));
 
         assertEquals("STOP", response.getDecision());
-        assertEquals(2, llmClient.callCount);
+        assertEquals(1, llmClient.callCount);
     }
 
     private static class CapturingLlmClient implements LlmClient {

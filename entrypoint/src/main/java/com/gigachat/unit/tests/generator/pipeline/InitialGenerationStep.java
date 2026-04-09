@@ -46,11 +46,13 @@ import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
+import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
 import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
 import com.gigachat.unit.tests.generator.reasoning.service.BuildFileEditor;
 import com.gigachat.unit.tests.generator.reasoning.service.ExecutionFailureContextCollector;
 import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
+import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
 import com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor;
 import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
 import com.gigachat.unit.tests.generator.compile.classification.classify.CompilationErrorClassifier;
@@ -794,12 +796,90 @@ public class InitialGenerationStep {
                     : null;
             ReasoningLoopContext loopContext = new NextContextBuilder()
                     .build(errorInfo, summary, actionResult, errorReport, memory);
-            return reasoningWorkflow.process(loopContext);
+            return invokeExecutionReasoning(loopContext);
         } catch (Exception exception) {
             logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
                     + ": " + exception.getMessage(), exception);
             return null;
         }
+    }
+
+    private ReasoningResponse invokeExecutionReasoning(ReasoningLoopContext loopContext) {
+        CompilationReasoningPromptBuilder promptBuilder = new CompilationReasoningPromptBuilder();
+        ReasoningResponseParser responseParser = new ReasoningResponseParser();
+        String basePrompt = promptBuilder.buildPrompt(loopContext)
+                + System.lineSeparator()
+                + System.lineSeparator()
+                + "Execution-only constraint:"
+                + System.lineSeparator()
+                + "- Do not give up while the failure is a runtime test failure and test-side fixes are still possible."
+                + System.lineSeparator()
+                + "- Prefer REQUEST_CONTEXT or APPLY_FIX over STOP."
+                + System.lineSeparator()
+                + "- Return JSON only.";
+        TestClassInfo placeholderClass = new TestClassInfo(
+                "ExecutionReasoningPlaceholder",
+                "ExecutionReasoningPlaceholderTest",
+                Path.of("."),
+                List.of(),
+                List.of()
+        );
+        TestMethodInfo placeholderMethod = new TestMethodInfo("reason()", "void", "");
+        MockPlan emptyPlan = new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of());
+
+        String prompt = basePrompt;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            logger.info("[EXECUTION_REASONING] LLM prompt attempt " + attempt + ":\n" + prompt);
+            GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, placeholderClass, placeholderMethod, emptyPlan);
+            String raw = snippet == null ? "" : snippet.methodBody();
+            logger.info("[EXECUTION_REASONING] LLM raw response attempt " + attempt + ":\n" + raw);
+            try {
+                ReasoningResponse parsed = responseParser.parseStrict(raw);
+                logger.info("[EXECUTION_REASONING] Parsed LLM response attempt "
+                        + attempt
+                        + ": decision="
+                        + parsed.getDecision()
+                        + ", actions="
+                        + (parsed.getActions() == null ? 0 : parsed.getActions().size()));
+                return parsed;
+            } catch (RuntimeException exception) {
+                logger.warn("[EXECUTION_REASONING] Failed to parse LLM response on attempt "
+                        + attempt
+                        + ": "
+                        + exception.getMessage());
+                if (attempt == 3) {
+                    break;
+                }
+                prompt = buildExecutionReasoningRetryPrompt(basePrompt, raw, exception.getMessage(), attempt + 1);
+            }
+        }
+
+        ReasoningResponse response = new ReasoningResponse();
+        response.setDecision("STOP");
+        response.setActions(List.of());
+        logger.warn("[EXECUTION_REASONING] Falling back to STOP after exhausting execution-only LLM retries.");
+        return response;
+    }
+
+    private String buildExecutionReasoningRetryPrompt(String basePrompt,
+                                                      String rawResponse,
+                                                      String failureReason,
+                                                      int nextAttempt) {
+        return basePrompt
+                + System.lineSeparator()
+                + System.lineSeparator()
+                + "Previous response was invalid."
+                + System.lineSeparator()
+                + "Reason: "
+                + failureReason
+                + System.lineSeparator()
+                + "Invalid response:"
+                + System.lineSeparator()
+                + rawResponse
+                + System.lineSeparator()
+                + "Retry attempt "
+                + nextAttempt
+                + ": return ONLY valid JSON matching the required schema.";
     }
 
     private CompilationErrorInfo buildCompilationErrorInfo(CompileResult compileResult, TestClassInfo classInfo) {

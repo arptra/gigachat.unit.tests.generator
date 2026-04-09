@@ -155,6 +155,7 @@ class InitialGenerationStepExecutionReasoningTest {
         ErrorsReport report = generationStep.run(config, List.of(classInfo));
 
         assertEquals(1, llmClient.generationCalls.get(), "Expected only the initial generation request");
+        assertEquals(2, llmClient.executionReasoningCalls.get(), "Expected the forced second execution reasoning request");
         assertEquals(1, executionCalls.get(), "Execution should not restart after STOP");
         assertEquals(1, report.getExecuteErrors().size());
         assertTrue(Files.readString(testFile).contains("shouldExecutePerform"));
@@ -162,18 +163,36 @@ class InitialGenerationStepExecutionReasoningTest {
         Path logFile = tempDir.resolve(".agent/logs/pipeline.log");
         String logs = Files.readString(logFile);
         assertTrue(logs.contains("[EXECUTION_REASONING] Starting execution reasoning"));
+        assertTrue(logs.contains("[EXECUTION_REASONING] LLM prompt attempt 1"));
+        assertTrue(logs.contains("[EXECUTION_REASONING] LLM raw response attempt 1"));
         assertTrue(logs.contains("[EXECUTION_REASONING] Decision for shouldExecutePerform: STOP"));
         assertTrue(logs.contains("skipping full regeneration"));
     }
 
     private static class CountingLlmClient implements LlmClient {
         private final AtomicInteger generationCalls = new AtomicInteger();
+        private final AtomicInteger executionReasoningCalls = new AtomicInteger();
 
         @Override
         public GeneratedTestSnippet generateTestSnippet(String prompt,
                                                         TestClassInfo classInfo,
                                                         TestMethodInfo methodInfo,
                                                         MockPlan plan) {
+            if ("ExecutionReasoningPlaceholder".equals(classInfo.getClassName())) {
+                executionReasoningCalls.incrementAndGet();
+                return new GeneratedTestSnippet(
+                        classInfo.getTestClassName(),
+                        methodInfo.getSignature(),
+                        """
+                                {"decision":"STOP","actions":[],"memory_updates":{}}
+                                """,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        ""
+                );
+            }
             generationCalls.incrementAndGet();
             return new GeneratedTestSnippet(
                     classInfo.getTestClassName(),
