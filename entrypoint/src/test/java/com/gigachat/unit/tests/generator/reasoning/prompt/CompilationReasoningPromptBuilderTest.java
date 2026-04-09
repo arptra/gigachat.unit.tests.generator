@@ -37,9 +37,11 @@ class CompilationReasoningPromptBuilderTest {
         String prompt = builder.buildPrompt(new ReasoningLoopContext(errorInfo, summary, executionResult, null, memory));
 
         assertTrue(prompt.contains("deterministic agent"));
+        assertTrue(prompt.contains("Reasoning protocol"));
         assertTrue(prompt.contains("Allowed tool actions"));
+        assertTrue(prompt.contains("RUN_TEST"));
         assertTrue(prompt.contains("decision"));
-        assertTrue(prompt.contains("Compilation error info"));
+        assertTrue(prompt.contains("Failure info"));
         assertTrue(prompt.contains("cannot find symbol"));
         assertTrue(prompt.contains("src/test/java/com/example/TestClass.java"));
         assertTrue(prompt.contains("src/main/java"));
