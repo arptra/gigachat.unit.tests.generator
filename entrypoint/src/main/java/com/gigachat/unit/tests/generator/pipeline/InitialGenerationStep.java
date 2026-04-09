@@ -617,7 +617,7 @@ public class InitialGenerationStep {
         ExecutionFailureParseResult currentFailureParseResult = failureParseResult;
         List<TestReportFailure> currentReportFailures = reportFailures == null ? List.of() : List.copyOf(reportFailures);
 
-        for (int iteration = 0; iteration < 4; iteration++) {
+        for (int iteration = 0; iteration < 6; iteration++) {
             memory.incrementAttempt();
             String signature = deriveExecutionErrorSignature(currentExecuteResult, currentReportFailures);
             memory.addErrorSignature(signature);
@@ -649,6 +649,17 @@ public class InitialGenerationStep {
                     ? "STOP"
                     : response.getDecision().trim().toUpperCase();
             if ("STOP".equals(decision)) {
+                if (iteration == 0) {
+                    logger.warn("[EXECUTION_REASONING] Model stopped before fixing runtime failure for method "
+                            + snippet.methodName()
+                            + ". Forcing one more reasoning round with explicit feedback.");
+                    cumulativeResult = cumulativeResult.merge(new ActionExecutionResult(Map.of(
+                            "agentFeedback", List.of(Map.of(
+                                    "stage", "execute",
+                                    "message", "Runtime failure is still present. Do not STOP yet. Request context or apply a concrete fix in test code."
+                            )))));
+                    continue;
+                }
                 logger.warn("[EXECUTION_REASONING] Agent returned STOP for method "
                         + snippet.methodName()
                         + ". Keeping current test state and not regenerating.");

@@ -13,8 +13,16 @@ public class ReasoningResponseParser {
     }
 
     public ReasoningResponse parse(String json) {
-        if (json == null || json.isBlank()) {
+        try {
+            return parseStrict(json);
+        } catch (Exception ignored) {
             return stopFallback();
+        }
+    }
+
+    public ReasoningResponse parseStrict(String json) {
+        if (json == null || json.isBlank()) {
+            throw new IllegalArgumentException("Reasoning response is empty");
         }
         try {
             String cleaned = sanitize(json);
@@ -24,8 +32,8 @@ public class ReasoningResponseParser {
             }
             validate(response);
             return response;
-        } catch (Exception ignored) {
-            return stopFallback();
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("Failed to parse reasoning response", exception);
         }
     }
 

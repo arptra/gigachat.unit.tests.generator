@@ -109,7 +109,8 @@ public class TestPipeline {
         CompilationReasoningService reasoningService = new CompilationReasoningService(
                 llmClient,
                 reasoningPromptBuilder,
-                reasoningResponseParser);
+                reasoningResponseParser,
+                logger);
         ReasoningWorkflow reasoningWorkflow = new ReasoningWorkflow(
                 new CompilationReasoningOrchestrator(reasoningService));
         return new InitialGenerationStep(logger,

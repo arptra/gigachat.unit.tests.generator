@@ -42,6 +42,7 @@ public class CompilationReasoningPromptBuilder {
                 .append("- For runtime failures, inspect executionFailures, mockContext, relatedClassesToInspect, and relatedClassSources before patching.\n")
                 .append("- If stacktraces mention project classes, request READ_CLASS/READ_METHOD/SHOW_FILE for those classes before changing assertions or mocks.\n")
                 .append("- Mock only external collaborators listed in shouldMock. Keep DTOs, entities, value objects, collections, and internal state real when listed in shouldNotMock.\n")
+                .append("- While compilation is green but tests still fail at runtime, keep iterating with REQUEST_CONTEXT or APPLY_FIX; do not STOP early unless there is truly no test-side action left.\n")
                 .append("- Use RECOMPILE after source edits that may affect imports/syntax. Use RUN_TEST to validate runtime fixes after compilation succeeds.\n\n");
 
         prompt.append("STATE: ").append(memory.getState())

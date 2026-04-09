@@ -51,4 +51,10 @@ class ReasoningResponseParserTest {
 
         assertEquals("STOP", response.getDecision());
     }
+
+    @Test
+    void parseStrictShouldThrowOnInvalidPayload() {
+        ReasoningResponseParser parser = new ReasoningResponseParser();
+        assertThrows(RuntimeException.class, () -> parser.parseStrict("not-a-json"));
+    }
 }
