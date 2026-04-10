@@ -1,5 +1,8 @@
 package com.gigachat.unit.tests.generator.pipeline;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
@@ -28,13 +31,35 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
+import com.gigachat.unit.tests.generator.pipeline.helpers.ExistingTestDetector;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
+import com.gigachat.unit.tests.generator.pipeline.helpers.TestGenerationRegistry;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
 import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
 import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
+import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
+import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
+import com.gigachat.unit.tests.generator.reasoning.model.AgentState;
+import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
+import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
+import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
+import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
+import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
+import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
+import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
+import com.gigachat.unit.tests.generator.reasoning.service.BuildFileEditor;
+import com.gigachat.unit.tests.generator.reasoning.service.ExecutionFailureContextCollector;
+import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
+import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
+import com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor;
+import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
+import com.gigachat.unit.tests.generator.compile.classification.classify.CompilationErrorClassifier;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -85,6 +110,10 @@ public class InitialGenerationStep {
     private final AutoCorrectionStage autoCorrectionStage;
     private final ExecutionFailureLogParser executionFailureLogParser;
     private final ExecutionReportParser executionReportParser;
+    private final ExecutionFailureContextCollector executionFailureContextCollector;
+    private final ReasoningWorkflow reasoningWorkflow;
+    private ExistingTestDetector existingTestDetector;
+    private TestGenerationRegistry generationRegistry;
 
     public InitialGenerationStep(PipelineLogger logger,
                                  TestClassWriter testClassWriter,
@@ -96,7 +125,8 @@ public class InitialGenerationStep {
                                  CompilerInvoker compilerInvoker,
                                  ExecutionInvoker executionInvoker,
                                  SnapshotStorage snapshotStorage,
-                                 MethodSignatureRegistry signatureRegistry) {
+                                 MethodSignatureRegistry signatureRegistry,
+                                 ReasoningWorkflow reasoningWorkflow) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.testClassWriter = Objects.requireNonNull(testClassWriter, "testClassWriter");
         this.skeletonPromptBuilder = Objects.requireNonNull(skeletonPromptBuilder, "skeletonPromptBuilder");
@@ -112,10 +142,14 @@ public class InitialGenerationStep {
         this.autoCorrectionStage = new AutoCorrectionStage();
         this.executionFailureLogParser = new ExecutionFailureLogParser();
         this.executionReportParser = new ExecutionReportParser();
+        this.executionFailureContextCollector = new ExecutionFailureContextCollector();
+        this.reasoningWorkflow = Objects.requireNonNull(reasoningWorkflow, "reasoningWorkflow");
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
         ErrorsReport report = new ErrorsReport();
+        this.generationRegistry = new TestGenerationRegistry(config.getProjectPath());
+        this.existingTestDetector = new ExistingTestDetector(generationRegistry);
         if (classes == null || classes.isEmpty()) {
             logger.warn("No classes to process in initial generation step");
             return report;
@@ -142,7 +176,13 @@ public class InitialGenerationStep {
             logger.warn("Class " + classInfo.getClassName() + " has no eligible methods for generation");
             return;
         }
-        List<TestMethodInfo> methods = classInfo.getMethods();
+        List<TestMethodInfo> methods = classInfo.getMethods().stream()
+                .filter(method -> !existingTestDetector.isTestMethodPresent(classInfo, method))
+                .toList();
+        if (methods.isEmpty()) {
+            logger.info("All requested test methods already exist for class " + classInfo.getTestClassName());
+            return;
+        }
         if (moduleConfig.parallelMode().paralleliseMethods()) {
             methods.parallelStream().forEach(method -> processMethod(config, classInfo, method, moduleConfig, report));
         } else {
@@ -183,6 +223,9 @@ public class InitialGenerationStep {
             return;
         }
 
+        ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath());
+        SourceFileEditor sourceFileEditor = new SourceFileEditor();
+        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath());
         boolean success = false;
         int attempt = 0;
         int maxAttempts = 5;
@@ -194,6 +237,16 @@ public class InitialGenerationStep {
         List<TestReportFailure> lastReportFailures = List.of();
 
         while (attempt < maxAttempts) {
+            ToolActionExecutor actionExecutor = createActionExecutor(config,
+                    classInfo,
+                    buildFileEditor,
+                    sourceFileEditor,
+                    snippet);
+            CompilationPipelineOrchestrator fixingOrchestrator = createFixingOrchestrator(config,
+                    classInfo,
+                    projectContextCollector,
+                    actionExecutor,
+                    snippet);
             mergeResult = diffEngine.merge(classInfo, snippet);
             if (!mergeResult.changed()) {
                 logger.warn("Merge step did not change target class for method " + snippet.methodName());
@@ -208,28 +261,36 @@ public class InitialGenerationStep {
                             lastCompileResult.messages(),
                             lastCompileResult.stdout(),
                             lastCompileResult.stderr()));
-                    revertMerge(classInfo, mergeResult);
-                    repairContext = buildRepairContext(repairContext,
-                            lastCompileResult,
-                            null,
-                            null,
-                            List.of(),
-                            snippet,
-                            attempt + 1);
-                    snippet = requestSnippetSimple(config,
-                            classInfo,
-                            methodInfo,
-                            plan,
-                            repairContext,
-                            analysisSummary,
-                            moduleConfig,
-                            true);
-                    if (snippet == null) {
-                        logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
-                        break;
+                    try {
+                        lastCompileResult = fixingOrchestrator.runFixingLoop();
+                    } catch (FixingFailureException exception) {
+                        logger.error("Reasoning loop failed to fix compilation errors: " + exception.getMessage(), exception);
+                        lastCompileResult = exception.getLastResult();
                     }
-                    attempt++;
-                    continue;
+                    if (!lastCompileResult.success()) {
+                        revertMerge(classInfo, mergeResult);
+                        repairContext = buildRepairContext(repairContext,
+                                lastCompileResult,
+                                null,
+                                null,
+                                List.of(),
+                                snippet,
+                                attempt + 1);
+                        snippet = requestSnippetSimple(config,
+                                classInfo,
+                                methodInfo,
+                                plan,
+                                repairContext,
+                                analysisSummary,
+                                moduleConfig,
+                                true);
+                        if (snippet == null) {
+                            logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
+                            break;
+                        }
+                        attempt++;
+                        continue;
+                    }
                 }
             } else {
                 logger.info("Compilation disabled via configuration; skipping compile step.");
@@ -237,6 +298,7 @@ public class InitialGenerationStep {
             }
 
             if (moduleConfig.executeEnabled()) {
+                logger.info("[EXECUTION_REASONING] Stage=RUN_GENERATED_TEST method=" + snippet.methodName());
                 lastExecuteResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
                 if (!lastExecuteResult.success()) {
                     logger.warn("Execution failed for method " + snippet.methodName());
@@ -245,8 +307,45 @@ public class InitialGenerationStep {
                             lastExecuteResult.failedTests(),
                             lastExecuteResult.stdout(),
                             lastExecuteResult.stderr()));
+                    logger.info("[EXECUTION_REASONING] Stage=PARSE_RUNTIME_FAILURE method=" + snippet.methodName());
                     lastFailureParseResult = parseExecutionLog(lastExecuteResult);
                     lastReportFailures = parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
+                    logger.info("[EXECUTION_REASONING] Parsed runtime failure for "
+                            + snippet.methodName()
+                            + ": consoleFailures="
+                            + lastFailureParseResult.failures().size()
+                            + ", reportFailures="
+                            + lastReportFailures.size());
+                    ExecutionRepairResult executionRepairResult = repairExecutionFailure(config,
+                            classInfo,
+                            methodInfo,
+                            analysisSummary,
+                            actionExecutor,
+                            fixingOrchestrator,
+                            lastCompileResult,
+                            lastExecuteResult,
+                            snippet.methodName(),
+                            lastFailureParseResult,
+                            lastReportFailures,
+                            snippet);
+                    lastCompileResult = executionRepairResult.compileResult();
+                    lastExecuteResult = executionRepairResult.executeResult();
+                    lastFailureParseResult = executionRepairResult.failureParseResult();
+                    lastReportFailures = executionRepairResult.reportFailures();
+                    if (executionRepairResult.success()) {
+                        success = true;
+                        existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
+                        break;
+                    }
+                    if (!executionRepairResult.shouldRegenerate()) {
+                        logger.warn("Execution reasoning did not fully fix method "
+                                + snippet.methodName()
+                                + ", but compilation stayed valid. Keeping the current test and skipping full regeneration.");
+                        return;
+                    }
+                    logger.warn("Execution reasoning introduced or exposed compilation problems for method "
+                            + snippet.methodName()
+                            + "; switching to full regeneration.");
                     revertMerge(classInfo, mergeResult);
                     repairContext = buildRepairContext(repairContext,
                             lastCompileResult,
@@ -275,6 +374,7 @@ public class InitialGenerationStep {
                 lastExecuteResult = new ExecuteResult(true, List.of(), "", "");
             }
             success = true;
+            existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
             break;
         }
 
@@ -413,6 +513,37 @@ public class InitialGenerationStep {
         hints.put(hint);
     }
 
+    private ToolActionExecutor createActionExecutor(AgentConfig config,
+                                                    TestClassInfo classInfo,
+                                                    BuildFileEditor buildFileEditor,
+                                                    SourceFileEditor sourceFileEditor,
+                                                    GeneratedTestSnippet snippet) {
+        return new ToolActionExecutor(buildFileEditor,
+                sourceFileEditor,
+                compilerInvoker,
+                executionInvoker,
+                config.getProjectPath(),
+                classInfo.getTargetPath(),
+                classInfo.getTestClassName(),
+                snippet.methodName());
+    }
+
+    private CompilationPipelineOrchestrator createFixingOrchestrator(AgentConfig config,
+                                                                     TestClassInfo classInfo,
+                                                                     ProjectContextCollector projectContextCollector,
+                                                                     ToolActionExecutor actionExecutor,
+                                                                     GeneratedTestSnippet snippet) {
+        return new CompilationPipelineOrchestrator(compilerInvoker,
+                reasoningWorkflow,
+                projectContextCollector,
+                actionExecutor,
+                new CompilationErrorClassifier(),
+                config.getProjectPath(),
+                classInfo.getTargetPath(),
+                classInfo.getTestClassName(),
+                snippet.methodName());
+    }
+
     private JSONObject buildRepairContext(JSONObject baseContext,
                                           CompileResult compileResult,
                                           ExecuteResult executeResult,
@@ -473,6 +604,600 @@ public class InitialGenerationStep {
             repair.put("diagnostics", diagnostics);
         }
         return nextContext;
+    }
+
+    private ExecutionRepairResult repairExecutionFailure(AgentConfig config,
+                                                         TestClassInfo classInfo,
+                                                         TestMethodInfo methodInfo,
+                                                         Analyze.AnalysisSummary analysisSummary,
+                                                         ToolActionExecutor actionExecutor,
+                                                         CompilationPipelineOrchestrator fixingOrchestrator,
+                                                         CompileResult compileResult,
+                                                         ExecuteResult executeResult,
+                                                         String generatedMethodName,
+                                                         ExecutionFailureParseResult failureParseResult,
+                                                         List<TestReportFailure> reportFailures,
+                                                         GeneratedTestSnippet snippet) {
+        ReasoningMemory memory = new ReasoningMemory();
+        memory.setState(AgentState.S2_2_EXECUTION_FAILED);
+        ActionExecutionResult cumulativeResult = executionFailureContextCollector.collect(config.getProjectPath(),
+                classInfo,
+                methodInfo,
+                analysisSummary,
+                executeResult,
+                failureParseResult,
+                reportFailures);
+        logExecutionReasoningStart(snippet.methodName(), executeResult, cumulativeResult);
+        CompileResult currentCompileResult = compileResult;
+        ExecuteResult currentExecuteResult = executeResult;
+        ExecutionFailureParseResult currentFailureParseResult = failureParseResult;
+        List<TestReportFailure> currentReportFailures = reportFailures == null ? List.of() : List.copyOf(reportFailures);
+
+        for (int iteration = 0; iteration < 6; iteration++) {
+            memory.incrementAttempt();
+            String signature = deriveExecutionErrorSignature(currentExecuteResult, currentReportFailures);
+            memory.addErrorSignature(signature);
+            logger.info("[EXECUTION_REASONING] Attempt "
+                    + memory.getAttempt()
+                    + " for "
+                    + snippet.methodName()
+                    + "; signature="
+                    + signature);
+            if (memory.countOccurrences(signature) >= 3) {
+                logger.warn("[EXECUTION_REASONING] Repeated runtime failure signature detected for method "
+                        + snippet.methodName()
+                        + ". Stopping execution reasoning without regeneration.");
+                break;
+            }
+
+            ReasoningResponse response = triggerReasoningWorkflow(config,
+                    classInfo,
+                    methodInfo,
+                    generatedMethodName,
+                    currentCompileResult,
+                    currentExecuteResult,
+                    cumulativeResult,
+                    memory,
+                    currentFailureParseResult,
+                    currentReportFailures);
+            logReasoningResponse("execute", response);
+            logExecutionReasoningDecision(snippet.methodName(), response);
+            String decision = response == null || response.getDecision() == null
+                    ? "STOP"
+                    : response.getDecision().trim().toUpperCase();
+            if ("STOP".equals(decision)) {
+                if (iteration == 0) {
+                    logger.warn("[EXECUTION_REASONING] Model stopped before fixing runtime failure for method "
+                            + snippet.methodName()
+                            + ". Forcing one more reasoning round with explicit feedback.");
+                    cumulativeResult = cumulativeResult.merge(new ActionExecutionResult(Map.of(
+                            "agentFeedback", List.of(Map.of(
+                                    "stage", "execute",
+                                    "message", "Runtime failure is still present. Do not STOP yet. Request context or apply a concrete fix in test code."
+                            )))));
+                    continue;
+                }
+                logger.warn("[EXECUTION_REASONING] Agent returned STOP for method "
+                        + snippet.methodName()
+                        + ". Keeping current test state and not regenerating.");
+                break;
+            }
+
+            if ("REQUEST_CONTEXT".equals(decision)) {
+                ToolAction toolAction = response.toToolAction();
+                logExecutionReasoningToolAction("REQUEST_CONTEXT", snippet.methodName(), toolAction);
+                ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
+                cumulativeResult = cumulativeResult.merge(iterationResult);
+                applyMemoryUpdates(memory, response, iterationResult);
+                memory.setState(AgentState.S2_1_NEED_MORE_CONTEXT);
+                logExecutionReasoningActionResult("REQUEST_CONTEXT", snippet.methodName(), iterationResult);
+                memory.decrementContextBudget();
+                if (memory.getContextRequestBudgetRemaining() <= 0) {
+                    logger.warn("[EXECUTION_REASONING] Context budget exhausted for method "
+                            + snippet.methodName()
+                            + ". Keeping current test state and not regenerating.");
+                    break;
+                }
+                continue;
+            }
+
+            if ("MARK_FALSE_DEPENDENCY".equals(decision)) {
+                applyMemoryUpdates(memory, response, ActionExecutionResult.empty());
+                memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
+                logger.info("[EXECUTION_REASONING] Marked dependency as false/missing for method " + snippet.methodName());
+                continue;
+            }
+
+            if (!"APPLY_FIX".equals(decision)) {
+                logger.warn("[EXECUTION_REASONING] Unsupported decision "
+                        + decision
+                        + " for method "
+                        + snippet.methodName()
+                        + ". Stopping execution reasoning.");
+                break;
+            }
+
+            ToolAction toolAction = response.toToolAction();
+            logExecutionReasoningToolAction("APPLY_FIX", snippet.methodName(), toolAction);
+            ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
+            cumulativeResult = cumulativeResult.merge(iterationResult);
+            applyMemoryUpdates(memory, response, iterationResult);
+            memory.setState(AgentState.S4_FIX_APPLIED);
+            logExecutionReasoningActionResult("APPLY_FIX", snippet.methodName(), iterationResult);
+            currentCompileResult = compilerInvoker.compileWithoutCache(config.getProjectPath(),
+                    classInfo.getTargetPath(),
+                    snippet.methodName());
+            logger.info("[EXECUTION_REASONING] Recompile after execution fix for "
+                    + snippet.methodName()
+                    + " -> success="
+                    + currentCompileResult.success());
+            if (!currentCompileResult.success()) {
+                try {
+                    logger.warn("[EXECUTION_REASONING] Execution fix caused compilation failure for "
+                            + snippet.methodName()
+                            + ". Trying compile-fix loop before regeneration.");
+                    currentCompileResult = fixingOrchestrator.runFixingLoop();
+                } catch (FixingFailureException exception) {
+                    logger.error("Compilation fixing loop failed during execution repair: " + exception.getMessage(), exception);
+                    currentCompileResult = exception.getLastResult();
+                }
+                if (currentCompileResult == null || !currentCompileResult.success()) {
+                    return new ExecutionRepairResult(false,
+                            true,
+                            currentCompileResult,
+                            currentExecuteResult,
+                            currentFailureParseResult,
+                            currentReportFailures,
+                            cumulativeResult);
+                }
+                logger.info("[EXECUTION_REASONING] Compilation recovered after execution fix for " + snippet.methodName());
+            }
+
+            currentExecuteResult = executionInvoker.execute(config.getProjectPath(),
+                    classInfo.getTargetPath(),
+                    snippet.methodName());
+            logger.info("[EXECUTION_REASONING] Reran test after fix for "
+                    + snippet.methodName()
+                    + " -> success="
+                    + currentExecuteResult.success());
+            if (currentExecuteResult.success()) {
+                logger.info("[EXECUTION_REASONING] Execution fixed successfully for method " + snippet.methodName());
+                return new ExecutionRepairResult(true,
+                        false,
+                        currentCompileResult,
+                        currentExecuteResult,
+                        new ExecutionFailureParseResult(List.of(), Optional.empty()),
+                        List.of(),
+                        cumulativeResult);
+            }
+
+            currentFailureParseResult = parseExecutionLog(currentExecuteResult);
+            currentReportFailures = parseExecutionReport(config.getProjectPath(), currentFailureParseResult);
+            cumulativeResult = cumulativeResult.merge(executionFailureContextCollector.collect(config.getProjectPath(),
+                    classInfo,
+                    methodInfo,
+                    analysisSummary,
+                    currentExecuteResult,
+                    currentFailureParseResult,
+                    currentReportFailures));
+            memory.setState(AgentState.S2_2_EXECUTION_FAILED);
+            logger.warn("[EXECUTION_REASONING] Test is still failing at runtime for method "
+                    + snippet.methodName()
+                    + ". Continuing execution reasoning without regeneration.");
+        }
+
+        return new ExecutionRepairResult(false,
+                false,
+                currentCompileResult,
+                currentExecuteResult,
+                currentFailureParseResult,
+                currentReportFailures,
+                cumulativeResult);
+    }
+
+    private ReasoningResponse triggerReasoningWorkflow(AgentConfig config,
+                                                       TestClassInfo classInfo,
+                                                       TestMethodInfo methodInfo,
+                                                       String generatedMethodName,
+                                                       CompileResult compileResult,
+                                                       ExecuteResult executeResult,
+                                                       ActionExecutionResult actionResult,
+                                                       ReasoningMemory memory,
+                                                       ExecutionFailureParseResult failureParseResult,
+                                                       List<TestReportFailure> reportFailures) {
+        try {
+            boolean compileFailure = compileResult != null && !compileResult.success();
+            CompilationErrorInfo errorInfo = compileFailure
+                    ? buildCompilationErrorInfo(compileResult, classInfo)
+                    : buildExecutionErrorInfo(executeResult, classInfo, methodInfo, failureParseResult, reportFailures);
+            ProjectContextSummary summary = buildProjectContextSummary(config, classInfo);
+            com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport = compileFailure
+                    ? new CompilationErrorClassifier().classify(compileResult.stderr())
+                    : null;
+            ReasoningLoopContext loopContext = new NextContextBuilder()
+                    .build(errorInfo, summary, actionResult, errorReport, memory);
+            return invokeExecutionReasoning(config.getProjectPath(), generatedMethodName, loopContext);
+        } catch (Exception exception) {
+            logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
+                    + ": " + exception.getMessage(), exception);
+            return null;
+        }
+    }
+
+    private ReasoningResponse invokeExecutionReasoning(Path projectRoot,
+                                                       String generatedMethodName,
+                                                       ReasoningLoopContext loopContext) {
+        CompilationReasoningPromptBuilder promptBuilder = new CompilationReasoningPromptBuilder();
+        ReasoningResponseParser responseParser = new ReasoningResponseParser();
+        String basePrompt = promptBuilder.buildPrompt(loopContext)
+                + System.lineSeparator()
+                + System.lineSeparator()
+                + "Execution-only constraint:"
+                + System.lineSeparator()
+                + "- Do not give up while the failure is a runtime test failure and test-side fixes are still possible."
+                + System.lineSeparator()
+                + "- Prefer REQUEST_CONTEXT or APPLY_FIX over STOP."
+                + System.lineSeparator()
+                + "- Return JSON only.";
+        TestClassInfo placeholderClass = new TestClassInfo(
+                "ExecutionReasoningPlaceholder",
+                "ExecutionReasoningPlaceholderTest",
+                Path.of("."),
+                List.of(),
+                List.of()
+        );
+        TestMethodInfo placeholderMethod = new TestMethodInfo("reason()", "void", "");
+        MockPlan emptyPlan = new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of());
+
+        String prompt = basePrompt;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            Path promptFile = writeExecutionReasoningArtifact(projectRoot, generatedMethodName, attempt, "prompt", prompt);
+            logger.info("[EXECUTION_REASONING] Stage=SEND_TO_GIGACHAT method="
+                    + generatedMethodName
+                    + ", attempt="
+                    + attempt
+                    + ", promptFile="
+                    + describeArtifactPath(promptFile));
+            logger.info("[EXECUTION_REASONING] LLM prompt attempt " + attempt + ":\n" + prompt);
+            GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, placeholderClass, placeholderMethod, emptyPlan);
+            String raw = snippet == null ? "" : snippet.methodBody();
+            Path responseFile = writeExecutionReasoningArtifact(projectRoot, generatedMethodName, attempt, "response", raw);
+            logger.info("[EXECUTION_REASONING] Stage=RECEIVE_FROM_GIGACHAT method="
+                    + generatedMethodName
+                    + ", attempt="
+                    + attempt
+                    + ", responseFile="
+                    + describeArtifactPath(responseFile)
+                    + ", responseLength="
+                    + raw.length());
+            logger.info("[EXECUTION_REASONING] LLM raw response attempt " + attempt + ":\n" + raw);
+            try {
+                logger.info("[EXECUTION_REASONING] Stage=PARSE_GIGACHAT_RESPONSE method="
+                        + generatedMethodName
+                        + ", attempt="
+                        + attempt);
+                ReasoningResponse parsed = responseParser.parseStrict(raw);
+                logger.info("[EXECUTION_REASONING] Parsed LLM response attempt "
+                        + attempt
+                        + ": decision="
+                        + parsed.getDecision()
+                        + ", actions="
+                        + (parsed.getActions() == null ? 0 : parsed.getActions().size()));
+                return parsed;
+            } catch (RuntimeException exception) {
+                logger.warn("[EXECUTION_REASONING] Failed to parse LLM response on attempt "
+                        + attempt
+                        + ": "
+                        + exception.getMessage());
+                if (attempt == 3) {
+                    break;
+                }
+                prompt = buildExecutionReasoningRetryPrompt(basePrompt, raw, exception.getMessage(), attempt + 1);
+            }
+        }
+
+        ReasoningResponse response = new ReasoningResponse();
+        response.setDecision("STOP");
+        response.setActions(List.of());
+        logger.warn("[EXECUTION_REASONING] Falling back to STOP after exhausting execution-only LLM retries.");
+        return response;
+    }
+
+    private String buildExecutionReasoningRetryPrompt(String basePrompt,
+                                                      String rawResponse,
+                                                      String failureReason,
+                                                      int nextAttempt) {
+        return basePrompt
+                + System.lineSeparator()
+                + System.lineSeparator()
+                + "Previous response was invalid."
+                + System.lineSeparator()
+                + "Reason: "
+                + failureReason
+                + System.lineSeparator()
+                + "Invalid response:"
+                + System.lineSeparator()
+                + rawResponse
+                + System.lineSeparator()
+                + "Retry attempt "
+                + nextAttempt
+                + ": return ONLY valid JSON matching the required schema.";
+    }
+
+    private CompilationErrorInfo buildCompilationErrorInfo(CompileResult compileResult, TestClassInfo classInfo) {
+        String primaryMessage = compileResult.messages().isEmpty()
+                ? compileResult.stderr()
+                : compileResult.messages().get(0);
+        String compilerOutput = (compileResult.stdout() + System.lineSeparator() + compileResult.stderr()).trim();
+        if (compilerOutput.isBlank()) {
+            compilerOutput = String.join(System.lineSeparator(), compileResult.messages());
+        }
+        return new CompilationErrorInfo(
+                compilerOutput,
+                primaryMessage,
+                classInfo.getTestClassName(),
+                classInfo.getTargetPath().toString(),
+                null,
+                null
+        );
+    }
+
+    private CompilationErrorInfo buildExecutionErrorInfo(ExecuteResult executeResult,
+                                                         TestClassInfo classInfo,
+                                                         TestMethodInfo methodInfo,
+                                                         ExecutionFailureParseResult failureParseResult,
+                                                         List<TestReportFailure> reportFailures) {
+        TestReportFailure primaryFailure = reportFailures == null || reportFailures.isEmpty()
+                ? null
+                : reportFailures.get(0);
+        String primaryMessage = executeResult.failedTests().isEmpty()
+                ? executeResult.stderr()
+                : executeResult.failedTests().get(0);
+        if (primaryFailure != null && !primaryFailure.message().isBlank()) {
+            primaryMessage = primaryFailure.message();
+        }
+        String output = (executeResult.stdout() + System.lineSeparator() + executeResult.stderr()).trim();
+        if (output.isBlank()) {
+            output = "Execution failed for " + methodInfo.getSignature();
+        }
+        if (failureParseResult != null && !failureParseResult.failures().isEmpty()) {
+            output = output + System.lineSeparator()
+                    + "Parsed failing tests: "
+                    + failureParseResult.failures().stream()
+                    .map(failure -> failure.className() + "." + failure.methodName())
+                    .reduce((left, right) -> left + ", " + right)
+                    .orElse("");
+        }
+        String stackTrace = primaryFailure == null || primaryFailure.stackTrace().isEmpty()
+                ? null
+                : String.join(System.lineSeparator(), primaryFailure.stackTrace());
+        return new CompilationErrorInfo(
+                output,
+                primaryMessage,
+                classInfo.getTestClassName(),
+                classInfo.getTargetPath().toString(),
+                null,
+                stackTrace
+        );
+    }
+
+    private ProjectContextSummary buildProjectContextSummary(AgentConfig config, TestClassInfo classInfo) {
+        Path projectRoot = config.getProjectPath();
+        Path testDirectory = classInfo.getTargetPath().getParent();
+        ProjectContextSummary summary = new ProjectContextCollector(projectRoot).collect();
+        if (testDirectory != null && !summary.getTestSourceRoots().contains(testDirectory.toString())) {
+            LinkedHashSet<String> testRoots = new LinkedHashSet<>(summary.getTestSourceRoots());
+            testRoots.add(testDirectory.toString());
+            summary.setTestSourceRoots(List.copyOf(testRoots));
+        }
+        return summary;
+    }
+
+    private void logReasoningResponse(String stage, ReasoningResponse response) {
+        if (response == null) {
+            logger.warn("Reasoning workflow returned no response for " + stage + " failure.");
+            return;
+        }
+        logger.info("Reasoning workflow result for "
+                + stage
+                + " failure: decision="
+                + response.getDecision()
+                + ", actions="
+                + summariseReasoningActions(response)
+                + ", memoryUpdates="
+                + summariseMemoryUpdates(response));
+    }
+
+    private void applyMemoryUpdates(ReasoningMemory memory,
+                                    ReasoningResponse response,
+                                    ActionExecutionResult actionResult) {
+        if (memory == null || response == null) {
+            return;
+        }
+        memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
+                response.getMemoryUpdates().getAppliedFixSignatures(),
+                mergeContextCache(response.getMemoryUpdates().getContextCache(), extractContextCache(actionResult)));
+    }
+
+    private Map<String, String> mergeContextCache(Map<String, String> declaredUpdates,
+                                                  Map<String, String> executionUpdates) {
+        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
+        if (declaredUpdates != null) {
+            merged.putAll(declaredUpdates);
+        }
+        if (executionUpdates != null) {
+            merged.putAll(executionUpdates);
+        }
+        return merged;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> extractContextCache(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return Map.of();
+        }
+        Object updates = result.getInformation().get("contextCacheUpdates");
+        if (updates instanceof Map<?, ?> map) {
+            LinkedHashMap<String, String> converted = new LinkedHashMap<>();
+            map.forEach((key, value) -> {
+                if (key != null && value != null) {
+                    converted.put(key.toString(), value.toString());
+                }
+            });
+            return converted;
+        }
+        return Map.of();
+    }
+
+    private String deriveExecutionErrorSignature(ExecuteResult executeResult,
+                                                List<TestReportFailure> reportFailures) {
+        if (reportFailures != null && !reportFailures.isEmpty()) {
+            TestReportFailure failure = reportFailures.get(0);
+            return failure.className() + "|" + failure.methodName() + "|" + failure.message();
+        }
+        if (executeResult == null) {
+            return "execute|unknown";
+        }
+        String failedTest = executeResult.failedTests().isEmpty()
+                ? "unknown"
+                : executeResult.failedTests().get(0);
+        return failedTest + "|" + executeResult.stderr();
+    }
+
+    private void logExecutionReasoningStart(String methodName,
+                                            ExecuteResult executeResult,
+                                            ActionExecutionResult cumulativeResult) {
+        logger.info("[EXECUTION_REASONING] Starting execution reasoning for method " + methodName);
+        if (executeResult != null) {
+            logger.info("[EXECUTION_REASONING] Initial runtime failure summary for "
+                    + methodName
+                    + ": failedTests="
+                    + executeResult.failedTests());
+        }
+        if (cumulativeResult != null && !cumulativeResult.getInformation().isEmpty()) {
+            logger.info("[EXECUTION_REASONING] Collected execution context keys for "
+                    + methodName
+                    + ": "
+                    + cumulativeResult.getInformation().keySet());
+        }
+    }
+
+    private void logExecutionReasoningDecision(String methodName, ReasoningResponse response) {
+        if (response == null) {
+            logger.warn("[EXECUTION_REASONING] No reasoning response for method " + methodName);
+            return;
+        }
+        logger.info("[EXECUTION_REASONING] Decision for "
+                + methodName
+                + ": "
+                + response.getDecision()
+                + "; actions="
+                + summariseReasoningActions(response));
+    }
+
+    private void logExecutionReasoningActionResult(String phase,
+                                                   String methodName,
+                                                   ActionExecutionResult result) {
+        if (result == null) {
+            logger.info("[EXECUTION_REASONING] " + phase + " for " + methodName + " produced no action result.");
+            return;
+        }
+        logger.info("[EXECUTION_REASONING] "
+                + phase
+                + " for "
+                + methodName
+                + " -> performedActions="
+                + result.getPerformedActions()
+                + ", infoKeys="
+                + result.getInformation().keySet());
+    }
+
+    private void logExecutionReasoningToolAction(String phase,
+                                                 String methodName,
+                                                 ToolAction toolAction) {
+        if (toolAction == null) {
+            logger.warn("[EXECUTION_REASONING] "
+                    + phase
+                    + " for "
+                    + methodName
+                    + " did not include executable tool actions.");
+            return;
+        }
+        logger.info("[EXECUTION_REASONING] "
+                + phase
+                + " tool action for "
+                + methodName
+                + ": "
+                + toolAction);
+    }
+
+    private String summariseReasoningActions(ReasoningResponse response) {
+        if (response == null || response.getActions() == null || response.getActions().isEmpty()) {
+            return "[]";
+        }
+        return response.getActions().stream()
+                .map(action -> {
+                    String type = action.getType() == null ? "UNKNOWN" : action.getType();
+                    Map<String, Object> args = action.getArgs() == null ? Map.of() : action.getArgs();
+                    return type + args;
+                })
+                .reduce((left, right) -> left + ", " + right)
+                .map(value -> "[" + value + "]")
+                .orElse("[]");
+    }
+
+    private String summariseMemoryUpdates(ReasoningResponse response) {
+        if (response == null) {
+            return "{}";
+        }
+        ReasoningResponse.MemoryUpdate updates = response.getMemoryUpdates();
+        return "{knownMissingSymbols="
+                + updates.getKnownMissingSymbols()
+                + ", appliedFixSignatures="
+                + updates.getAppliedFixSignatures()
+                + ", contextCacheKeys="
+                + updates.getContextCache().keySet()
+                + "}";
+    }
+
+    private Path writeExecutionReasoningArtifact(Path projectRoot,
+                                                 String generatedMethodName,
+                                                 int attempt,
+                                                 String suffix,
+                                                 String content) {
+        Path artifactDir = projectRoot.resolve(".agent").resolve("logs").resolve("execution-reasoning");
+        try {
+            Files.createDirectories(artifactDir);
+            Path artifact = artifactDir.resolve(sanitizeExecutionArtifactName(generatedMethodName)
+                    + "-attempt-"
+                    + attempt
+                    + "."
+                    + suffix
+                    + ".txt");
+            Files.writeString(artifact,
+                    content == null ? "" : content,
+                    StandardCharsets.UTF_8);
+            return artifact.toAbsolutePath().normalize();
+        } catch (IOException exception) {
+            logger.warn("[EXECUTION_REASONING] Failed to persist "
+                    + suffix
+                    + " artifact for "
+                    + generatedMethodName
+                    + " attempt "
+                    + attempt
+                    + ": "
+                    + exception.getMessage());
+            return null;
+        }
+    }
+
+    private String sanitizeExecutionArtifactName(String value) {
+        String candidate = value == null || value.isBlank() ? "unknown-method" : value;
+        return candidate.replaceAll("[^A-Za-z0-9._-]+", "_");
+    }
+
+    private String describeArtifactPath(Path artifact) {
+        return artifact == null ? "unavailable" : artifact.toString();
     }
 
     private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
@@ -937,5 +1662,14 @@ public class InitialGenerationStep {
             }
         }
         return false;
+    }
+
+    private record ExecutionRepairResult(boolean success,
+                                         boolean shouldRegenerate,
+                                         CompileResult compileResult,
+                                         ExecuteResult executeResult,
+                                         ExecutionFailureParseResult failureParseResult,
+                                         List<TestReportFailure> reportFailures,
+                                         ActionExecutionResult actionExecutionResult) {
     }
 }

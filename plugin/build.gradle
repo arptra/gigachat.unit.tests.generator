@@ -1,0 +1,19 @@
+plugins {
+    id 'groovy'
+    id 'java-gradle-plugin'
+}
+
+dependencies {
+    implementation project(':entrypoint')
+    implementation localGroovy()
+}
+
+gradlePlugin {
+    plugins {
+        gigachatGenerator {
+            id = 'com.gigachat.unit.tests.generator.plugin'
+            implementationClass = 'com.gigachat.unit.tests.generator.plugin.GigaChatGeneratorPlugin'
+        }
+    }
+}
+
