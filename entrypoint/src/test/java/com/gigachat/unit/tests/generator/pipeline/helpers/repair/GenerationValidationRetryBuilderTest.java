@@ -206,6 +206,56 @@ class GenerationValidationRetryBuilderTest {
     }
 
     @Test
+    void shouldForbidExactConstructorShapesWhenSignatureTypeHasNoConstructors() {
+        GenerationValidationRetryBuilder builder = new GenerationValidationRetryBuilder(
+                new PipelineLogger(tempDir),
+                new GenerationPatternCatalog(),
+                new StateModelCatalog(),
+                summary -> List.of());
+        Analyze.AnalysisSummary summary = new Analyze.AnalysisSummary(
+                new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of()),
+                null,
+                "",
+                Map.of(),
+                new Analyze.TestTargetContext("mtd.abonent.NEW_AUTO", "o", true, false),
+                false,
+                List.of(),
+                Set.of(),
+                Set.of(),
+                Map.of("NEW_AUTO", List.of(new ConstructorMetadata("NEW_AUTO()", List.of()))),
+                Map.of(
+                        "NEW_AUTO", List.of("void NEW_AUTO_VALIDATE(Ref THIS, Varchar2 PLP$CLASS)"),
+                        "Varchar2", List.of("Varchar2 of(String value)"),
+                        "Ref", List.of("Ref create()")
+                ),
+                Set.of("Ref", "Varchar2"),
+                Set.of());
+        GeneratedTestSnippet snippet = new GeneratedTestSnippet(
+                "NEW_AUTOTest",
+                "shouldRetry",
+                """
+                        @Test
+                        void shouldRetry() {
+                            Ref ref = new bd.Abonent.Ref();
+                            Varchar2 plpClass = new Varchar2("ABONENT");
+                            o.NEW_AUTO_VALIDATE(ref, plpClass);
+                        }
+                        """,
+                List.of());
+
+        JSONObject retryContext = builder.buildRetryContext(new JSONObject().put("goal", "repair"),
+                new InvalidLLMResponseException("E104: Missing constructor metadata for Ref(); E104: Missing constructor metadata for Varchar2(\"ABONENT\")"),
+                summary,
+                snippet);
+
+        String retryText = retryContext.getJSONArray("retryConstraints").toString();
+        assertTrue(retryText.contains("Do not call new bd.Abonent.Ref"));
+        assertTrue(retryText.contains("Do not call new Varchar2"));
+        assertTrue(retryText.contains("Varchar2 of(String value)"));
+        assertTrue(retryText.contains("Ref create()"));
+    }
+
+    @Test
     void shouldAttachFixtureReuseStateModelForLifecycleRedefinition() {
         GenerationValidationRetryBuilder builder = new GenerationValidationRetryBuilder(
                 new PipelineLogger(tempDir),

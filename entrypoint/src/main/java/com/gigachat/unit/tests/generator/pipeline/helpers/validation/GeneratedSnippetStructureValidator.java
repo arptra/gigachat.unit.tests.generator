@@ -21,10 +21,12 @@ import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.MethodReferenceExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.NullLiteralExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.ThisExpr;
+import com.github.javaparser.ast.expr.TypeExpr;
 
 import java.nio.file.Path;
 import java.nio.file.Files;
@@ -360,7 +362,9 @@ final class GeneratedSnippetStructureValidator {
             return;
         }
         boolean invokesTarget = compilationUnit.findAll(MethodCallExpr.class).stream()
-                .anyMatch(expr -> callsExpectedTarget(expr, targetContext, expectedMethodName));
+                .anyMatch(expr -> callsExpectedTarget(expr, targetContext, expectedMethodName))
+                || compilationUnit.findAll(MethodReferenceExpr.class).stream()
+                .anyMatch(expr -> referencesExpectedTarget(expr, targetContext, expectedMethodName));
         if (invokesTarget) {
             return;
         }
@@ -683,6 +687,35 @@ final class GeneratedSnippetStructureValidator {
             return false;
         }
         Expression scopedExpression = scope.get();
+        if (scopedExpression instanceof NameExpr nameExpr) {
+            return ValidationSupport.normalise(targetContext.instanceName()).equals(ValidationSupport.normalise(nameExpr.getNameAsString()));
+        }
+        if (scopedExpression instanceof FieldAccessExpr fieldAccessExpr && fieldAccessExpr.getScope() instanceof ThisExpr) {
+            return ValidationSupport.normalise(targetContext.instanceName()).equals(ValidationSupport.normalise(fieldAccessExpr.getNameAsString()));
+        }
+        if (scopedExpression instanceof ObjectCreationExpr objectCreationExpr) {
+            return targetClass.equals(ValidationSupport.simpleName(objectCreationExpr.getType().asString()));
+        }
+        return false;
+    }
+
+    private boolean referencesExpectedTarget(MethodReferenceExpr expression,
+                                             Analyze.TestTargetContext targetContext,
+                                             String expectedMethodName) {
+        if (expression == null || targetContext == null || expectedMethodName == null) {
+            return false;
+        }
+        if (!expectedMethodName.equals(expression.getIdentifier())) {
+            return false;
+        }
+        Expression scopedExpression = expression.getScope();
+        String targetClass = ValidationSupport.simpleName(targetContext.className());
+        if (targetContext.isStatic()) {
+            return targetClass.equals(ValidationSupport.simpleName(scopedExpression.toString()));
+        }
+        if (scopedExpression instanceof TypeExpr typeExpr) {
+            return ValidationSupport.normalise(targetContext.instanceName()).equals(ValidationSupport.normalise(typeExpr.getType().asString()));
+        }
         if (scopedExpression instanceof NameExpr nameExpr) {
             return ValidationSupport.normalise(targetContext.instanceName()).equals(ValidationSupport.normalise(nameExpr.getNameAsString()));
         }

@@ -15,6 +15,8 @@ Use only methods listed in "availableMethods".
 The tested method itself is allowed even when it is static and absent from availableMethods; invoke exactly the method described by methodSignature on the target class.
 When mocking or instantiating objects, use only constructors and methods provided in the JSON context.
 If you must create an object, use a constructor from "availableConstructors"; if none fit, skip that instance.
+If "availableConstructors" lists a type as an empty array, treat that type as non-instantiable: do not call new Type(...), Type(), or a qualified nested constructor for it.
+For non-instantiable method parameter value objects, prefer listed public factory-like methods from "availableMethods" such as of(...), valueOf(...), from(...), or create(...); otherwise pass null only for a source branch that explicitly accepts null.
 If a referenced type has no listed no-arg constructor, never use Type() for that type, even after fixing imports or package names.
 When a domain object's state must change, prefer listed public mutators such as activate(), deactivate(), incrementAttempts(), or markLoggedIn() instead of guessed setters like setActive(...) or setLoginAttempts(...).
 If a constructor already establishes default state, never assert the opposite default before invoking the target method; call a listed public mutator first to reach that precondition.

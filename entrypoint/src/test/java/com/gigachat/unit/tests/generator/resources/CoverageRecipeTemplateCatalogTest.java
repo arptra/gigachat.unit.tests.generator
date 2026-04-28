@@ -178,6 +178,21 @@ class CoverageRecipeTemplateCatalogTest {
     }
 
     @Test
+    void shouldRenderLegacyValidateNullBranchCoverageRecipeTemplate() {
+        CoverageRecipeTemplateCatalog catalog = new CoverageRecipeTemplateCatalog();
+
+        Map<String, Object> recipe = catalog.render("ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST", Map.of(
+                "targetMethodUpper", "NEW_AUTO_VALIDATE",
+                "targetMethodSimple", "NEW_AUTO_VALIDATE",
+                "methodSource", "@Test void shouldValidateCoverageVariant2() {}",
+                "requiredImports", List.of("static org.assertj.core.api.Assertions.assertThat")
+        ));
+
+        assertEquals("ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST_NEW_AUTO_VALIDATE", recipe.get("id"));
+        assertEquals("ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST", recipe.get("kind"));
+    }
+
+    @Test
     void shouldRenderExceptionGuardCoverageRecipeTemplate() {
         CoverageRecipeTemplateCatalog catalog = new CoverageRecipeTemplateCatalog();
 

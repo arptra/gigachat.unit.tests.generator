@@ -557,6 +557,62 @@ class DeterministicCoverageRecipeBuilderTest {
     }
 
     @Test
+    void shouldBuildLegacyValidateNullBranchRecipeForVarchar2FactoryValues() throws Exception {
+        Path testFile = tempDir.resolve("src/test/java/com/example/app/video/LegacyVideoAutoTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package com.example.app.video;
+
+                import org.junit.jupiter.api.BeforeEach;
+                import org.junit.jupiter.api.Test;
+                import static org.assertj.core.api.Assertions.assertThat;
+
+                class LegacyVideoAutoTest {
+                    private LegacyVideoAuto auto;
+
+                    @BeforeEach
+                    void setUp() {
+                        auto = new LegacyVideoAuto();
+                    }
+
+                    @Test
+                    void shouldLockWhenMessageAndInfoAreNullOrEmpty() {
+                        var ref = LegacyVideoRef.create();
+                        var clazz = LegacyVideoVarchar2.of("CLASS");
+                        var message = LegacyVideoVarchar2.of("");
+                        var info = LegacyVideoVarchar2.of("");
+
+                        auto.NEW_AUTO_VALIDATE(ref, clazz, message, info);
+
+                        assertThat(ref.isLocked()).isTrue();
+                    }
+                }
+                """);
+
+        DeterministicCoverageRecipeBuilder builder = new DeterministicCoverageRecipeBuilder();
+        List<Map<String, Object>> recipes = builder.build(
+                testFile,
+                "shouldLockWhenMessageAndInfoAreNullOrEmpty",
+                new CoverageResult(true,
+                        true,
+                        new CoverageSummary("LegacyVideoAuto", "NEW_AUTO_VALIDATE", 5, 0, 8, 6),
+                        tempDir.resolve("jacoco.xml"),
+                        "",
+                        ""),
+                80);
+
+        assertEquals(1, recipes.size());
+        assertEquals("ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST_NEW_AUTO_VALIDATE", recipes.get(0).get("id"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>) recipes.get(0).get("operations");
+        String methodSource = operations.get(0).get("methodSource").toString();
+        assertTrue(methodSource.contains("auto.NEW_AUTO_VALIDATE(null, nonAbonentClass, message, info);"));
+        assertTrue(methodSource.contains("auto.NEW_AUTO_VALIDATE(ref, nonAbonentClass, null, null);"));
+        assertTrue(methodSource.contains("assertThat(ref.isLocked()).isTrue();"));
+        assertFalse(methodSource.contains("assertThrows"));
+    }
+
+    @Test
     void shouldBuildStateToggleBooleanSiblingForNoArgBooleanMutator() throws Exception {
         Path testFile = tempDir.resolve("src/test/java/com/example/app/model/UserTest.java");
         Files.createDirectories(testFile.getParent());

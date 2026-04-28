@@ -176,6 +176,15 @@ public class DeterministicCoverageRecipeBuilder {
                 return List.of(sourceDerivedReturnBranchRecipe);
             }
 
+            Map<String, Object> legacyValidateNullBranchRecipe = buildLegacyValidateNullBranchRecipe(
+                    baselineMethod,
+                    usedNames,
+                    targetMethod,
+                    goalPercent);
+            if (legacyValidateNullBranchRecipe != null && !legacyValidateNullBranchRecipe.isEmpty()) {
+                return List.of(legacyValidateNullBranchRecipe);
+            }
+
             Map<String, Object> stateToggleBooleanBranchRecipe = buildStateToggleBooleanBranchRecipe(
                     baselineMethod,
                     usedNames,
@@ -474,6 +483,62 @@ public class DeterministicCoverageRecipeBuilder {
                 goalPercent);
     }
 
+    private Map<String, Object> buildLegacyValidateNullBranchRecipe(MethodDeclaration baselineMethod,
+                                                                    LinkedHashSet<String> usedNames,
+                                                                    String targetMethod,
+                                                                    int goalPercent) {
+        if (!"NEW_AUTO_VALIDATE".equals(targetMethod) || baselineMethod == null || baselineMethod.getBody().isEmpty()) {
+            return null;
+        }
+        BlockStmt body = baselineMethod.getBody().orElse(null);
+        int actIndex = body == null ? -1 : findActStatementIndex(body, targetMethod);
+        if (actIndex < 0) {
+            return null;
+        }
+        MethodCallExpr targetCall = findTargetMethodCall(body.getStatement(actIndex), targetMethod);
+        if (targetCall == null || targetCall.getArguments().size() < 4 || targetCall.getScope().isEmpty()) {
+            return null;
+        }
+        VariableDeclarator thisVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(0));
+        VariableDeclarator classVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(1));
+        VariableDeclarator messageVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(2));
+        VariableDeclarator infoVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(3));
+        if (thisVariable == null || classVariable == null || messageVariable == null || infoVariable == null) {
+            return null;
+        }
+        String refFactory = initializerSource(thisVariable);
+        String classNonAbonentFactory = factoryExpressionWithString(classVariable, "CLASS");
+        String messageFactory = factoryExpressionWithString(messageVariable, "MESSAGE");
+        String infoFactory = factoryExpressionWithString(infoVariable, "INFO");
+        if (refFactory == null || classNonAbonentFactory == null || messageFactory == null || infoFactory == null) {
+            return null;
+        }
+        if (!baselineMethod.toString().contains(".isLocked()")) {
+            return null;
+        }
+        String methodName = resolveUniqueVariantName(usedNames, baselineMethod.getNameAsString());
+        String sutExpression = targetCall.getScope().map(Expression::toString).orElse("");
+        String methodSource = String.join("\n",
+                "    @Test",
+                "    void " + methodName + "() {",
+                "        " + classVariable.getType() + " nonAbonentClass = " + classNonAbonentFactory + ";",
+                "        " + messageVariable.getType() + " message = " + messageFactory + ";",
+                "        " + infoVariable.getType() + " info = " + infoFactory + ";",
+                "        " + sutExpression + "." + targetMethod + "(null, nonAbonentClass, message, info);",
+                "",
+                "        " + thisVariable.getType() + " ref = " + refFactory + ";",
+                "        " + sutExpression + "." + targetMethod + "(ref, nonAbonentClass, null, null);",
+                "",
+                "        assertThat(ref.isLocked()).isTrue();",
+                "    }");
+        return renderRecipe(
+                "ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST",
+                methodSource,
+                targetMethod,
+                goalPercent,
+                List.of("static org.assertj.core.api.Assertions.assertThat"));
+    }
+
     private Map<String, Object> buildNullGuardRecipe(MethodDeclaration baselineMethod,
                                                      LinkedHashSet<String> usedNames,
                                                      String targetMethod,
@@ -591,10 +656,18 @@ public class DeterministicCoverageRecipeBuilder {
                                              String targetMethod,
                                              int goalPercent,
                                              List<String> requiredImports) {
+        return renderRecipe(templateId, renderMethod(siblingVariant), targetMethod, goalPercent, requiredImports);
+    }
+
+    private Map<String, Object> renderRecipe(String templateId,
+                                             String methodSource,
+                                             String targetMethod,
+                                             int goalPercent,
+                                             List<String> requiredImports) {
         return RECIPE_TEMPLATES.render(templateId, Map.of(
                 "targetMethodUpper", sanitizeUpper(targetMethod),
                 "targetMethodSimple", targetMethod,
-                "methodSource", renderMethod(siblingVariant),
+                "methodSource", methodSource,
                 "requiredImports", requiredImports == null ? List.of() : List.copyOf(requiredImports),
                 "goalPercent", goalPercent
         ));
@@ -671,6 +744,42 @@ public class DeterministicCoverageRecipeBuilder {
         return expression == null || expression.isBlank()
                 ? null
                 : StaticJavaParser.parseExpression(expression);
+    }
+
+    private VariableDeclarator findVariableDeclaration(MethodDeclaration method, Expression expression) {
+        if (method == null || !(expression instanceof NameExpr nameExpr)) {
+            return null;
+        }
+        String variableName = nameExpr.getNameAsString();
+        return method.findAll(VariableDeclarator.class).stream()
+                .filter(variable -> variableName.equals(variable.getNameAsString()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String initializerSource(VariableDeclarator variable) {
+        if (variable == null || variable.getInitializer().isEmpty()) {
+            return null;
+        }
+        String source = variable.getInitializer().map(Expression::toString).orElse("");
+        return source.isBlank() ? null : source;
+    }
+
+    private String factoryExpressionWithString(VariableDeclarator variable, String value) {
+        if (variable == null || variable.getInitializer().isEmpty()) {
+            return null;
+        }
+        Expression initializer = variable.getInitializer().orElse(null);
+        if (!(initializer instanceof MethodCallExpr callExpr) || callExpr.getArguments().isEmpty()) {
+            return null;
+        }
+        String factoryName = callExpr.getNameAsString();
+        if (!Set.of("of", "valueOf", "from").contains(factoryName)) {
+            return null;
+        }
+        MethodCallExpr clone = callExpr.clone();
+        clone.setArgument(0, new StringLiteralExpr(value));
+        return clone.toString();
     }
 
     private MethodCallExpr findEmptyCollectionDriver(MethodDeclaration method) {

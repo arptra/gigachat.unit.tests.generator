@@ -191,7 +191,7 @@ public class GenerationValidationRetryBuilder {
                 case "SOURCE_DERIVED_SNIPPET_TYPE_RETRY_CONSTRAINTS" ->
                         constraints.addAll(buildSnippetTypeRetryConstraints(analysisSummary, snippet));
                 case "SOURCE_DERIVED_CONSTRUCTOR_PATH_RETRY_CONSTRAINTS" ->
-                        constraints.addAll(buildSnippetConstructorPathRetryConstraints(analysisSummary, snippet));
+                        constraints.addAll(buildSnippetConstructorPathRetryConstraints(analysisSummary, validationMessage, snippet));
                 default -> logger.warn("Unknown generation pattern dynamic constraint builder: " + builder);
             }
         }
@@ -309,8 +309,9 @@ public class GenerationValidationRetryBuilder {
     }
 
     private List<String> buildSnippetConstructorPathRetryConstraints(Analyze.AnalysisSummary analysisSummary,
+                                                                     String validationMessage,
                                                                      GeneratedTestSnippet snippet) {
-        if (analysisSummary == null || snippet == null || analysisSummary.availableConstructors() == null || analysisSummary.availableConstructors().isEmpty()) {
+        if (analysisSummary == null || snippet == null) {
             return List.of();
         }
         String source = snippet.fullClassSource();
@@ -324,12 +325,26 @@ public class GenerationValidationRetryBuilder {
         Map<String, List<String>> mockIdentifiersByType = buildMockIdentifiersByType(analysisSummary);
         LinkedHashSet<String> fallbackMockCandidates = resolveFallbackMockCandidates(analysisSummary);
         LinkedHashSet<String> constraints = new LinkedHashSet<>();
-        for (String candidateType : analysisSummary.availableConstructors().keySet()) {
+        LinkedHashSet<String> missingConstructorTypes = new LinkedHashSet<>(extractInventedTargetTypes(validationMessage));
+        LinkedHashSet<String> candidateTypes = new LinkedHashSet<>();
+        if (analysisSummary.availableConstructors() != null) {
+            candidateTypes.addAll(analysisSummary.availableConstructors().keySet());
+        }
+        if (analysisSummary.methodParameterTypes() != null) {
+            candidateTypes.addAll(analysisSummary.methodParameterTypes());
+        }
+        if (analysisSummary.methodReturnTypes() != null) {
+            candidateTypes.addAll(analysisSummary.methodReturnTypes());
+        }
+        candidateTypes.addAll(missingConstructorTypes);
+        for (String candidateType : candidateTypes) {
             String typeName = simpleName(candidateType);
-            if (typeName.isBlank() || !normalizedSource.matches("(?s).*\\b" + java.util.regex.Pattern.quote(typeName) + "\\b.*")) {
+            if (typeName.isBlank()
+                    || (!normalizedSource.matches("(?s).*\\b" + java.util.regex.Pattern.quote(typeName) + "\\b.*")
+                    && !missingConstructorTypes.contains(typeName))) {
                 continue;
             }
-            List<ConstructorMetadata> constructors = analysisSummary.availableConstructors().getOrDefault(candidateType, List.of());
+            List<ConstructorMetadata> constructors = constructorsForSimpleName(typeName, analysisSummary.availableConstructors());
             String constructorSummary = constructors.stream()
                     .filter(Objects::nonNull)
                     .map(ConstructorMetadata::signature)
@@ -337,6 +352,33 @@ public class GenerationValidationRetryBuilder {
                     .distinct()
                     .reduce((left, right) -> left + ", " + right)
                     .orElse("");
+            if (constructors.isEmpty() && (containsAnyConstruction(normalizedSource, typeName) || missingConstructorTypes.contains(typeName))) {
+                constraints.add("Type \"" + typeName + "\" has no constructors listed in availableConstructors in this context; do not call new "
+                        + typeName + "(...), " + typeName + "(), or any qualified nested constructor ending in ." + typeName + "(...).");
+                for (String expression : extractConstructorExpressions(normalizedSource, typeName)) {
+                    constraints.add("Do not call " + expression + " because that constructor is not listed in availableConstructors.");
+                }
+                for (String shape : extractMissingConstructorShapes(validationMessage, typeName)) {
+                    constraints.add("Do not repeat exact failed constructor shape: " + shape + '.');
+                }
+                List<String> methods = analysisSummary.availableMethods() == null
+                        ? List.of()
+                        : analysisSummary.availableMethods().getOrDefault(typeName, List.of());
+                List<String> factories = methods.stream()
+                        .filter(Objects::nonNull)
+                        .filter(this::looksLikeFactoryMethod)
+                        .distinct()
+                        .toList();
+                if (!factories.isEmpty()) {
+                    constraints.add("For non-instantiable type \"" + typeName
+                            + "\", use only listed factory-like public methods from availableMethods: "
+                            + String.join(", ", factories) + '.');
+                } else {
+                    constraints.add("If type \"" + typeName
+                            + "\" is a method parameter and no listed public factory can create it, pass null only for a source branch that explicitly accepts null; otherwise skip that scenario.");
+                }
+                continue;
+            }
             if (containsMissingNoArgConstruction(normalizedSource, typeName) && constructors.stream().noneMatch(this::isZeroArgConstructor)) {
                 constraints.add("Do not call " + typeName + "() because that constructor is not listed in availableConstructors."
                         + (constructorSummary.isBlank() ? "" : " Use only: " + constructorSummary + '.'));
@@ -370,9 +412,14 @@ public class GenerationValidationRetryBuilder {
         }
         LinkedHashSet<String> constraints = new LinkedHashSet<>();
         for (String typeName : typeNames) {
-            List<String> methods = analysisSummary.availableMethods().getOrDefault(typeName, List.of());
-            List<ConstructorMetadata> constructors = analysisSummary.availableConstructors().getOrDefault(typeName, List.of());
+            List<String> methods = analysisSummary.availableMethods() == null
+                    ? List.of()
+                    : analysisSummary.availableMethods().getOrDefault(typeName, List.of());
+            List<ConstructorMetadata> constructors = constructorsForSimpleName(typeName, analysisSummary.availableConstructors());
             if (methods.isEmpty() && constructors.isEmpty()) {
+                constraints.add("Type \"" + typeName
+                        + "\" has no constructors listed in availableConstructors; do not instantiate it with new "
+                        + typeName + "(...) or " + typeName + "().");
                 continue;
             }
             List<String> stateDrivers = methods.stream()
@@ -398,6 +445,18 @@ public class GenerationValidationRetryBuilder {
             if (!methods.isEmpty()) {
                 constraints.add("For type \"" + typeName + "\" use only listed public methods from availableMethods: "
                         + String.join(", ", methods) + '.');
+                if (constructors.isEmpty()) {
+                    List<String> factories = methods.stream()
+                            .filter(Objects::nonNull)
+                            .filter(this::looksLikeFactoryMethod)
+                            .distinct()
+                            .toList();
+                    if (!factories.isEmpty()) {
+                        constraints.add("Type \"" + typeName
+                                + "\" has no constructors listed in availableConstructors; create it only through listed factory-like public methods: "
+                                + String.join(", ", factories) + '.');
+                    }
+                }
             }
             if (!stateDrivers.isEmpty()) {
                 constraints.add("When driving \"" + typeName + "\" state for this fixture, use only these public state methods: "
@@ -637,15 +696,58 @@ public class GenerationValidationRetryBuilder {
     }
 
     private boolean containsAnyConstruction(String source, String typeName) {
-        return source.matches("(?s).*new\\s+" + java.util.regex.Pattern.quote(typeName) + "\\s*\\(.*");
+        return source.matches("(?s).*new\\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*"
+                + java.util.regex.Pattern.quote(typeName) + "\\s*\\(.*");
     }
 
     private boolean containsMissingNoArgConstruction(String source, String typeName) {
-        return source.matches("(?s).*new\\s+" + java.util.regex.Pattern.quote(typeName) + "\\s*\\(\\s*\\).*");
+        return source.matches("(?s).*new\\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*"
+                + java.util.regex.Pattern.quote(typeName) + "\\s*\\(\\s*\\).*");
     }
 
     private boolean containsConstructorNullLiteral(String source, String typeName) {
-        return source.matches("(?s).*new\\s+" + java.util.regex.Pattern.quote(typeName) + "\\s*\\([^)]*\\bnull\\b[^)]*\\).*");
+        return source.matches("(?s).*new\\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*"
+                + java.util.regex.Pattern.quote(typeName) + "\\s*\\([^)]*\\bnull\\b[^)]*\\).*");
+    }
+
+    private List<String> extractConstructorExpressions(String source, String typeName) {
+        if (source == null || source.isBlank() || typeName == null || typeName.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> expressions = new LinkedHashSet<>();
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("new\\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*"
+                + java.util.regex.Pattern.quote(typeName)
+                + "\\s*\\([^;\\n\\r]*\\)");
+        java.util.regex.Matcher matcher = pattern.matcher(source);
+        while (matcher.find()) {
+            expressions.add(matcher.group().trim());
+        }
+        return List.copyOf(expressions);
+    }
+
+    private List<String> extractMissingConstructorShapes(String validationMessage, String typeName) {
+        if (validationMessage == null || validationMessage.isBlank() || typeName == null || typeName.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> shapes = new LinkedHashSet<>();
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("Missing constructor metadata for\\s+([A-Za-z0-9_$.]+\\([^)]*\\))");
+        java.util.regex.Matcher matcher = pattern.matcher(validationMessage);
+        while (matcher.find()) {
+            String shape = matcher.group(1);
+            if (typeName.equals(simpleName(shape.substring(0, shape.indexOf('('))))) {
+                shapes.add(shape);
+            }
+        }
+        return List.copyOf(shapes);
+    }
+
+    private boolean looksLikeFactoryMethod(String signature) {
+        String methodName = signatureToMethodName(signature);
+        return "of".equals(methodName)
+                || "valueOf".equals(methodName)
+                || "from".equals(methodName)
+                || "create".equals(methodName)
+                || methodName.startsWith("new");
     }
 
     private String lowerCamel(String value) {

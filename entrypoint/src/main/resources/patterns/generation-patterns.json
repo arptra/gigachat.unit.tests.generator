@@ -48,6 +48,8 @@
         "If the invalid snippet encoded boolean or counter state inside a missing constructor such as User(name, email, true) or User(name, email, 3), rebuild the fixture as User(name, email) and then use listed public mutators like deactivate() or incrementAttempts().",
         "If the invalid snippet switched to a missing no-arg constructor plus guessed setters such as setUsername(...), setEmail(...), or setActive(...), replace that whole fixture path with the listed constructor and legal public mutators instead of keeping the setter-based shape.",
         "If the invalid snippet used a missing no-arg constructor such as Type(), replace that exact constructor path instead of preserving it after other import or package fixes.",
+        "If availableConstructors lists the type as [] or does not list the rejected signature type at all, treat it as non-instantiable: do not call new Type(...), Type(), or a qualified nested constructor such as new a.b.Type(...).",
+        "For non-instantiable legacy value objects, use only listed public factory-like methods from availableMethods such as of(...), valueOf(...), from(...), or create(...), or pass null only when the source branch explicitly accepts null.",
         "If a required collaborator has no legal real construction path from availableConstructors, promote it to a Mockito mock instead of inventing null-based or synthetic constructor graphs.",
         "If no listed constructor plus public methods can express the needed fixture, skip that scenario instead of guessing a new constructor."
       ],
@@ -164,6 +166,7 @@
         "Do not invent or relocate the package of an in-project type import.",
         "If a compiler or validator reports that an imported project type does not resolve, replace that import with the authoritative in-project type that has the same simple name.",
         "After correcting an import, re-check every constructor call for that type and replace unsupported paths such as Type() or new Type(null) with a listed constructor or a promoted Mockito mock when no legal real path exists.",
+        "If the import correction exposes an E104 missing-constructor failure, honor the E104 diagnosis first and rebuild or drop the invalid fixture instead of preserving the old constructor calls.",
         "Keep the existing test shape and change only the wrong import or type reference that caused the package mismatch."
       ],
       "dynamicConstraintBuilders": [

@@ -126,15 +126,33 @@ public class GenerationSnippetRequester {
             if (constructorStateFallback != null) {
                 return constructorStateFallback;
             }
-            GeneratedTestSnippet projectImportCorrectionFallback = tryProjectImportCorrectionFallback(config,
+            ProjectImportFallbackResult projectImportCorrectionFallback = tryProjectImportCorrectionFallback(config,
                     classInfo,
                     methodInfo,
                     analysisSummary,
                     moduleConfig,
                     snippet,
                     first);
-            if (projectImportCorrectionFallback != null) {
-                return projectImportCorrectionFallback;
+            if (projectImportCorrectionFallback != null && projectImportCorrectionFallback.acceptedSnippet() != null) {
+                return projectImportCorrectionFallback.acceptedSnippet();
+            }
+            InvalidLLMResponseException effectiveFirst = first;
+            GeneratedTestSnippet effectiveSnippet = snippet;
+            if (projectImportCorrectionFallback != null && projectImportCorrectionFallback.rejection() != null) {
+                GeneratedTestSnippet chainedConstructorStateFallback = tryConstructorStatePathFallback(config,
+                        classInfo,
+                        methodInfo,
+                        analysisSummary,
+                        moduleConfig,
+                        projectImportCorrectionFallback.rejectedSnippet(),
+                        projectImportCorrectionFallback.rejection());
+                if (chainedConstructorStateFallback != null) {
+                    return chainedConstructorStateFallback;
+                }
+                if (generationValidationRetryBuilder.shouldRetry(projectImportCorrectionFallback.rejection())) {
+                    effectiveFirst = projectImportCorrectionFallback.rejection();
+                    effectiveSnippet = projectImportCorrectionFallback.rejectedSnippet();
+                }
             }
             GeneratedTestSnippet staticBranchDriverFallback = tryStaticBranchDriverFallback(config,
                     classInfo,
@@ -167,21 +185,21 @@ public class GenerationSnippetRequester {
             if (firstLifecycleReuseFallback != null) {
                 return firstLifecycleReuseFallback;
             }
-            if (!generationValidationRetryBuilder.shouldRetry(first)) {
+            if (!generationValidationRetryBuilder.shouldRetry(effectiveFirst)) {
                 logger.warn("Discarding invalid generation response for method "
                         + methodInfo.getSignature()
                         + " because no bounded retry path applies ("
-                        + first.getMessage()
+                        + effectiveFirst.getMessage()
                         + ").");
                 return null;
             }
             logger.warn("Retrying generation for method " + methodInfo.getSignature()
-                    + " due to invalid response (" + first.getMessage() + ")");
-            logger.trace("RESULT", methodInfo.getSignature(), "GENERATION_VALIDATION_RETRY", "generated snippet rejected reason=" + first.getMessage());
+                    + " due to invalid response (" + effectiveFirst.getMessage() + ")");
+            logger.trace("RESULT", methodInfo.getSignature(), "GENERATION_VALIDATION_RETRY", "generated snippet rejected reason=" + effectiveFirst.getMessage());
             JSONObject retryContext = generationValidationRetryBuilder.buildRetryContext(contextJson,
-                    first,
+                    effectiveFirst,
                     analysisSummary,
-                    snippet);
+                    effectiveSnippet);
             String retryPrompt = promptBuilder.buildPromptForLLM(retryContext, config.getPromptConfig());
             logger.trace("GIGACHAT", methodInfo.getSignature(), "GENERATION_VALIDATION_RETRY", "sending validation retry prompt");
             logger.info("-> DEBUG LOG Request to gigachat \n" + retryPrompt);
@@ -214,15 +232,31 @@ public class GenerationSnippetRequester {
                 if (secondConstructorStateFallback != null) {
                     return secondConstructorStateFallback;
                 }
-                GeneratedTestSnippet secondProjectImportCorrectionFallback = tryProjectImportCorrectionFallback(config,
+                ProjectImportFallbackResult secondProjectImportCorrectionFallback = tryProjectImportCorrectionFallback(config,
                         classInfo,
                         methodInfo,
                         analysisSummary,
                         moduleConfig,
                         retrySnippet,
                         second);
-                if (secondProjectImportCorrectionFallback != null) {
-                    return secondProjectImportCorrectionFallback;
+                if (secondProjectImportCorrectionFallback != null && secondProjectImportCorrectionFallback.acceptedSnippet() != null) {
+                    return secondProjectImportCorrectionFallback.acceptedSnippet();
+                }
+                InvalidLLMResponseException effectiveSecond = second;
+                GeneratedTestSnippet effectiveRetrySnippet = retrySnippet;
+                if (secondProjectImportCorrectionFallback != null && secondProjectImportCorrectionFallback.rejection() != null) {
+                    GeneratedTestSnippet chainedConstructorStateFallback = tryConstructorStatePathFallback(config,
+                            classInfo,
+                            methodInfo,
+                            analysisSummary,
+                            moduleConfig,
+                            secondProjectImportCorrectionFallback.rejectedSnippet(),
+                            secondProjectImportCorrectionFallback.rejection());
+                    if (chainedConstructorStateFallback != null) {
+                        return chainedConstructorStateFallback;
+                    }
+                    effectiveSecond = secondProjectImportCorrectionFallback.rejection();
+                    effectiveRetrySnippet = secondProjectImportCorrectionFallback.rejectedSnippet();
                 }
                 GeneratedTestSnippet secondStaticBranchDriverFallback = tryStaticBranchDriverFallback(config,
                         classInfo,
@@ -260,17 +294,17 @@ public class GenerationSnippetRequester {
                         methodInfo,
                         analysisSummary,
                         moduleConfig,
-                        retrySnippet,
-                        second);
+                        effectiveRetrySnippet,
+                        effectiveSecond);
                 if (fallbackSnippet != null) {
                     return fallbackSnippet;
                 }
                 logger.warn("Discarding invalid retry response for method "
                         + methodInfo.getSignature()
                         + " after validation failure ("
-                        + second.getMessage()
+                        + effectiveSecond.getMessage()
                         + ").");
-                logger.trace("RESULT", methodInfo.getSignature(), AgentState.S6_GIVE_UP.name(), "validation retry also rejected reason=" + second.getMessage());
+                logger.trace("RESULT", methodInfo.getSignature(), AgentState.S6_GIVE_UP.name(), "validation retry also rejected reason=" + effectiveSecond.getMessage());
                 return null;
             }
         }
@@ -325,13 +359,13 @@ public class GenerationSnippetRequester {
         }
     }
 
-    private GeneratedTestSnippet tryProjectImportCorrectionFallback(AgentConfig config,
-                                                                    TestClassInfo classInfo,
-                                                                    TestMethodInfo methodInfo,
-                                                                    Analyze.AnalysisSummary analysisSummary,
-                                                                    PipelineModuleConfig moduleConfig,
-                                                                    GeneratedTestSnippet snippet,
-                                                                    InvalidLLMResponseException validationException) {
+    private ProjectImportFallbackResult tryProjectImportCorrectionFallback(AgentConfig config,
+                                                                          TestClassInfo classInfo,
+                                                                          TestMethodInfo methodInfo,
+                                                                          Analyze.AnalysisSummary analysisSummary,
+                                                                          PipelineModuleConfig moduleConfig,
+                                                                          GeneratedTestSnippet snippet,
+                                                                          InvalidLLMResponseException validationException) {
         if (validationException == null || validationException.getMessage() == null || !validationException.getMessage().contains("E111")) {
             return null;
         }
@@ -342,12 +376,17 @@ public class GenerationSnippetRequester {
         try {
             generatedSnippetValidator.validateGeneratedSnippet(config, classInfo, fallbackSnippet, methodInfo, analysisSummary, moduleConfig);
             logger.info("Using deterministic project-import correction fallback for method " + methodInfo.getSignature());
-            return fallbackSnippet;
-        } catch (InvalidLLMResponseException ignored) {
+            return new ProjectImportFallbackResult(fallbackSnippet, null, null);
+        } catch (InvalidLLMResponseException failure) {
             logger.info("Deterministic project-import correction fallback was rejected for method "
-                    + methodInfo.getSignature() + ": " + ignored.getMessage());
-            return null;
+                    + methodInfo.getSignature() + ": " + failure.getMessage());
+            return new ProjectImportFallbackResult(null, fallbackSnippet, failure);
         }
+    }
+
+    private record ProjectImportFallbackResult(GeneratedTestSnippet acceptedSnippet,
+                                               GeneratedTestSnippet rejectedSnippet,
+                                               InvalidLLMResponseException rejection) {
     }
 
     private GeneratedTestSnippet tryConstructorStatePathFallback(AgentConfig config,

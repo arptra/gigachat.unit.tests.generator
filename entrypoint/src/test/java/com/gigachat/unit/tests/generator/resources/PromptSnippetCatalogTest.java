@@ -11,6 +11,8 @@ class PromptSnippetCatalogTest {
         PromptSnippetCatalog catalog = new PromptSnippetCatalog();
 
         assertTrue(catalog.commonGenerationRules().contains("Never access internal or private fields of the tested class."));
+        assertTrue(catalog.commonGenerationRules().stream()
+                .anyMatch(line -> line.contains("empty array") && line.contains("non-instantiable")));
         assertTrue(catalog.mockitoGenerationRules().stream()
                 .anyMatch(line -> line.contains("constructor-created local objects")));
         assertTrue(catalog.constructorLocalGenerationRules().stream()

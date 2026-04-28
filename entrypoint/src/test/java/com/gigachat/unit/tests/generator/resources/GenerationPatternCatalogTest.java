@@ -47,6 +47,8 @@ class GenerationPatternCatalogTest {
         assertEquals("G003_MISSING_CONSTRUCTOR_METADATA", pattern.id());
         assertTrue(pattern.retryConstraints().stream()
                 .anyMatch(line -> line.contains("availableConstructors")));
+        assertTrue(pattern.retryConstraints().stream()
+                .anyMatch(line -> line.contains("non-instantiable")));
         assertTrue(pattern.dynamicConstraintBuilders().contains("SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS"));
     }
 

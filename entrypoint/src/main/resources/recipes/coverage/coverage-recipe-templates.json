@@ -179,6 +179,21 @@
       "$bind": "requiredImports"
     }
   },
+  "ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST": {
+    "id": "ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test for legacy validation methods that covers non-abonent null-THIS flow and direct null message/info lock flow for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
   "ADD_EXCEPTION_GUARD_SIBLING_TEST": {
     "id": "ADD_EXCEPTION_GUARD_SIBLING_TEST_${targetMethodUpper}",
     "kind": "ADD_EXCEPTION_GUARD_SIBLING_TEST",
