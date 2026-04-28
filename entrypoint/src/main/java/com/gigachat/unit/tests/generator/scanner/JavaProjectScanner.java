@@ -2,11 +2,15 @@ package com.gigachat.unit.tests.generator.scanner;
 
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentMode;
 import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
@@ -24,11 +28,15 @@ import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Set;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -60,13 +68,12 @@ public class JavaProjectScanner {
             if (!Files.exists(sourceRoot)) {
                 continue;
             }
-            try (Stream<Path> files = Files.walk(sourceRoot)) {
-                files.filter(Files::isRegularFile)
-                        .filter(path -> path.toString().endsWith(".java"))
-                        .filter(path -> shouldProcessFile(path, diffFiles))
-                        .forEach(path -> parseJavaFile(path, moduleRoot, config, discoveredClasses));
-            } catch (java.io.UncheckedIOException ex) {
-                throw (IOException) ex.getCause();
+            ScanScope scope = collectJavaFiles(sourceRoot, config, diffFiles);
+            if (scope.targetNarrowed()) {
+                preRegisterSignatures(signatureFilesFor(scope, moduleRoot));
+            }
+            for (Path javaFile : scope.javaFiles()) {
+                parseJavaFile(javaFile, moduleRoot, config, discoveredClasses);
             }
         }
         return List.copyOf(discoveredClasses);
@@ -81,16 +88,9 @@ public class JavaProjectScanner {
             if (!Files.exists(sourceRoot)) {
                 continue;
             }
-            List<Path> javaFiles;
-            try (Stream<Path> files = Files.walk(sourceRoot)) {
-                javaFiles = files.filter(Files::isRegularFile)
-                        .filter(path -> path.toString().endsWith(".java"))
-                        .filter(path -> shouldProcessFile(path, diffFiles))
-                        .sorted()
-                        .toList();
-            }
-            preRegisterSignatures(javaFiles);
-            for (Path javaFile : javaFiles) {
+            ScanScope scope = collectJavaFiles(sourceRoot, config, diffFiles);
+            preRegisterSignatures(signatureFilesFor(scope, moduleRoot));
+            for (Path javaFile : scope.javaFiles()) {
                 parseAndEmit(javaFile, moduleRoot, config, perFileConsumer);
             }
         }
@@ -149,23 +149,374 @@ public class JavaProjectScanner {
         }
     }
 
+    private ScanScope collectJavaFiles(Path sourceRoot,
+                                       AgentConfig config,
+                                       Set<Path> diffFiles) throws IOException {
+        TargetFileSelection targetSelection = selectTargetFiles(sourceRoot, config, diffFiles);
+        if (targetSelection.exactTargetMode()) {
+            return new ScanScope(targetSelection.files(), true);
+        }
+        try (Stream<Path> files = Files.walk(sourceRoot)) {
+            List<Path> javaFiles = files.filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> shouldProcessFile(path, diffFiles))
+                    .sorted()
+                    .toList();
+            return new ScanScope(javaFiles, false);
+        } catch (java.io.UncheckedIOException ex) {
+            throw (IOException) ex.getCause();
+        }
+    }
+
+    private TargetFileSelection selectTargetFiles(Path sourceRoot,
+                                                  AgentConfig config,
+                                                  Set<Path> diffFiles) throws IOException {
+        if (!hasOnlyExactTargetClasses(config)) {
+            return new TargetFileSelection(List.of(), false);
+        }
+        LinkedHashSet<Path> files = new LinkedHashSet<>();
+        LinkedHashSet<String> fileNamesToFind = new LinkedHashSet<>();
+        boolean requiresFileNameSearch = false;
+        for (String target : config.getTargetClasses()) {
+            String simpleName = sourceSimpleName(target);
+            if (!simpleName.isBlank()) {
+                fileNamesToFind.add(simpleName + ".java");
+            }
+            java.util.Optional<Path> direct = directTargetFile(sourceRoot, target)
+                    .filter(path -> shouldProcessFile(path, diffFiles));
+            if (direct.isPresent()) {
+                files.add(direct.get());
+            } else {
+                requiresFileNameSearch = true;
+            }
+            if (!isQualifiedTarget(target)) {
+                requiresFileNameSearch = true;
+            }
+        }
+        if (requiresFileNameSearch && !fileNamesToFind.isEmpty()) {
+            try (Stream<Path> paths = Files.walk(sourceRoot)) {
+                paths.filter(Files::isRegularFile)
+                        .filter(path -> fileNamesToFind.contains(path.getFileName().toString()))
+                        .filter(path -> shouldProcessFile(path, diffFiles))
+                        .forEach(files::add);
+            }
+        }
+        return new TargetFileSelection(sortedCopy(files), true);
+    }
+
+    private boolean hasOnlyExactTargetClasses(AgentConfig config) {
+        if (config == null || config.getTargetClasses() == null || config.getTargetClasses().isEmpty()) {
+            return false;
+        }
+        for (String target : config.getTargetClasses()) {
+            if (target == null || target.isBlank()) {
+                return false;
+            }
+            if (target.contains("*")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isQualifiedTarget(String rawTarget) {
+        String normalized = normalizeTargetName(rawTarget);
+        int lastDot = normalized.lastIndexOf('.');
+        return lastDot > 0 && lastDot + 1 < normalized.length();
+    }
+
+    private java.util.Optional<Path> directTargetFile(Path sourceRoot, String rawTarget) {
+        if (sourceRoot == null || rawTarget == null || rawTarget.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String trimmed = rawTarget.trim();
+        LinkedHashSet<Path> candidates = new LinkedHashSet<>();
+        if (looksLikePath(trimmed)) {
+            Path rawPath = Path.of(trimmed);
+            if (rawPath.isAbsolute()) {
+                candidates.add(rawPath);
+            } else {
+                candidates.add(sourceRoot.resolve(rawPath));
+                candidates.add(sourceRoot.getParent() == null ? rawPath : sourceRoot.getParent().resolve(rawPath));
+            }
+        }
+        String normalized = normalizeTargetName(trimmed);
+        int lastDot = normalized.lastIndexOf('.');
+        if (lastDot > 0 && lastDot + 1 < normalized.length()) {
+            String packagePart = normalized.substring(0, lastDot);
+            String simpleName = stripTestSuffix(normalized.substring(lastDot + 1));
+            if (!simpleName.isBlank()) {
+                candidates.add(sourceRoot.resolve(packagePart.replace('.', '/')).resolve(simpleName + ".java"));
+            }
+        }
+        return candidates.stream()
+                .map(path -> path.toAbsolutePath().normalize())
+                .filter(Files::isRegularFile)
+                .findFirst();
+    }
+
+    private boolean looksLikePath(String target) {
+        return target.endsWith(".java") || target.contains("/") || target.contains("\\");
+    }
+
+    private String sourceSimpleName(String rawTarget) {
+        String normalized = normalizeTargetName(rawTarget);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        int lastDot = normalized.lastIndexOf('.');
+        String simpleName = lastDot >= 0 ? normalized.substring(lastDot + 1) : normalized;
+        return stripTestSuffix(simpleName);
+    }
+
+    private String normalizeTargetName(String rawTarget) {
+        if (rawTarget == null) {
+            return "";
+        }
+        String normalized = rawTarget.trim()
+                .replace('\\', '.')
+                .replace('/', '.');
+        if (normalized.endsWith(".java")) {
+            normalized = normalized.substring(0, normalized.length() - 5);
+        }
+        while (normalized.startsWith(".")) {
+            normalized = normalized.substring(1);
+        }
+        return normalized;
+    }
+
+    private String stripTestSuffix(String simpleName) {
+        if (simpleName == null || simpleName.isBlank()) {
+            return "";
+        }
+        String trimmed = simpleName.trim();
+        if (trimmed.endsWith("Test") && trimmed.length() > "Test".length()) {
+            return trimmed.substring(0, trimmed.length() - "Test".length());
+        }
+        return trimmed;
+    }
+
+    private List<Path> signatureFilesFor(ScanScope scope, Path moduleRoot) throws IOException {
+        if (scope == null || scope.javaFiles().isEmpty()) {
+            return List.of();
+        }
+        if (!scope.targetNarrowed()) {
+            return scope.javaFiles();
+        }
+        LinkedHashSet<Path> signatureFiles = new LinkedHashSet<>(scope.javaFiles());
+        Path sourceRoot = resolveSourceRoot(moduleRoot);
+        for (Path javaFile : scope.javaFiles()) {
+            signatureFiles.addAll(resolveDirectSupportFiles(javaFile, sourceRoot));
+        }
+        return sortedCopy(signatureFiles);
+    }
+
+    private List<Path> resolveDirectSupportFiles(Path javaFile, Path sourceRoot) throws IOException {
+        if (javaFile == null || sourceRoot == null || !Files.exists(javaFile)) {
+            return List.of();
+        }
+        SupportReferences references = collectSupportReferences(javaFile);
+        LinkedHashSet<Path> supportFiles = new LinkedHashSet<>();
+        for (String importedClass : references.importedClasses()) {
+            sourceFileForQualifiedName(sourceRoot, importedClass).ifPresent(supportFiles::add);
+        }
+        for (String wildcardPackage : references.wildcardPackages()) {
+            supportFiles.addAll(sourceFilesInPackage(sourceRoot, wildcardPackage));
+        }
+        String packageName = references.packageName();
+        if (!packageName.isBlank()) {
+            for (String simpleName : references.simpleTypeNames()) {
+                sourceFileForQualifiedName(sourceRoot, packageName + "." + simpleName).ifPresent(supportFiles::add);
+            }
+        }
+        supportFiles.remove(javaFile.toAbsolutePath().normalize());
+        return sortedCopy(supportFiles);
+    }
+
+    private SupportReferences collectSupportReferences(Path javaFile) throws IOException {
+        CompilationUnit compilationUnit = new JavaParser().parse(javaFile)
+                .getResult()
+                .orElse(null);
+        if (compilationUnit == null) {
+            return new SupportReferences("", Set.of(), Set.of(), Set.of());
+        }
+        String packageName = compilationUnit.getPackageDeclaration()
+                .map(declaration -> declaration.getName().asString())
+                .orElse("");
+        LinkedHashSet<String> importedClasses = new LinkedHashSet<>();
+        LinkedHashSet<String> wildcardPackages = new LinkedHashSet<>();
+        for (ImportDeclaration importDeclaration : compilationUnit.getImports()) {
+            if (importDeclaration == null || importDeclaration.isStatic()) {
+                continue;
+            }
+            String importName = importDeclaration.getNameAsString();
+            if (importName == null || importName.isBlank() || isStandardPackage(importName)) {
+                continue;
+            }
+            if (importDeclaration.isAsterisk()) {
+                wildcardPackages.add(importName);
+            } else {
+                importedClasses.add(importName);
+            }
+        }
+        LinkedHashSet<String> simpleTypeNames = new LinkedHashSet<>();
+        compilationUnit.findAll(ClassOrInterfaceType.class).forEach(type ->
+                addSimpleTypeName(simpleTypeNames, type.getNameAsString()));
+        compilationUnit.findAll(MethodCallExpr.class).forEach(call ->
+                call.getScope()
+                        .filter(NameExpr.class::isInstance)
+                        .map(NameExpr.class::cast)
+                        .map(NameExpr::getNameAsString)
+                        .ifPresent(name -> addSimpleTypeName(simpleTypeNames, name)));
+        return new SupportReferences(packageName,
+                Set.copyOf(importedClasses),
+                Set.copyOf(wildcardPackages),
+                Set.copyOf(simpleTypeNames));
+    }
+
+    private void addSimpleTypeName(Set<String> collector, String rawName) {
+        if (collector == null || rawName == null || rawName.isBlank()) {
+            return;
+        }
+        String simpleName = rawName.trim();
+        int lastDot = simpleName.lastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < simpleName.length()) {
+            simpleName = simpleName.substring(lastDot + 1);
+        }
+        if (simpleName.isBlank() || !Character.isUpperCase(simpleName.charAt(0))) {
+            return;
+        }
+        if (isStandardSimpleType(simpleName)) {
+            return;
+        }
+        collector.add(simpleName);
+    }
+
+    private boolean isStandardPackage(String qualifiedName) {
+        return qualifiedName.startsWith("java.")
+                || qualifiedName.startsWith("javax.")
+                || qualifiedName.startsWith("jakarta.")
+                || qualifiedName.startsWith("org.junit.")
+                || qualifiedName.startsWith("org.mockito.");
+    }
+
+    private boolean isStandardSimpleType(String simpleName) {
+        return switch (simpleName) {
+            case "String", "Object", "Boolean", "Integer", "Long", "Double", "Float", "Short", "Byte",
+                    "Character", "Void", "List", "Set", "Map", "Optional", "Collection", "Collections",
+                    "ArrayList", "LinkedList", "HashMap", "LinkedHashMap", "HashSet", "LinkedHashSet",
+                    "Stream", "Collectors", "Instant", "LocalDate", "LocalDateTime", "BigDecimal",
+                    "BigInteger" -> true;
+            default -> false;
+        };
+    }
+
+    private java.util.Optional<Path> sourceFileForQualifiedName(Path sourceRoot, String qualifiedName) {
+        if (sourceRoot == null || qualifiedName == null || qualifiedName.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        Path candidate = sourceRoot.resolve(qualifiedName.trim().replace('.', '/') + ".java")
+                .toAbsolutePath()
+                .normalize();
+        return Files.isRegularFile(candidate) ? java.util.Optional.of(candidate) : java.util.Optional.empty();
+    }
+
+    private List<Path> sourceFilesInPackage(Path sourceRoot, String packageName) throws IOException {
+        if (sourceRoot == null || packageName == null || packageName.isBlank()) {
+            return List.of();
+        }
+        Path packagePath = sourceRoot.resolve(packageName.trim().replace('.', '/'));
+        if (!Files.isDirectory(packagePath)) {
+            return List.of();
+        }
+        try (Stream<Path> files = Files.list(packagePath)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .map(path -> path.toAbsolutePath().normalize())
+                    .sorted()
+                    .toList();
+        }
+    }
+
+    private List<Path> sortedCopy(Set<Path> paths) {
+        if (paths == null || paths.isEmpty()) {
+            return List.of();
+        }
+        return paths.stream()
+                .filter(Objects::nonNull)
+                .map(path -> path.toAbsolutePath().normalize())
+                .sorted()
+                .toList();
+    }
+
     private void preRegisterSignatures(List<Path> javaFiles) {
         if (javaFiles == null || javaFiles.isEmpty()) {
             return;
         }
+        if (javaFiles.size() == 1) {
+            preRegisterSignaturesSequentially(javaFiles);
+            return;
+        }
+        int workers = Math.min(javaFiles.size(), Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
+        workers = Math.min(workers, 8);
+        if (workers <= 1) {
+            preRegisterSignaturesSequentially(javaFiles);
+            return;
+        }
+        ExecutorService executor = Executors.newFixedThreadPool(workers);
+        List<Future<Void>> futures = new ArrayList<>(javaFiles.size());
+        try {
+            for (Path javaFile : javaFiles) {
+                futures.add(executor.submit(() -> {
+                    SignatureBatch batch = parseSignatureBatch(javaFile);
+                    synchronized (methodRegistry) {
+                        registerSignatureBatch(batch);
+                    }
+                    return null;
+                }));
+            }
+            for (Future<Void> future : futures) {
+                future.get();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while pre-registering Java signatures", ex);
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof IOException ioException) {
+                throw new java.io.UncheckedIOException(ioException);
+            }
+            if (cause instanceof java.io.UncheckedIOException unchecked) {
+                throw unchecked;
+            }
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("Failed to pre-register Java signatures", cause);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private void preRegisterSignaturesSequentially(List<Path> javaFiles) {
         for (Path javaFile : javaFiles) {
             try {
-                javaParser.parse(javaFile).getResult().ifPresent(compilationUnit -> {
-                    compilationUnit.getTypes().stream()
-                            .filter(ClassOrInterfaceDeclaration.class::isInstance)
-                            .map(ClassOrInterfaceDeclaration.class::cast)
-                            .filter(declaration -> !declaration.isInterface())
-                            .forEach(this::registerSignatures);
-                });
+                registerSignatureBatch(parseSignatureBatch(javaFile));
             } catch (IOException ex) {
                 throw new java.io.UncheckedIOException(ex);
             }
         }
+    }
+
+    private SignatureBatch parseSignatureBatch(Path javaFile) throws IOException {
+        SignatureBatch batch = new SignatureBatch();
+        new JavaParser().parse(javaFile).getResult().ifPresent(compilationUnit ->
+                compilationUnit.getTypes().stream()
+                        .filter(ClassOrInterfaceDeclaration.class::isInstance)
+                        .map(ClassOrInterfaceDeclaration.class::cast)
+                        .filter(declaration -> !declaration.isInterface())
+                        .forEach(declaration -> collectSignatures(declaration, batch)));
+        return batch;
     }
 
     protected void parseJavaFile(Path javaFile,
@@ -261,15 +612,26 @@ public class JavaProjectScanner {
     }
 
     private void registerSignatures(ClassOrInterfaceDeclaration declaration) {
-        String className = declaration.getNameAsString();
-        registerConstructors(className, declaration.getConstructors());
-        registerMethods(className, declaration.getMethods());
+        SignatureBatch batch = new SignatureBatch();
+        collectSignatures(declaration, batch);
+        registerSignatureBatch(batch);
     }
 
-    private void registerConstructors(String className, List<ConstructorDeclaration> constructors) {
+    private void collectSignatures(ClassOrInterfaceDeclaration declaration, SignatureBatch batch) {
+        if (declaration == null || batch == null) {
+            return;
+        }
+        String className = declaration.getNameAsString();
+        collectConstructors(className, declaration.getConstructors(), batch);
+        collectMethods(className, declaration.getMethods(), batch);
+    }
+
+    private void collectConstructors(String className,
+                                     List<ConstructorDeclaration> constructors,
+                                     SignatureBatch batch) {
         if (constructors == null || constructors.isEmpty()) {
             ConstructorMetadata metadata = new ConstructorMetadata(className + "()", List.of());
-            methodRegistry.registerConstructor(className, metadata);
+            batch.addConstructor(className, metadata);
             return;
         }
         for (ConstructorDeclaration constructor : constructors) {
@@ -288,7 +650,7 @@ public class JavaProjectScanner {
                 parameters.add(new ParameterMetadata(name, type, modifiers));
             }
             ConstructorMetadata metadata = new ConstructorMetadata(signature, parameters);
-            methodRegistry.registerConstructor(className, metadata);
+            batch.addConstructor(className, metadata);
         }
     }
 
@@ -296,7 +658,7 @@ public class JavaProjectScanner {
         return (className + formatParameters(constructor == null ? new NodeList<>() : constructor.getParameters())).trim();
     }
 
-    private void registerMethods(String className, List<MethodDeclaration> methods) {
+    private void collectMethods(String className, List<MethodDeclaration> methods, SignatureBatch batch) {
         if (methods == null || methods.isEmpty()) {
             return;
         }
@@ -306,7 +668,19 @@ public class JavaProjectScanner {
             }
             String signature = method.getType().asString() + " "
                     + method.getNameAsString() + formatParameters(method.getParameters());
-            methodRegistry.registerMethod(className, signature);
+            batch.addMethod(className, signature);
+        }
+    }
+
+    private void registerSignatureBatch(SignatureBatch batch) {
+        if (batch == null) {
+            return;
+        }
+        for (ConstructorSignature constructor : batch.constructors()) {
+            methodRegistry.registerConstructor(constructor.className(), constructor.metadata());
+        }
+        for (MethodSignature method : batch.methods()) {
+            methodRegistry.registerMethod(method.className(), method.signature());
         }
     }
 
@@ -420,5 +794,44 @@ public class JavaProjectScanner {
             return src;
         }
         return moduleRoot;
+    }
+
+    private record ScanScope(List<Path> javaFiles, boolean targetNarrowed) {
+    }
+
+    private record TargetFileSelection(List<Path> files, boolean exactTargetMode) {
+    }
+
+    private record SupportReferences(String packageName,
+                                     Set<String> importedClasses,
+                                     Set<String> wildcardPackages,
+                                     Set<String> simpleTypeNames) {
+    }
+
+    private record ConstructorSignature(String className, ConstructorMetadata metadata) {
+    }
+
+    private record MethodSignature(String className, String signature) {
+    }
+
+    private static final class SignatureBatch {
+        private final List<ConstructorSignature> constructors = new ArrayList<>();
+        private final List<MethodSignature> methods = new ArrayList<>();
+
+        void addConstructor(String className, ConstructorMetadata metadata) {
+            constructors.add(new ConstructorSignature(className, metadata));
+        }
+
+        void addMethod(String className, String signature) {
+            methods.add(new MethodSignature(className, signature));
+        }
+
+        List<ConstructorSignature> constructors() {
+            return constructors;
+        }
+
+        List<MethodSignature> methods() {
+            return methods;
+        }
     }
 }

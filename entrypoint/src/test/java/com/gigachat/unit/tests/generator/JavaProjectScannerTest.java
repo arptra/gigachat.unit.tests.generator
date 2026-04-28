@@ -138,6 +138,91 @@ class JavaProjectScannerTest {
     }
 
     @Test
+    void exactTargetClassDoesNotPreRegisterUnrelatedProjectFiles() throws IOException {
+        Path sourceFolder = workingDirectory.resolve(Path.of("src", "main", "java", "com", "example", "focus"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("TargetService.java"), """
+                package com.example.focus;
+
+                public class TargetService {
+                    public String value() {
+                        return "target";
+                    }
+                }
+                """);
+        Files.writeString(sourceFolder.resolve("UnrelatedService.java"), """
+                package com.example.focus;
+
+                public class UnrelatedService {
+                    public String value() {
+                        return "unrelated";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.focus.TargetService"))
+                .build();
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        JavaProjectScanner scanner = new JavaProjectScanner(registry);
+
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("TargetService", result.get(0).getClassName());
+        assertTrue(registry.hasClass("TargetService"));
+        assertFalse(registry.hasClass("UnrelatedService"));
+    }
+
+    @Test
+    void exactTargetClassPreRegistersDirectSupportImports() throws IOException {
+        Path sourceRoot = workingDirectory.resolve(Path.of("src", "main", "java"));
+        Path serviceFolder = sourceRoot.resolve(Path.of("com", "example", "focus"));
+        Path modelFolder = sourceRoot.resolve(Path.of("com", "example", "model"));
+        Files.createDirectories(serviceFolder);
+        Files.createDirectories(modelFolder);
+        Files.writeString(serviceFolder.resolve("TargetRepository.java"), """
+                package com.example.focus;
+
+                import com.example.model.User;
+
+                public class TargetRepository {
+                    public User save(User user) {
+                        return user;
+                    }
+                }
+                """);
+        Files.writeString(modelFolder.resolve("User.java"), """
+                package com.example.model;
+
+                public class User {
+                    public User(String name) {}
+                    public String name() {
+                        return "Ada";
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("com.example.focus.TargetRepository"))
+                .build();
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        JavaProjectScanner scanner = new JavaProjectScanner(registry);
+
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertEquals("TargetRepository", result.get(0).getClassName());
+        assertTrue(registry.hasClass("User"));
+        assertTrue(registry.constructorExists("User", 1));
+        assertTrue(registry.methodExists("User", "name", 0));
+    }
+
+    @Test
     void supportsModuleWildcardTargets() throws IOException {
         Path moduleRoot = workingDirectory.resolve("mtd");
         Path sourceFolder = moduleRoot.resolve(Path.of("src", "main", "java", "com", "example", "mod"));
