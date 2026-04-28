@@ -14,6 +14,7 @@ import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 
+import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -25,13 +26,22 @@ final class GeneratedSnippetApiUsageValidator {
     private final PipelineLogger logger;
     private final Analyze analyze;
     private final MethodSignatureRegistry signatureRegistry;
+    private final ClasspathApiMetadataResolver classpathApiMetadataResolver;
 
     GeneratedSnippetApiUsageValidator(PipelineLogger logger,
                                       Analyze analyze,
                                       MethodSignatureRegistry signatureRegistry) {
+        this(logger, analyze, signatureRegistry, new ClasspathApiMetadataResolver(logger, signatureRegistry));
+    }
+
+    GeneratedSnippetApiUsageValidator(PipelineLogger logger,
+                                      Analyze analyze,
+                                      MethodSignatureRegistry signatureRegistry,
+                                      ClasspathApiMetadataResolver classpathApiMetadataResolver) {
         this.logger = logger;
         this.analyze = analyze;
         this.signatureRegistry = signatureRegistry;
+        this.classpathApiMetadataResolver = classpathApiMetadataResolver;
     }
 
     Map<String, String> ensureMethodAndConstructorUsageIsValid(AgentConfig config,
@@ -47,14 +57,24 @@ final class GeneratedSnippetApiUsageValidator {
         LinkedHashSet<String> missingConstructorMetadata = new LinkedHashSet<>();
         Set<String> signatureTypes = collectMethodSignatureTypeNames(methodInfo);
         compilationUnit.findAll(ObjectCreationExpr.class).forEach(expr -> {
-            String type = ValidationSupport.simpleName(expr.getType().asString());
-            if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
+            String rawType = expr.getType().asString();
+            String type = ValidationSupport.simpleName(rawType);
+            if (type.isEmpty()) {
+                return;
+            }
+            registerClasspathApiIfAvailable(config, classInfo, compilationUnit, rawType);
+            if (!signatureRegistry.hasClass(type)) {
                 return;
             }
             int argumentCount = expr.getArguments().size();
             signatureRegistry.registerConstructorsIfAbsent(type);
             List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(type);
             if (constructors.isEmpty() || !signatureRegistry.constructorExists(type, argumentCount)) {
+                registerClasspathApiIfAvailable(config, classInfo, compilationUnit, rawType);
+                constructors = signatureRegistry.getConstructorsForClass(type);
+                if (!constructors.isEmpty() && signatureRegistry.constructorExists(type, argumentCount)) {
+                    return;
+                }
                 if (signatureTypes.contains(type)) {
                     attemptConstructorRefresh(config, classInfo, methodInfo, type);
                     constructors = signatureRegistry.getConstructorsForClass(type);
@@ -76,10 +96,18 @@ final class GeneratedSnippetApiUsageValidator {
                 return;
             }
             String simple = ValidationSupport.simpleName(resolvedType);
-            if (simple.isEmpty() || !signatureRegistry.hasClass(simple)) {
+            if (simple.isEmpty()) {
+                return;
+            }
+            registerClasspathApiIfAvailable(config, classInfo, compilationUnit, resolvedType);
+            if (!signatureRegistry.hasClass(simple)) {
                 return;
             }
             if (!signatureRegistry.methodExists(simple, expr.getNameAsString(), expr.getArguments().size())) {
+                registerClasspathApiIfAvailable(config, classInfo, compilationUnit, resolvedType);
+                if (signatureRegistry.methodExists(simple, expr.getNameAsString(), expr.getArguments().size())) {
+                    return;
+                }
                 if (isCurrentStaticTargetInvocation(simple, expr, classInfo, methodInfo)) {
                     return;
                 }
@@ -95,6 +123,86 @@ final class GeneratedSnippetApiUsageValidator {
             throw new InvalidLLMResponseException(message);
         }
         return variableTypes;
+    }
+
+    private void registerClasspathApiIfAvailable(AgentConfig config,
+                                                 TestClassInfo classInfo,
+                                                 CompilationUnit compilationUnit,
+                                                 String rawType) {
+        if (classpathApiMetadataResolver == null
+                || config == null
+                || classInfo == null
+                || rawType == null
+                || rawType.isBlank()) {
+            return;
+        }
+        Path projectRoot = config.getProjectPath();
+        Path testClassFile = classInfo.getTargetPath();
+        if (projectRoot == null || testClassFile == null) {
+            return;
+        }
+        List<String> candidates = classpathTypeCandidates(compilationUnit, rawType);
+        if (candidates.isEmpty()) {
+            return;
+        }
+        classpathApiMetadataResolver.registerType(projectRoot, testClassFile, candidates);
+    }
+
+    private List<String> classpathTypeCandidates(CompilationUnit compilationUnit, String rawType) {
+        String cleaned = stripTypeDecorations(rawType);
+        if (cleaned.isBlank()) {
+            return List.of();
+        }
+        String simple = ValidationSupport.simpleName(cleaned);
+        if (simple.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        if (cleaned.contains(".")) {
+            candidates.add(cleaned);
+        }
+        if (compilationUnit != null) {
+            compilationUnit.getImports().forEach(importDeclaration -> {
+                if (importDeclaration == null || importDeclaration.isStatic()) {
+                    return;
+                }
+                String importName = importDeclaration.getNameAsString();
+                if (importName == null || importName.isBlank()) {
+                    return;
+                }
+                if (importDeclaration.isAsterisk()) {
+                    candidates.add(importName + "." + simple);
+                    return;
+                }
+                if (simple.equals(ValidationSupport.simpleName(importName))) {
+                    candidates.add(importName);
+                }
+            });
+            compilationUnit.getPackageDeclaration()
+                    .map(declaration -> declaration.getName().asString())
+                    .filter(packageName -> !packageName.isBlank())
+                    .ifPresent(packageName -> candidates.add(packageName + "." + cleaned));
+        }
+        if (!cleaned.contains(".")) {
+            candidates.add(cleaned);
+        }
+        return List.copyOf(candidates);
+    }
+
+    private String stripTypeDecorations(String rawType) {
+        if (rawType == null) {
+            return "";
+        }
+        String value = rawType.trim();
+        int genericStart = value.indexOf('<');
+        if (genericStart >= 0) {
+            value = value.substring(0, genericStart);
+        }
+        int arrayIndex = value.indexOf('[');
+        if (arrayIndex >= 0) {
+            value = value.substring(0, arrayIndex);
+        }
+        return value.trim();
     }
 
     private Set<String> collectMethodSignatureTypeNames(TestMethodInfo methodInfo) {

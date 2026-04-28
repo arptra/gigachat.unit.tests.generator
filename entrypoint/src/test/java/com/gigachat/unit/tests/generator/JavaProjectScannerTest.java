@@ -223,6 +223,53 @@ class JavaProjectScannerTest {
     }
 
     @Test
+    void exactTargetClassPreRegistersNestedSupportTypesFromQualifiedReferences() throws IOException {
+        Path sourceRoot = workingDirectory.resolve(Path.of("src", "main", "java"));
+        Path packageFolder = sourceRoot.resolve(Path.of("mtd", "abonent"));
+        Path modelFolder = sourceRoot.resolve("bd");
+        Files.createDirectories(packageFolder);
+        Files.createDirectories(modelFolder);
+        Files.writeString(packageFolder.resolve("NEW_AUTO.java"), """
+                package mtd.abonent;
+
+                public class NEW_AUTO {
+                    public void validate(bd.Abonent.Ref ref) {
+                        ref.createObject("ABONENT");
+                    }
+                }
+                """);
+        Files.writeString(modelFolder.resolve("Abonent.java"), """
+                package bd;
+
+                public class Abonent {
+                    public static class Ref {
+                        public Ref() {}
+                        public Ref(String classId) {}
+                        public Ref createObject(String classId) {
+                            return this;
+                        }
+                    }
+                }
+                """);
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .targetClasses(List.of("mtd.abonent.NEW_AUTO"))
+                .build();
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        JavaProjectScanner scanner = new JavaProjectScanner(registry);
+
+        List<TestClassInfo> result = scanner.scan(config);
+
+        assertEquals(1, result.size());
+        assertTrue(registry.hasClass("Ref"));
+        assertTrue(registry.constructorExists("Ref", 0));
+        assertTrue(registry.constructorExists("Ref", 1));
+        assertTrue(registry.methodExists("Ref", "createObject", 1));
+    }
+
+    @Test
     void supportsModuleWildcardTargets() throws IOException {
         Path moduleRoot = workingDirectory.resolve("mtd");
         Path sourceFolder = moduleRoot.resolve(Path.of("src", "main", "java", "com", "example", "mod"));

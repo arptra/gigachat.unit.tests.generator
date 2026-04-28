@@ -360,8 +360,11 @@ public class JavaProjectScanner {
             }
         }
         LinkedHashSet<String> simpleTypeNames = new LinkedHashSet<>();
-        compilationUnit.findAll(ClassOrInterfaceType.class).forEach(type ->
-                addSimpleTypeName(simpleTypeNames, type.getNameAsString()));
+        compilationUnit.findAll(ClassOrInterfaceType.class).forEach(type -> {
+            String qualifiedName = stripTypeDecorations(type.getNameWithScope());
+            addQualifiedTypeName(importedClasses, qualifiedName);
+            addSimpleTypeName(simpleTypeNames, qualifiedName);
+        });
         compilationUnit.findAll(MethodCallExpr.class).forEach(call ->
                 call.getScope()
                         .filter(NameExpr.class::isInstance)
@@ -378,7 +381,7 @@ public class JavaProjectScanner {
         if (collector == null || rawName == null || rawName.isBlank()) {
             return;
         }
-        String simpleName = rawName.trim();
+        String simpleName = stripTypeDecorations(rawName);
         int lastDot = simpleName.lastIndexOf('.');
         if (lastDot >= 0 && lastDot + 1 < simpleName.length()) {
             simpleName = simpleName.substring(lastDot + 1);
@@ -390,6 +393,33 @@ public class JavaProjectScanner {
             return;
         }
         collector.add(simpleName);
+    }
+
+    private void addQualifiedTypeName(Set<String> collector, String rawName) {
+        if (collector == null || rawName == null || rawName.isBlank()) {
+            return;
+        }
+        String qualifiedName = stripTypeDecorations(rawName);
+        if (qualifiedName.isBlank() || !qualifiedName.contains(".") || isStandardPackage(qualifiedName)) {
+            return;
+        }
+        collector.add(qualifiedName);
+    }
+
+    private String stripTypeDecorations(String rawType) {
+        if (rawType == null) {
+            return "";
+        }
+        String value = rawType.trim();
+        int genericStart = value.indexOf('<');
+        if (genericStart >= 0) {
+            value = value.substring(0, genericStart);
+        }
+        int arrayStart = value.indexOf('[');
+        if (arrayStart >= 0) {
+            value = value.substring(0, arrayStart);
+        }
+        return value.trim();
     }
 
     private boolean isStandardPackage(String qualifiedName) {
@@ -418,7 +448,22 @@ public class JavaProjectScanner {
         Path candidate = sourceRoot.resolve(qualifiedName.trim().replace('.', '/') + ".java")
                 .toAbsolutePath()
                 .normalize();
-        return Files.isRegularFile(candidate) ? java.util.Optional.of(candidate) : java.util.Optional.empty();
+        if (Files.isRegularFile(candidate)) {
+            return java.util.Optional.of(candidate);
+        }
+        String candidateName = qualifiedName.trim();
+        int dotIndex = candidateName.lastIndexOf('.');
+        while (dotIndex > 0) {
+            candidateName = candidateName.substring(0, dotIndex);
+            candidate = sourceRoot.resolve(candidateName.replace('.', '/') + ".java")
+                    .toAbsolutePath()
+                    .normalize();
+            if (Files.isRegularFile(candidate)) {
+                return java.util.Optional.of(candidate);
+            }
+            dotIndex = candidateName.lastIndexOf('.');
+        }
+        return java.util.Optional.empty();
     }
 
     private List<Path> sourceFilesInPackage(Path sourceRoot, String packageName) throws IOException {
@@ -624,6 +669,11 @@ public class JavaProjectScanner {
         String className = declaration.getNameAsString();
         collectConstructors(className, declaration.getConstructors(), batch);
         collectMethods(className, declaration.getMethods(), batch);
+        declaration.getMembers().stream()
+                .filter(ClassOrInterfaceDeclaration.class::isInstance)
+                .map(ClassOrInterfaceDeclaration.class::cast)
+                .filter(nested -> !nested.isInterface())
+                .forEach(nested -> collectSignatures(nested, batch));
     }
 
     private void collectConstructors(String className,
