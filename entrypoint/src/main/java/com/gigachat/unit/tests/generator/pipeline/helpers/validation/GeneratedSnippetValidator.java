@@ -78,7 +78,7 @@ public class GeneratedSnippetValidator {
             return;
         }
         structureValidator.ensureNoConflictingLifecycleFixtureRedefinition(classInfo, snippet, compilationUnit, analysisSummary);
-        structureValidator.ensureProjectImportsAreResolvable(config.getProjectPath(), compilationUnit);
+        structureValidator.ensureProjectImportsAreResolvable(config.getProjectPath(), classInfo, compilationUnit);
         Map<String, String> variableTypes = apiUsageValidator.ensureMethodAndConstructorUsageIsValid(config,
                 compilationUnit,
                 analysisSummary,

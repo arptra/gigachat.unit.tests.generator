@@ -4,6 +4,8 @@ import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
 import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.gradle.ResolvedTestRuntimeClasspath;
+import com.gigachat.unit.tests.generator.gradle.TestRuntimeClasspathResolver;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
@@ -39,15 +41,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 
 final class GeneratedSnippetStructureValidator {
 
     private final PipelineLogger logger;
+    private final ClasspathTypeResolver classpathTypeResolver;
     private final TargetConstructorPolicyResolver targetConstructorPolicyResolver = new TargetConstructorPolicyResolver();
 
     GeneratedSnippetStructureValidator(PipelineLogger logger) {
+        this(logger, new GradleClasspathTypeResolver(logger));
+    }
+
+    GeneratedSnippetStructureValidator(PipelineLogger logger, ClasspathTypeResolver classpathTypeResolver) {
         this.logger = logger;
+        this.classpathTypeResolver = classpathTypeResolver;
     }
 
     void ensureNoInternalFieldAccess(String generatedCode, Analyze.AnalysisSummary analysisSummary) {
@@ -233,6 +244,12 @@ final class GeneratedSnippetStructureValidator {
 
     void ensureProjectImportsAreResolvable(Path projectRoot,
                                            CompilationUnit compilationUnit) {
+        ensureProjectImportsAreResolvable(projectRoot, null, compilationUnit);
+    }
+
+    void ensureProjectImportsAreResolvable(Path projectRoot,
+                                           TestClassInfo classInfo,
+                                           CompilationUnit compilationUnit) {
         if (projectRoot == null || compilationUnit == null) {
             return;
         }
@@ -240,6 +257,7 @@ final class GeneratedSnippetStructureValidator {
         if (!Files.isDirectory(mainSourceRoot)) {
             return;
         }
+        Path testClassFile = classInfo == null ? null : classInfo.getTargetPath();
         LinkedHashSet<String> violations = new LinkedHashSet<>();
         for (ImportDeclaration importDeclaration : compilationUnit.getImports()) {
             if (importDeclaration == null || importDeclaration.isStatic() || importDeclaration.isAsterisk()) {
@@ -253,8 +271,13 @@ final class GeneratedSnippetStructureValidator {
             if (Files.isRegularFile(importedPath)) {
                 continue;
             }
+            if (isResolvableFromBuildClasspath(projectRoot, testClassFile, importedFqcn)) {
+                continue;
+            }
             List<String> candidates = findProjectTypesBySimpleName(mainSourceRoot, ValidationSupport.simpleName(importedFqcn));
-            if (candidates.size() == 1 && !importedFqcn.equals(candidates.get(0))) {
+            if (candidates.size() == 1
+                    && !importedFqcn.equals(candidates.get(0))
+                    && looksLikeWrongProjectPackage(importedFqcn, candidates.get(0))) {
                 violations.add(importedFqcn + " -> " + candidates.get(0));
             }
         }
@@ -394,6 +417,62 @@ final class GeneratedSnippetStructureValidator {
                     + targetPath + " -> " + exception.getMessage());
             return null;
         }
+    }
+
+    private boolean isResolvableFromBuildClasspath(Path projectRoot, Path testClassFile, String importedFqcn) {
+        if (classpathTypeResolver == null
+                || projectRoot == null
+                || testClassFile == null
+                || importedFqcn == null
+                || importedFqcn.isBlank()) {
+            return false;
+        }
+        try {
+            boolean resolvable = classpathTypeResolver.isResolvable(projectRoot, testClassFile, importedFqcn);
+            if (resolvable) {
+                logger.info("Skipping project-import correction for " + importedFqcn
+                        + " because it resolves from the Gradle test runtime classpath.");
+            }
+            return resolvable;
+        } catch (Exception exception) {
+            logger.warn("Unable to verify import " + importedFqcn + " against Gradle classpath: "
+                    + exception.getMessage());
+            return false;
+        }
+    }
+
+    private boolean looksLikeWrongProjectPackage(String importedFqcn, String candidateFqcn) {
+        String importedPackage = packageName(importedFqcn);
+        String candidatePackage = packageName(candidateFqcn);
+        if (importedPackage.isBlank() || candidatePackage.isBlank()) {
+            return false;
+        }
+        List<String> importedParts = splitPackage(importedPackage);
+        List<String> candidateParts = splitPackage(candidatePackage);
+        int shared = 0;
+        int max = Math.min(importedParts.size(), candidateParts.size());
+        while (shared < max && importedParts.get(shared).equals(candidateParts.get(shared))) {
+            shared++;
+        }
+        return shared >= 2;
+    }
+
+    private String packageName(String fqcn) {
+        String value = ValidationSupport.normalise(fqcn);
+        int lastDot = value.lastIndexOf('.');
+        if (lastDot <= 0) {
+            return "";
+        }
+        return value.substring(0, lastDot);
+    }
+
+    private List<String> splitPackage(String packageName) {
+        if (packageName == null || packageName.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(packageName.split("\\."))
+                .filter(part -> !part.isBlank())
+                .toList();
     }
 
     private List<MethodDeclaration> findIncomingLifecycleHelpersRebindingTarget(GeneratedTestSnippet snippet,
@@ -755,6 +834,79 @@ final class GeneratedSnippetStructureValidator {
                     .toList();
         } catch (Exception exception) {
             return List.of();
+        }
+    }
+
+    @FunctionalInterface
+    interface ClasspathTypeResolver {
+        boolean isResolvable(Path projectRoot, Path testClassFile, String fqcn);
+    }
+
+    private static final class GradleClasspathTypeResolver implements ClasspathTypeResolver {
+        private final TestRuntimeClasspathResolver resolver;
+        private final ConcurrentMap<String, Boolean> cache = new ConcurrentHashMap<>();
+
+        private GradleClasspathTypeResolver(PipelineLogger logger) {
+            this.resolver = new TestRuntimeClasspathResolver(logger);
+        }
+
+        @Override
+        public boolean isResolvable(Path projectRoot, Path testClassFile, String fqcn) {
+            if (projectRoot == null || testClassFile == null || fqcn == null || fqcn.isBlank()) {
+                return false;
+            }
+            String key = projectRoot.toAbsolutePath().normalize()
+                    + "|" + testClassFile.toAbsolutePath().normalize()
+                    + "|" + fqcn;
+            return cache.computeIfAbsent(key, ignored -> resolve(projectRoot, testClassFile, fqcn));
+        }
+
+        private boolean resolve(Path projectRoot, Path testClassFile, String fqcn) {
+            ResolvedTestRuntimeClasspath classpath = resolver.resolve(projectRoot, testClassFile);
+            if (classpath.entries().isEmpty()) {
+                return false;
+            }
+            List<String> resources = classResourceCandidates(fqcn);
+            for (Path entry : classpath.entries()) {
+                if (containsAnyResource(entry, resources)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean containsAnyResource(Path entry, List<String> resources) {
+            if (entry == null || resources == null || resources.isEmpty() || !Files.exists(entry)) {
+                return false;
+            }
+            if (Files.isDirectory(entry)) {
+                return resources.stream().anyMatch(resource -> Files.isRegularFile(entry.resolve(resource)));
+            }
+            String fileName = entry.getFileName() == null ? "" : entry.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+            if (!fileName.endsWith(".jar")) {
+                return false;
+            }
+            try (JarFile jar = new JarFile(entry.toFile())) {
+                return resources.stream().anyMatch(resource -> jar.getJarEntry(resource) != null);
+            } catch (IOException ignored) {
+                return false;
+            }
+        }
+
+        private List<String> classResourceCandidates(String fqcn) {
+            String slashPath = fqcn.replace('.', '/');
+            LinkedHashSet<String> resources = new LinkedHashSet<>();
+            resources.add(slashPath + ".class");
+            int slash = slashPath.lastIndexOf('/');
+            while (slash > 0) {
+                String nested = slashPath.substring(0, slash)
+                        + "$"
+                        + slashPath.substring(slash + 1).replace('/', '$')
+                        + ".class";
+                resources.add(nested);
+                slash = slashPath.lastIndexOf('/', slash - 1);
+            }
+            return List.copyOf(resources);
         }
     }
 
