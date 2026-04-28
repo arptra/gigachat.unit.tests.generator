@@ -176,7 +176,46 @@ public class GenerationMethodOrchestrator {
                 attempt++;
                 continue;
             }
-            mergeResult = diffEngine.merge(classInfo, snippet);
+            try {
+                mergeResult = diffEngine.merge(classInfo, snippet);
+            } catch (RuntimeException exception) {
+                String failure = "Merge failed before compilation: " + exception.getMessage();
+                logger.warn(failure);
+                logger.trace("RESULT",
+                        methodInfo.getSignature(),
+                        AgentState.S2_COMPILATION_FAILED.name(),
+                        "merge failed before compile [" + exception.getClass().getSimpleName() + "]");
+                CompileResult mergeFailure = new CompileResult(false,
+                        List.of(failure),
+                        "",
+                        exception.toString());
+                repairContext = support.buildRepairContext(repairContext,
+                        mergeFailure,
+                        null,
+                        null,
+                        List.of(),
+                        snippet,
+                        attempt + 1);
+                snippet = support.requestSnippet(config,
+                        classInfo,
+                        methodInfo,
+                        plan,
+                        repairContext,
+                        analysisSummary,
+                        moduleConfig,
+                        true);
+                if (snippet == null) {
+                    logger.warn("LLM did not return a repair snippet after merge failure for method "
+                            + methodInfo.getSignature());
+                    logger.trace("RESULT",
+                            methodInfo.getSignature(),
+                            AgentState.S6_GIVE_UP.name(),
+                            "regeneration after merge failure produced no valid snippet");
+                    break;
+                }
+                attempt++;
+                continue;
+            }
             snippet = mergeResult.mergedSnippet();
             if (!mergeResult.changed()) {
                 logger.warn("Merge step did not change target class for method "

@@ -209,6 +209,31 @@ class TestClassWriterTest {
         assertEquals(1, countOccurrences(updated, "import java.util.List;"));
     }
 
+    @Test
+    void ensureImportsShouldDropMalformedModelImportComments() {
+        TestClassWriter writer = new TestClassWriter(new PipelineLogger(tempDir));
+        String source = """
+                package com.example.app;
+
+                import //Corrected import
+                import org.junit.jupiter.api.Test;
+
+                public class ApplicationTest {
+                }
+                """;
+
+        String updated = writer.ensureImports(source, List.of(
+                "import //Corrected import",
+                "java.util.Map // map assertion helper",
+                "import java.util.List; // Corrected import"
+        ));
+
+        assertFalse(updated.contains("import //Corrected import"));
+        assertTrue(updated.contains("import java.util.Map;"));
+        assertTrue(updated.contains("import java.util.List;"));
+        assertTrue(updated.contains("import org.junit.jupiter.api.Test;"));
+    }
+
     private int countOccurrences(String source, String token) {
         int count = 0;
         int index = 0;

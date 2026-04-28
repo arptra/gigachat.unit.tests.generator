@@ -272,6 +272,7 @@ public class TestClassWriter {
     }
 
     public String applyClassStructure(String source, GeneratedTestSnippet snippet) {
+        source = JavaImportSanitizer.sanitizeSourceImports(source);
         boolean hasAnnotations = snippet.classAnnotations() != null && !snippet.classAnnotations().isEmpty();
         boolean hasFields = snippet.fieldDeclarations() != null && !snippet.fieldDeclarations().isEmpty();
         boolean hasHelpers = snippet.helperMethods() != null && !snippet.helperMethods().isEmpty();
@@ -308,6 +309,7 @@ public class TestClassWriter {
     }
 
     public String ensureImports(String source, List<String> newImports) {
+        source = JavaImportSanitizer.sanitizeSourceImports(source);
         List<String> requestedImports = newImports == null ? List.of() : newImports;
         if (requestedImports.isEmpty() && !mergePolicy.normalizeImports()) {
             return source;
@@ -771,17 +773,7 @@ public class TestClassWriter {
     }
 
     private String normaliseImport(String rawImport) {
-        String trimmed = rawImport.trim();
-        if (trimmed.isEmpty()) {
-            return "";
-        }
-        if (!trimmed.endsWith(";")) {
-            trimmed = trimmed + ';';
-        }
-        if (!trimmed.startsWith("import ")) {
-            trimmed = "import " + trimmed;
-        }
-        return trimmed;
+        return JavaImportSanitizer.normalizeImportLine(rawImport);
     }
 
     public record AppendResult(String source,

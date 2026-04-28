@@ -12,6 +12,7 @@ import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
 import com.gigachat.unit.tests.generator.coverage.CoverageInvoker;
 import com.gigachat.unit.tests.generator.coverage.CoverageResult;
 import com.gigachat.unit.tests.generator.coverage.JaCoCoCoverageInvoker;
+import com.gigachat.unit.tests.generator.dto.CompileErrors;
 import com.gigachat.unit.tests.generator.dto.ErrorsReport;
 import com.gigachat.unit.tests.generator.dto.FailedMethodSnapshot;
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
@@ -190,7 +191,18 @@ public class InitialGenerationStep {
                                TestMethodInfo methodInfo,
                                PipelineModuleConfig moduleConfig,
                                ErrorsReport report) {
-        createMethodOrchestrator().processMethod(config, classInfo, methodInfo, moduleConfig, report);
+        try {
+            createMethodOrchestrator().processMethod(config, classInfo, methodInfo, moduleConfig, report);
+        } catch (RuntimeException exception) {
+            logger.error("Generation pipeline failed unexpectedly for method "
+                    + methodInfo.getSignature()
+                    + "; continuing with remaining methods.", exception);
+            report.addCompileErrors(new CompileErrors(classInfo.getTargetPath(),
+                    methodInfo.getSignature(),
+                    List.of("Unexpected generation pipeline failure: " + exception.getMessage()),
+                    "",
+                    exception.toString()));
+        }
     }
 
     private GenerationMethodOrchestrator createMethodOrchestrator() {

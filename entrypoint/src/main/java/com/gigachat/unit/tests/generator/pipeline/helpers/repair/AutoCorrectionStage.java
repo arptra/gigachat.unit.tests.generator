@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.pipeline.helpers.repair;
 
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
+import com.gigachat.unit.tests.generator.pipeline.helpers.JavaImportSanitizer;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
@@ -30,13 +31,15 @@ public class AutoCorrectionStage {
             return null;
         }
         String correctedBody = applyRules(snippet.methodBody());
+        List<String> correctedImports = JavaImportSanitizer.sanitizeImports(snippet.imports());
         List<String> correctedHelpers = sanitizeHelperMethods(snippet.helperMethods(),
                 snippet.fieldDeclarations(),
                 snippet.fullClassSource());
-        String correctedSource = sanitizeFullClassSource(applyRules(snippet.fullClassSource()),
+        String correctedSource = sanitizeFullClassSource(JavaImportSanitizer.sanitizeSourceImports(applyRules(snippet.fullClassSource())),
                 snippet.methodName(),
                 snippet.fieldDeclarations());
         if (equalsSafe(snippet.methodBody(), correctedBody)
+                && equalsSafeList(snippet.imports(), correctedImports)
                 && equalsSafeList(snippet.helperMethods(), correctedHelpers)
                 && equalsSafe(snippet.fullClassSource(), correctedSource)) {
             return snippet;
@@ -44,7 +47,7 @@ public class AutoCorrectionStage {
         return new GeneratedTestSnippet(snippet.className(),
                 snippet.methodName(),
                 correctedBody,
-                snippet.imports(),
+                correctedImports,
                 snippet.classAnnotations(),
                 snippet.fieldDeclarations(),
                 correctedHelpers,

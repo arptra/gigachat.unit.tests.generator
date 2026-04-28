@@ -2,6 +2,8 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.github.javaparser.ParseProblemException;
+import com.github.javaparser.StaticJavaParser;
 
 import java.nio.file.Path;
 import java.util.Objects;
@@ -24,7 +26,7 @@ public class DiffEngine {
         Path file = classInfo.getTargetPath();
         String originalSource = writer.readSource(file);
         if (shouldReplaceWithFullClass(originalSource, snippet)) {
-            String replacement = normaliseLineEndings(snippet.fullClassSource());
+            String replacement = normaliseLineEndings(JavaImportSanitizer.sanitizeSourceImports(snippet.fullClassSource()));
             writer.writeSource(file, replacement);
             logger.info("Replaced skeleton test class " + file + " with full snippet for " + snippet.methodName());
             String diff = diff(originalSource, replacement);
@@ -57,7 +59,19 @@ public class DiffEngine {
     private boolean shouldReplaceWithFullClass(String originalSource, GeneratedTestSnippet snippet) {
         return snippet.fullClassSource() != null
                 && !snippet.fullClassSource().isBlank()
-                && writer.isEffectivelyEmptyTestClass(originalSource);
+                && writer.isEffectivelyEmptyTestClass(originalSource)
+                && isParseableFullClassSource(snippet.fullClassSource());
+    }
+
+    private boolean isParseableFullClassSource(String source) {
+        try {
+            StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(source));
+            return true;
+        } catch (ParseProblemException exception) {
+            logger.warn("Full generated class source is not parseable; falling back to method merge: "
+                    + exception.getMessage());
+            return false;
+        }
     }
 
     public String diff(String original, String updated) {

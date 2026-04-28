@@ -50,6 +50,7 @@ public class GenerationValidationRetryBuilder {
                 && (message.contains("E102")
                 || message.contains("E103")
                 || message.contains("E104")
+                || message.contains("E_PARSE")
                 || generationPatternCatalog.matchValidationPattern(message).isPresent());
     }
 
@@ -145,6 +146,16 @@ public class GenerationValidationRetryBuilder {
         String reason = exception.getMessage();
         if (reason != null && !reason.isBlank()) {
             retryValidation.put("reason", reason.trim());
+            if (reason.contains("E_PARSE")) {
+                JSONArray retryConstraints = contextJson.optJSONArray("retryConstraints");
+                if (retryConstraints == null) {
+                    retryConstraints = new JSONArray();
+                    contextJson.put("retryConstraints", retryConstraints);
+                }
+                addRetryConstraint(retryConstraints, "Return only valid Java test code, without prose or explanatory comments outside Java comments.");
+                addRetryConstraint(retryConstraints, "Every import must be a complete Java import, for example import java.util.List; or import static org.mockito.Mockito.*;");
+                addRetryConstraint(retryConstraints, "Do not emit comment-only imports like import // Corrected import; omit the import instead.");
+            }
         }
         String source = snippet.fullClassSource();
         if (source == null || source.isBlank()) {

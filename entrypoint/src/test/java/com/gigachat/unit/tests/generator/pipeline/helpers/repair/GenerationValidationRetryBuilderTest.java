@@ -28,6 +28,25 @@ class GenerationValidationRetryBuilderTest {
     Path tempDir;
 
     @Test
+    void shouldRetryMalformedJavaResponses() {
+        GenerationValidationRetryBuilder builder = new GenerationValidationRetryBuilder(
+                new PipelineLogger(tempDir),
+                new GenerationPatternCatalog(),
+                new StateModelCatalog(),
+                summary -> List.of());
+        InvalidLLMResponseException exception = new InvalidLLMResponseException(
+                "E_PARSE: Generated test source is not valid Java");
+
+        JSONObject retryContext = builder.buildRetryContext(new JSONObject().put("goal", "repair"),
+                exception,
+                null,
+                new GeneratedTestSnippet("SampleTest", "broken", "import // Corrected import", List.of()));
+
+        assertTrue(builder.shouldRetry(exception));
+        assertTrue(retryContext.toString().contains("Do not emit comment-only imports"));
+    }
+
+    @Test
     void shouldAttachPatternHintsStateModelAndSnippetFeedback() {
         GenerationValidationRetryBuilder builder = new GenerationValidationRetryBuilder(
                 new PipelineLogger(tempDir),

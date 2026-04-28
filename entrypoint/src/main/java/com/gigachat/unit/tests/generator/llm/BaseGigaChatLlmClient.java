@@ -13,6 +13,7 @@ import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
+import com.gigachat.unit.tests.generator.pipeline.helpers.JavaImportSanitizer;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
@@ -307,10 +308,11 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
                 imports.add(line);
             }
         }
+        imports = new ArrayList<>(JavaImportSanitizer.sanitizeImports(imports));
         List<String> classAnnotations = collectClassAnnotations(classDeclaration);
         List<String> fields = collectFieldDeclarations(classDeclaration);
         List<String> helperMethods = collectHelperMethods(classDeclaration, method);
-        String fullSource = normaliseLineEndings(unit.toString());
+        String fullSource = normaliseLineEndings(JavaImportSanitizer.sanitizeSourceImports(unit.toString()));
         return Optional.of(new GeneratedTestSnippet(classInfo.getTestClassName(),
                 copy.getNameAsString(),
                 methodSource,
@@ -373,6 +375,7 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
         }
         int anchor = findSourceAnchor(normalised, expectedClassName);
         String candidate = anchor >= 0 ? normalised.substring(anchor) : normalised;
+        candidate = JavaImportSanitizer.sanitizeSourceImports(candidate);
         return candidate.trim();
     }
 

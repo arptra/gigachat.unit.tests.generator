@@ -10,6 +10,7 @@ import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
+import com.gigachat.unit.tests.generator.pipeline.helpers.JavaImportSanitizer;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.github.javaparser.ParseProblemException;
 import com.github.javaparser.StaticJavaParser;
@@ -56,8 +57,9 @@ public class GeneratedSnippetValidator {
         }
         String sourceForValidation = composeValidationSource(classInfo, snippet);
         if (sourceForValidation == null || sourceForValidation.isBlank()) {
-            return;
+            throw new InvalidLLMResponseException("E_PARSE: LLM returned an empty generated test snippet.");
         }
+        sourceForValidation = JavaImportSanitizer.sanitizeSourceImports(sourceForValidation);
         String signature = methodInfo.getSignature();
         if (signature == null || signature.isBlank()) {
             return;
@@ -65,7 +67,9 @@ public class GeneratedSnippetValidator {
         String normalisedSignature = signature.replaceAll("\\s+", " ").trim();
         String normalisedSource = sourceForValidation.replaceAll("\\s+", " ").trim();
         if (normalisedSource.contains(normalisedSignature + " {")) {
-            String methodName = analysisSummary.methodAnalysis().method().name();
+            String methodName = analysisSummary == null || analysisSummary.methodAnalysis() == null
+                    ? methodInfo.getSignature()
+                    : analysisSummary.methodAnalysis().method().name();
             logger.warn("⚠️  LLM reimplemented method " + methodName + " inside test class. Marking generation as invalid.");
             throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
         }
@@ -133,7 +137,8 @@ public class GeneratedSnippetValidator {
             return StaticJavaParser.parse(source);
         } catch (ParseProblemException exception) {
             logger.warn("Unable to parse generated source for API validation: " + exception.getMessage());
-            return null;
+            throw new InvalidLLMResponseException("E_PARSE: Generated test source is not valid Java: "
+                    + exception.getMessage());
         }
     }
 
@@ -158,7 +163,7 @@ public class GeneratedSnippetValidator {
             builder.append("}\n");
             return builder.toString();
         }
-        String fullSource = snippet.fullClassSource();
+        String fullSource = JavaImportSanitizer.sanitizeSourceImports(snippet.fullClassSource());
         if (fullSource != null && !fullSource.isBlank()) {
             return fullSource;
         }
@@ -174,19 +179,7 @@ public class GeneratedSnippetValidator {
             return;
         }
         boolean appended = false;
-        for (String rawImport : imports) {
-            if (rawImport == null || rawImport.isBlank()) {
-                continue;
-            }
-            String importLine = rawImport.trim();
-            if (!importLine.startsWith("import ")) {
-                importLine = importLine.startsWith("static ")
-                        ? "import " + importLine
-                        : "import " + importLine;
-            }
-            if (!importLine.endsWith(";")) {
-                importLine += ";";
-            }
+        for (String importLine : JavaImportSanitizer.sanitizeImports(imports)) {
             builder.append(importLine).append('\n');
             appended = true;
         }

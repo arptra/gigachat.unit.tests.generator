@@ -87,6 +87,78 @@ class PreMergeScratchValidatorTest {
     }
 
     @Test
+    void shouldIgnoreMalformedModelImportsBeforeScratchParsing() {
+        Path testFile = tempDir.resolve("src/test/java/com/example/SampleServiceTest.java");
+        TestClassInfo classInfo = new TestClassInfo(
+                "SampleService",
+                "SampleServiceTest",
+                testFile,
+                List.of(),
+                List.of()
+        );
+        GeneratedTestSnippet snippet = new GeneratedTestSnippet(
+                "SampleServiceTest",
+                "shouldIgnoreBadImport",
+                """
+                        @Test
+                        void shouldIgnoreBadImport() {
+                            org.junit.jupiter.api.Assertions.assertTrue(true);
+                        }
+                        """,
+                List.of(
+                        "import //Corrected import",
+                        "java.util.List // corrected import",
+                        "import static org.junit.jupiter.api.Assertions.*;"
+                ),
+                List.of(),
+                List.of(),
+                List.of(),
+                """
+                        package com.example;
+
+                        import //Corrected import
+                        import java.util.Map // corrected import
+
+                        public class SampleServiceTest {
+
+                            @Test
+                            void shouldIgnoreBadImport() {
+                                org.junit.jupiter.api.Assertions.assertTrue(true);
+                            }
+                        }
+                        """
+        );
+
+        AtomicReference<String> compileSource = new AtomicReference<>("");
+        PreMergeScratchValidator validator = new PreMergeScratchValidator(
+                new PipelineLogger(tempDir),
+                (projectRoot, scratchPath, methodName) -> {
+                    try {
+                        compileSource.set(Files.readString(scratchPath));
+                    } catch (Exception exception) {
+                        throw new IllegalStateException(exception);
+                    }
+                    return new CompileResult(true, List.of(), "", "");
+                },
+                (projectRoot, scratchPath, methodName) -> new ExecuteResult(true, List.of(), "", ""),
+                new SiblingIsolationPolicy(true, true, false, false, true, true, true, true, "PreMergeScratch")
+        );
+
+        PreMergeScratchValidator.ValidationResult result = validator.validate(
+                tempDir,
+                classInfo,
+                snippet,
+                true,
+                false);
+
+        assertTrue(result.success());
+        assertTrue(compileSource.get().contains("import java.util.Map;"));
+        assertTrue(compileSource.get().contains("import java.util.List;"));
+        assertFalse(compileSource.get().contains("Corrected import"));
+        assertFalse(compileSource.get().contains("import //"));
+    }
+
+    @Test
     void shouldFailScratchExecutionWhenTargetClassAlreadyHasSiblings() throws Exception {
         Path testFile = tempDir.resolve("src/test/java/com/example/SampleServiceTest.java");
         Files.createDirectories(testFile.getParent());

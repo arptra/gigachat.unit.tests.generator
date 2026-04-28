@@ -92,15 +92,15 @@ public class PreMergeScratchValidator {
         }
         String scratchClassName = classInfo.getTestClassName() + policy.scratchClassSuffix();
         Path scratchFile = classInfo.getTargetPath().resolveSibling(scratchClassName + ".java");
-        ScratchValidationPlan scratchPlan = buildScratchValidationPlan(classInfo,
-                snippet,
-                scratchClassName,
-                targetClassPopulated,
-                shouldExecute,
-                snippetContainsSiblingTests);
-        String executionMethodName = scratchPlan.executeWholeSuite() ? null : scratchPlan.effectiveMethodName();
 
         try {
+            ScratchValidationPlan scratchPlan = buildScratchValidationPlan(classInfo,
+                    snippet,
+                    scratchClassName,
+                    targetClassPopulated,
+                    shouldExecute,
+                    snippetContainsSiblingTests);
+            String executionMethodName = scratchPlan.executeWholeSuite() ? null : scratchPlan.effectiveMethodName();
             Files.createDirectories(scratchFile.getParent());
             Files.writeString(scratchFile,
                     scratchPlan.scratchSource(),
@@ -132,6 +132,12 @@ public class PreMergeScratchValidator {
             logger.warn("[SIBLING_ISOLATION] " + message);
             return ValidationResult.failed(message,
                     new CompileResult(false, List.of(message), "", exception.getMessage()),
+                    null);
+        } catch (RuntimeException exception) {
+            String message = "Unable to prepare scratch validation class " + scratchFile + ": " + exception.getMessage();
+            logger.warn("[SIBLING_ISOLATION] " + message);
+            return ValidationResult.failed("SCRATCH_PREPARATION_FAILED",
+                    new CompileResult(false, List.of(message), "", exception.toString()),
                     null);
         } finally {
             cleanupScratchArtifacts(classInfo.getTargetPath(), scratchFile, scratchClassName);
@@ -207,7 +213,7 @@ public class PreMergeScratchValidator {
             return false;
         }
         try {
-            CompilationUnit unit = StaticJavaParser.parse(fullClassSource);
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(fullClassSource));
             ClassOrInterfaceDeclaration declaration = locateClass(unit, snippet.className());
             if (declaration == null) {
                 return false;
@@ -236,7 +242,7 @@ public class PreMergeScratchValidator {
                                           GeneratedTestSnippet snippet,
                                           String scratchClassName) {
         try {
-            CompilationUnit unit = StaticJavaParser.parse(snippet.fullClassSource());
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(snippet.fullClassSource()));
             ClassOrInterfaceDeclaration declaration = locateClass(unit, snippet.className());
             if (declaration == null) {
                 return "";
@@ -261,7 +267,7 @@ public class PreMergeScratchValidator {
                                               TestClassInfo classInfo,
                                               String scratchClassName) {
         try {
-            CompilationUnit unit = StaticJavaParser.parse(source);
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(source));
             ClassOrInterfaceDeclaration declaration = locateClass(unit, classInfo.getTestClassName());
             if (declaration == null) {
                 return "";
@@ -327,7 +333,8 @@ public class PreMergeScratchValidator {
 
     public void enrichResolvableImports(Path projectRoot, Path scratchFile) {
         try {
-            CompilationUnit unit = StaticJavaParser.parse(Files.readString(scratchFile, StandardCharsets.UTF_8));
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(
+                    Files.readString(scratchFile, StandardCharsets.UTF_8)));
             String packageName = unit.getPackageDeclaration()
                     .map(packageDeclaration -> packageDeclaration.getNameAsString())
                     .orElse("");
@@ -464,7 +471,7 @@ public class PreMergeScratchValidator {
             return 0;
         }
         try {
-            CompilationUnit unit = StaticJavaParser.parse(source);
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(source));
             ClassOrInterfaceDeclaration declaration = locateClass(unit, null);
             if (declaration == null) {
                 return 0;
@@ -599,7 +606,7 @@ public class PreMergeScratchValidator {
                     || source.contains("@AfterAll")) {
                 return true;
             }
-            CompilationUnit unit = StaticJavaParser.parse(source);
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(source));
             TypeDeclaration<?> declaration = unit.getPrimaryType()
                     .orElseGet(() -> unit.findFirst(ClassOrInterfaceDeclaration.class).orElse(null));
             if (declaration == null) {
@@ -628,8 +635,16 @@ public class PreMergeScratchValidator {
             if (normalized.isBlank()) {
                 continue;
             }
-            if (unit.getImports().stream().map(ImportDeclaration::getNameAsString).noneMatch(normalized::equals)) {
-                unit.addImport(normalized);
+            boolean staticImport = normalized.startsWith("static ");
+            String target = staticImport ? normalized.substring("static ".length()).trim() : normalized;
+            boolean wildcard = target.endsWith(".*");
+            String importName = wildcard ? target.substring(0, target.length() - 2) : target;
+            boolean exists = unit.getImports().stream()
+                    .anyMatch(declaration -> declaration.isStatic() == staticImport
+                            && declaration.isAsterisk() == wildcard
+                            && declaration.getNameAsString().equals(importName));
+            if (!exists) {
+                unit.addImport(importName, staticImport, wildcard);
             }
         }
     }
@@ -641,20 +656,7 @@ public class PreMergeScratchValidator {
     }
 
     private String normalizeImport(String rawImport) {
-        if (rawImport == null) {
-            return "";
-        }
-        String normalized = rawImport.trim();
-        if (normalized.isEmpty()) {
-            return "";
-        }
-        if (normalized.startsWith("import ")) {
-            normalized = normalized.substring("import ".length()).trim();
-        }
-        if (normalized.endsWith(";")) {
-            normalized = normalized.substring(0, normalized.length() - 1).trim();
-        }
-        return normalized;
+        return JavaImportSanitizer.normalizeImportTarget(rawImport);
     }
 
     private void ensureTestAnnotation(MethodDeclaration declaration) {
