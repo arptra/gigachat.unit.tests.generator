@@ -2,12 +2,15 @@ plugins {
     id 'application'
 }
 
+def targetJavaVersion = 21
+
 dependencies {
     implementation libs.javaparser
     implementation libs.json
     implementation libs.gigachat
     implementation libs.jackson.databind
     implementation libs.gradle.tooling
+    implementation libs.junit.platform.launcher
 
     testImplementation libs.junit
     testRuntimeOnly libs.junit.platform.launcher
@@ -17,8 +20,13 @@ application {
     mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
 }
 
+def runtimeLauncher = javaToolchains.launcherFor {
+    languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+}
+
 tasks.named('run').configure {
     workingDir = project.rootProject.projectDir
+    javaLauncher = runtimeLauncher
 }
 
 java {
@@ -36,6 +44,7 @@ tasks.register('MainAgentEntry.main', JavaExec) {
     mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
     classpath = sourceSets.main.runtimeClasspath
     workingDir = project.rootProject.projectDir
+    javaLauncher = runtimeLauncher
 }
 
 String stringProp(Project project, String key) {
@@ -87,6 +96,11 @@ List<String> buildScanArgs(Project project) {
     if (booleanProp(project, 'gigachat.execute', false)) {
         cliArgs += ['--execute']
     }
+    if (booleanProp(project, 'gigachat.coverage', false)) {
+        cliArgs += ['--coverage']
+    }
+    addArg(cliArgs, 'coverage-goals', stringProp(project, 'gigachat.coverageGoals'))
+    addArg(cliArgs, 'coverage-threshold', stringProp(project, 'gigachat.coverageThreshold'))
 
     addArg(cliArgs, 'token', stringProp(project, 'gigachat.token'))
     addArg(cliArgs, 'endpoint', stringProp(project, 'gigachat.endpoint'))
@@ -129,6 +143,11 @@ List<String> buildDiffGenArgs(Project project) {
     if (booleanProp(project, 'gigachat.execute', false)) {
         cliArgs += ['--execute']
     }
+    if (booleanProp(project, 'gigachat.coverage', false)) {
+        cliArgs += ['--coverage']
+    }
+    addArg(cliArgs, 'coverage-goals', stringProp(project, 'gigachat.coverageGoals'))
+    addArg(cliArgs, 'coverage-threshold', stringProp(project, 'gigachat.coverageThreshold'))
 
     addArg(cliArgs, 'source-branch', stringProp(project, 'gigachat.sourceBranch'))
     addArg(cliArgs, 'target-branch', stringProp(project, 'gigachat.targetBranch'))
@@ -157,6 +176,7 @@ tasks.register('diffGenUnitTest', JavaExec) {
     mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
     classpath = sourceSets.main.runtimeClasspath
     workingDir = project.rootProject.projectDir
+    javaLauncher = runtimeLauncher
     args(buildDiffGenArgs(project))
 }
 
@@ -167,5 +187,6 @@ tasks.register('genAiTest', JavaExec) {
     mainClass = 'com.gigachat.unit.tests.generator.MainAgentEntry'
     classpath = sourceSets.main.runtimeClasspath
     workingDir = project.rootProject.projectDir
+    javaLauncher = runtimeLauncher
     args(buildScanArgs(project))
 }

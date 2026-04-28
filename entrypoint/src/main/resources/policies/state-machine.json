@@ -1,0 +1,116 @@
+{
+  "initialState": "S0_INIT",
+  "states": {
+    "S0_INIT": {
+      "title": "initial reasoning state",
+      "terminal": false,
+      "nextStates": [
+        "S0_INIT",
+        "S1_TESTS_GENERATED",
+        "S2_COMPILATION_FAILED",
+        "S2_2_EXECUTION_FAILED",
+        "S5_COMPILATION_SUCCESS",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S1_TESTS_GENERATED": {
+      "title": "test snippet generated and merged",
+      "terminal": false,
+      "nextStates": [
+        "S1_TESTS_GENERATED",
+        "S2_COMPILATION_FAILED",
+        "S2_2_EXECUTION_FAILED",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S2_COMPILATION_FAILED": {
+      "title": "compilation failed",
+      "terminal": false,
+      "nextStates": [
+        "S2_COMPILATION_FAILED",
+        "S2_1_NEED_MORE_CONTEXT",
+        "S3_FALSE_DEPENDENCY_DETECTED",
+        "S4_FIX_APPLIED",
+        "S5_COMPILATION_SUCCESS",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S2_1_NEED_MORE_CONTEXT": {
+      "title": "reasoning requested more context",
+      "terminal": false,
+      "nextStates": [
+        "S2_1_NEED_MORE_CONTEXT",
+        "S2_COMPILATION_FAILED",
+        "S2_2_EXECUTION_FAILED",
+        "S3_FALSE_DEPENDENCY_DETECTED",
+        "S4_FIX_APPLIED",
+        "S5_COMPILATION_SUCCESS",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S2_2_EXECUTION_FAILED": {
+      "title": "runtime execution failed",
+      "terminal": false,
+      "nextStates": [
+        "S2_2_EXECUTION_FAILED",
+        "S2_1_NEED_MORE_CONTEXT",
+        "S3_FALSE_DEPENDENCY_DETECTED",
+        "S4_FIX_APPLIED",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S3_FALSE_DEPENDENCY_DETECTED": {
+      "title": "invented or false dependency detected",
+      "terminal": false,
+      "nextStates": [
+        "S3_FALSE_DEPENDENCY_DETECTED",
+        "S2_COMPILATION_FAILED",
+        "S2_1_NEED_MORE_CONTEXT",
+        "S2_2_EXECUTION_FAILED",
+        "S4_FIX_APPLIED",
+        "S5_COMPILATION_SUCCESS",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S4_FIX_APPLIED": {
+      "title": "bounded fix or recipe applied",
+      "terminal": false,
+      "nextStates": [
+        "S4_FIX_APPLIED",
+        "S2_COMPILATION_FAILED",
+        "S2_2_EXECUTION_FAILED",
+        "S5_COMPILATION_SUCCESS",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S5_COMPILATION_SUCCESS": {
+      "title": "compile succeeded",
+      "terminal": true,
+      "nextStates": [
+        "S5_COMPILATION_SUCCESS",
+        "S2_2_EXECUTION_FAILED",
+        "S8_COVERAGE_FAILED",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S8_COVERAGE_FAILED": {
+      "title": "coverage target not reached",
+      "terminal": false,
+      "nextStates": [
+        "S8_COVERAGE_FAILED",
+        "S2_1_NEED_MORE_CONTEXT",
+        "S2_2_EXECUTION_FAILED",
+        "S4_FIX_APPLIED",
+        "S5_COMPILATION_SUCCESS",
+        "S6_GIVE_UP"
+      ]
+    },
+    "S6_GIVE_UP": {
+      "title": "budget exhausted or reasoning stopped",
+      "terminal": true,
+      "nextStates": [
+        "S6_GIVE_UP"
+      ]
+    }
+  }
+}

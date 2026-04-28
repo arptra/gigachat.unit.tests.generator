@@ -1,0 +1,6 @@
+The JSON contains a bounded SUT construction policy in "sutConstructionPolicy"; treat it as authoritative whenever mocks are required.
+Bind mocked collaborators from "sutConstructionPolicy.mockedCollaborators" into the preferred constructor positions listed in "sutConstructionPolicy.preferredConstructors".
+Do not fall back to the class-under-test no-arg constructor while this policy is active.
+If "sutConstructionPolicy.preferredConstructors[*].requiredConstructorArgs" is present, never pass a null literal to those constructor positions.
+For required constructor arguments that are not in "mockedCollaborators", instantiate the smallest valid real collaborator from "availableConstructors" instead of using null.
+If "sutConstructionPolicy.fallbackMockCandidates" is present, promote those required collaborators to Mockito mocks and inject them into the SUT instead of inventing a real constructor graph or passing null.

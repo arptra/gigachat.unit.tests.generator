@@ -111,17 +111,34 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
             logger.warn("Unable to parse GigaChat response for method " + methodInfo.getSignature() + "; using stub fallback.");
         } catch (HttpClientException exception) {
             logger.error("GigaChat request failed with status " + exception.statusCode() + ": " + exception.bodyAsString());
+            Optional<GeneratedTestSnippet> rawFallback = tryRawHttpFallback(prompt, classInfo, methodInfo);
+            if (rawFallback.isPresent()) {
+                return rawFallback.get();
+            }
         } catch (Exception exception) {
             logger.error("Unexpected error while invoking GigaChat", exception);
+            Optional<GeneratedTestSnippet> rawFallback = tryRawHttpFallback(prompt, classInfo, methodInfo);
+            if (rawFallback.isPresent()) {
+                return rawFallback.get();
+            }
         }
         return fallback.generateTestSnippet(prompt, classInfo, methodInfo, plan);
+    }
+
+    @Override
+    public String requestStructuredResponse(String prompt) {
+        return requestStructuredResponseWithSdk(prompt, true);
     }
 
     protected GigaChatClientConfig clientConfig() {
         return config;
     }
 
-    private String resolveModel() {
+    protected PipelineLogger logger() {
+        return logger;
+    }
+
+    protected String resolveModel() {
         String configured = config.resolvedModelName();
         if (configured == null || configured.isBlank()) {
             return ModelName.GIGA_CHAT_MAX_2;
@@ -162,6 +179,79 @@ abstract class BaseGigaChatLlmClient implements LlmClient {
             logger.error("Failed to inspect available GigaChat model constants", exception);
         }
         return null;
+    }
+
+    protected Optional<String> requestContentViaRawHttp(String prompt) {
+        return Optional.empty();
+    }
+
+    protected Optional<String> requestStructuredResponseViaRawHttp(String prompt) {
+        return Optional.empty();
+    }
+
+    protected String requestStructuredResponseWithSdk(String prompt, boolean allowRawFallback) {
+        Objects.requireNonNull(prompt, "prompt");
+        if (allowRawFallback) {
+            Optional<String> rawPreferred = requestStructuredResponseViaRawHttp(prompt);
+            if (rawPreferred.isPresent()) {
+                return rawPreferred.get();
+            }
+        }
+        GigaChatClient delegate = ensureClient();
+        if (delegate == null) {
+            logger.warn("Structured response request is falling back because the GigaChat client is unavailable.");
+            return "";
+        }
+        try {
+            CompletionRequest request = CompletionRequest.builder()
+                    .model(resolveModel())
+                    .message(ChatMessage.builder()
+                            .role(ChatMessageRole.USER)
+                            .content(prompt)
+                            .build())
+                    .temperature(0.0f)
+                    .topP(1.0f)
+                    .repetitionPenalty(1.0f)
+                    .maxTokens(1400)
+                    .build();
+            String sessionId = Optional.ofNullable(sessionSupplier.get())
+                    .map(String::trim)
+                    .filter(value -> !value.isEmpty())
+                    .orElse(null);
+            CompletionResponse response = delegate.completions(request, sessionId);
+            return Optional.ofNullable(extractContent(response)).orElse("");
+        } catch (HttpClientException exception) {
+            logger.error("Structured GigaChat request failed with status "
+                    + exception.statusCode()
+                    + ": "
+                    + exception.bodyAsString());
+        } catch (Exception exception) {
+            logger.error("Unexpected error while invoking structured GigaChat request", exception);
+        }
+        if (!allowRawFallback) {
+            return "";
+        }
+        return requestStructuredResponseViaRawHttp(prompt).orElse("");
+    }
+
+    private Optional<GeneratedTestSnippet> tryRawHttpFallback(String prompt,
+                                                              TestClassInfo classInfo,
+                                                              TestMethodInfo methodInfo) {
+        Optional<String> rawContent = requestContentViaRawHttp(prompt);
+        if (rawContent.isEmpty()) {
+            return Optional.empty();
+        }
+        logger.info("Received response from raw HTTP fallback for " + methodInfo.getSignature());
+        String content = rawContent.get();
+        Optional<GeneratedTestSnippet> snippet = mapContentToSnippet(content, classInfo);
+        if (snippet.isPresent()) {
+            return snippet;
+        }
+        if (!content.isBlank() && isReasoningRequest(classInfo, methodInfo)) {
+            return Optional.of(createRawSnippet(content, classInfo, methodInfo));
+        }
+        logger.warn("Raw HTTP fallback response for " + methodInfo.getSignature() + " did not contain parsable Java code.");
+        return Optional.empty();
     }
 
     private String extractContent(CompletionResponse response) {

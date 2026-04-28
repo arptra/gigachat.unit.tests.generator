@@ -1,0 +1,103 @@
+{
+  "patterns": [
+    {
+      "id": "C001_MISSING_IMPORT_OR_SYMBOL",
+      "stage": "COMPILATION",
+      "title": "Missing import or symbol",
+      "errorFamily": "MISSING_IMPORT_OR_SYMBOL",
+      "summary": "The generated test references a class, method, or package that is not resolvable from project sources or classpath.",
+      "containsAny": ["cannot find symbol", "does not exist", "package "],
+      "allowedTools": ["SEARCH_SYMBOL", "SHOW_IMPORTS", "READ_CLASS", "ADD_IMPORT", "RECOMPILE"],
+      "executorActions": ["search_symbol", "inspect_current_imports", "read_target_class", "apply_import_fix", "recompile_test"],
+      "llmHeuristic": "Search before editing imports. Do not invent packages or class names. If the same missing symbol repeats after REQUEST_CONTEXT and the project context already names that class or collaborator, patch the import or type reference directly with the smallest correction."
+    },
+    {
+      "id": "C001A_DEPRECATED_MOCKITO_HELPER",
+      "stage": "COMPILATION",
+      "title": "Deprecated Mockito zero-interaction helper",
+      "errorFamily": "DEPRECATED_MOCKITO_HELPER",
+      "summary": "The generated test uses an outdated Mockito helper such as verifyZeroInteractions that is unavailable in the active classpath and should be replaced with the supported zero-interaction verification API.",
+      "containsAny": ["verifyzerointeractions"],
+      "allowedTools": ["SHOW_FILE", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["replace_deprecated_mockito_helper", "recompile_test"],
+      "llmHeuristic": "Replace verifyZeroInteractions(...) with verifyNoInteractions(...) on the same mocks and keep the surrounding assertions intact."
+    },
+    {
+      "id": "C001B_WRONG_PROJECT_IMPORT",
+      "stage": "COMPILATION",
+      "title": "Wrong package for a real project symbol",
+      "errorFamily": "WRONG_PROJECT_IMPORT",
+      "summary": "The generated test imports a real project type from the wrong package even though the simple symbol exists in project sources under a different package.",
+      "containsAny": ["location: package"],
+      "allowedTools": ["SEARCH_SYMBOL", "SHOW_IMPORTS", "ADD_IMPORT", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["search_symbol", "inspect_current_imports", "align_project_import", "recompile_test"],
+      "llmHeuristic": "If SEARCH_SYMBOL resolves exactly one importable candidate for the missing simple name, replace or remove the wrong import immediately instead of requesting the same context again."
+    },
+    {
+      "id": "C002_METHOD_SIGNATURE_MISMATCH",
+      "stage": "COMPILATION",
+      "title": "Method signature mismatch",
+      "errorFamily": "METHOD_SIGNATURE_MISMATCH",
+      "summary": "The generated test is calling a real API with the wrong parameter count, wrong overload, or wrong static/instance shape.",
+      "containsAny": ["cannot be applied to", "no suitable method found", "method "],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "SHOW_FILE", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["read_method_signature", "read_class_api", "patch_invocation_shape", "recompile_test"],
+      "llmHeuristic": "Read the actual API first, then patch only the invocation or assertion that violates the signature."
+    },
+    {
+      "id": "C003_TYPE_MISMATCH",
+      "stage": "COMPILATION",
+      "title": "Type mismatch",
+      "errorFamily": "TYPE_MISMATCH",
+      "summary": "The test compiles against a wrong inferred type, usually caused by invented return assumptions or wrong matcher type.",
+      "containsAny": ["incompatible types", "cannot be converted"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["read_return_type", "patch_argument_or_assertion_type", "recompile_test"],
+      "llmHeuristic": "Align the test with the real return and parameter types. Do not rewrite unrelated setup."
+    },
+    {
+      "id": "C004_ACCESS_VIOLATION",
+      "stage": "COMPILATION",
+      "title": "Access violation",
+      "errorFamily": "ACCESS_VIOLATION",
+      "summary": "The generated test is trying to touch private or package-inaccessible members.",
+      "containsAny": ["has private access", "is not public"],
+      "allowedTools": ["READ_CLASS", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["inspect_public_api", "remove_private_member_usage", "recompile_test"],
+      "llmHeuristic": "Replace private-member interaction with public setup or observable verification. Never bypass visibility with reflection."
+    },
+    {
+      "id": "C005_SYNTAX_ERROR",
+      "stage": "COMPILATION",
+      "title": "Syntax error",
+      "errorFamily": "SYNTAX_ERROR",
+      "summary": "The generated Java source is malformed and must be repaired structurally before deeper reasoning.",
+      "containsAny": ["reached end of file", "expected", "';'"],
+      "allowedTools": ["SHOW_FILE", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["inspect_generated_source", "patch_syntax", "recompile_test"],
+      "llmHeuristic": "Fix syntax with the smallest source edit. Preserve the surrounding test intent."
+    },
+    {
+      "id": "C006_DUPLICATE_JUNIT_ANNOTATION",
+      "stage": "COMPILATION",
+      "title": "Duplicate JUnit annotation after merge",
+      "errorFamily": "DUPLICATE_JUNIT_ANNOTATION",
+      "summary": "The generated test contains repeated JUnit lifecycle or @Test annotations, usually after merge noise duplicated an annotation line.",
+      "containsAny": ["not a repeatable annotation interface", "org.junit.jupiter.api.test", "org.junit.jupiter.api.beforeeach", "org.junit.jupiter.api.aftereach"],
+      "allowedTools": ["SHOW_FILE", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE"],
+      "executorActions": ["collapse_duplicate_annotations", "recompile_test"],
+      "llmHeuristic": "Collapse duplicate consecutive JUnit annotations introduced by test merge noise. Prefer a bounded recipe over free-form patching when one is supplied."
+    },
+    {
+      "id": "C007_INVENTED_USER_STATE_CONSTRUCTOR",
+      "stage": "COMPILATION",
+      "title": "Invented User state constructor",
+      "errorFamily": "INVENTED_USER_STATE_CONSTRUCTOR",
+      "summary": "The generated test encoded later User state through an unavailable constructor overload or a no-arg constructor that does not exist.",
+      "containsAny": ["constructor user in class", "found: java.lang.string,java.lang.string,int", "found: java.lang.string,java.lang.string,boolean", "found: no arguments"],
+      "allowedTools": ["SHOW_FILE", "APPLY_RECIPE", "RECOMPILE"],
+      "executorActions": ["normalize_user_constructor_state_variants", "recompile_test"],
+      "llmHeuristic": "When User state was packed into an unavailable constructor or a no-arg constructor path, prefer the bounded recipe that rewrites the fixture to User(String, String) plus legal public mutators."
+    }
+  ]
+}

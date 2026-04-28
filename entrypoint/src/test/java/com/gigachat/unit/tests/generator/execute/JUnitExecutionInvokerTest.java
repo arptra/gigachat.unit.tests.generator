@@ -52,6 +52,90 @@ class JUnitExecutionInvokerTest {
     }
 
     @Test
+    void shouldScopeWholeClassExecutionWhenMethodNameIsNullForConcreteTestFile() throws Exception {
+        Path gradlew = tempDir.resolve("gradlew");
+        Files.writeString(gradlew, """
+                #!/bin/sh
+                echo "$@"
+                exit 0
+                """);
+        assertTrue(gradlew.toFile().setExecutable(true));
+        Path testFile = tempDir.resolve("src/test/java/com/example/service/UserServiceTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, "package com.example.service; class UserServiceTest {}");
+
+        JUnitExecutionInvoker invoker = new JUnitExecutionInvoker(new PipelineLogger(tempDir));
+
+        ExecuteResult result = invoker.execute(tempDir, testFile, null);
+
+        assertTrue(result.success());
+        assertTrue(result.stdout().contains("test"));
+        assertTrue(result.stdout().contains("--tests"));
+        assertTrue(result.stdout().contains("com.example.service.UserServiceTest"));
+    }
+
+    @Test
+    void shouldKeepWholeSuiteExecutionUnfilteredWhenNoConcreteTestFileIsProvided() throws Exception {
+        Path gradlew = tempDir.resolve("gradlew");
+        Files.writeString(gradlew, "#!/bin/sh");
+
+        JUnitExecutionInvoker invoker = new JUnitExecutionInvoker(new PipelineLogger(tempDir));
+
+        List<String> command = invoker.buildGradleCommand(tempDir, tempDir, null, true);
+
+        assertTrue(command.contains("test"));
+        assertFalse(command.contains("--tests"));
+    }
+
+    @Test
+    void shouldUseEnclosingBuildRootForNestedProject() throws Exception {
+        Path gradlew = tempDir.resolve("gradlew");
+        Files.writeString(gradlew, "#!/bin/sh");
+        Files.writeString(tempDir.resolve("settings.gradle"), """
+                include 'example-project'
+                """);
+        Path nestedProject = tempDir.resolve("example-project");
+        Files.createDirectories(nestedProject);
+        Files.writeString(nestedProject.resolve("build.gradle"), "plugins { id 'java' }");
+        Path testFile = nestedProject.resolve("src/test/java/com/example/service/UserServiceTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, "package com.example.service; class UserServiceTest {}");
+
+        JUnitExecutionInvoker invoker = new JUnitExecutionInvoker(new PipelineLogger(tempDir));
+
+        List<String> command = invoker.buildGradleCommand(nestedProject, testFile, "shouldRegisterUser", false);
+
+        assertEquals(tempDir.resolve("gradlew").toAbsolutePath().normalize().toString(), command.get(0));
+        assertTrue(command.contains(":example-project:test"));
+    }
+
+    @Test
+    void shouldUseDetachedProjectExecutionForNestedStandaloneBuild() throws Exception {
+        Path gradlew = tempDir.resolve("gradlew");
+        Files.writeString(gradlew, "#!/bin/sh");
+        Files.writeString(tempDir.resolve("settings.gradle"), """
+                include 'entrypoint'
+                """);
+        Path nestedProject = tempDir.resolve("tmp/example-project-e2e");
+        Files.createDirectories(nestedProject);
+        Files.writeString(nestedProject.resolve("build.gradle"), "plugins { id 'java' }");
+        Path testFile = nestedProject.resolve("src/test/java/com/example/feature/HiddenFeatureTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, "package com.example.feature; class HiddenFeatureTest {}");
+
+        JUnitExecutionInvoker invoker = new JUnitExecutionInvoker(new PipelineLogger(tempDir));
+
+        List<String> command = invoker.buildGradleCommand(nestedProject, testFile, "shouldActivateFeature", false);
+
+        assertEquals(tempDir.resolve("gradlew").toAbsolutePath().normalize().toString(), command.get(0));
+        assertTrue(command.contains("--settings-file"));
+        assertTrue(command.contains(nestedProject.resolve(".gigachat-standalone-settings.gradle").toAbsolutePath().normalize().toString()));
+        assertTrue(command.contains("test"));
+        assertFalse(command.contains(":tmp:example-project-e2e:test"));
+        assertTrue(command.contains("com.example.feature.HiddenFeatureTest.shouldActivateFeature"));
+    }
+
+    @Test
     void shouldStreamExecutionOutputIntoPipelineLog() throws Exception {
         Path gradlew = tempDir.resolve("gradlew");
         Files.writeString(gradlew, """

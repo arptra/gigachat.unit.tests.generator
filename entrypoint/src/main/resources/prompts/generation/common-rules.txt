@@ -1,0 +1,37 @@
+Never access internal or private fields of the tested class.
+Use only constructors and methods provided in availableConstructors and availableMethods.
+Assert behavior using public APIs like findAll(), size(), or getters.
+Do not reimplement or simplify the tested method.
+Generate a JUnit 5 test class based on the following structured JSON context.
+Follow the "goal" and "instructions" fields to guide the behavior and structure.
+The "methodSignature" field describes the method that must be tested, NOT re-implemented.
+Do NOT include the original method implementation inside the test class.
+Always invoke the tested method on the instance of the class under test (for example: repository.save(user)).
+Use the "testTarget.instanceName" as the variable name for the tested object.
+Use only constructors listed in "availableConstructors".
+Follow each parameter type and count exactly.
+Do not invent or simplify constructor arguments.
+Use only methods listed in "availableMethods".
+The tested method itself is allowed even when it is static and absent from availableMethods; invoke exactly the method described by methodSignature on the target class.
+When mocking or instantiating objects, use only constructors and methods provided in the JSON context.
+If you must create an object, use a constructor from "availableConstructors"; if none fit, skip that instance.
+If a referenced type has no listed no-arg constructor, never use Type() for that type, even after fixing imports or package names.
+When a domain object's state must change, prefer listed public mutators such as activate(), deactivate(), incrementAttempts(), or markLoggedIn() instead of guessed setters like setActive(...) or setLoginAttempts(...).
+If a constructor already establishes default state, never assert the opposite default before invoking the target method; call a listed public mutator first to reach that precondition.
+If a chosen public mutator returns void, call it on its own line and then reuse the same object variable; never chain that void mutator inside add(...), assertX(...), return, or constructor arguments.
+For static mutable collection state, never read or write the private static field; isolate through public APIs by clearing first, seeding through a public emitter or recorder, asserting through a public snapshot/accessor, and clearing again in finally.
+When the class under test has a Clock constructor and the source records timestamps, use a fixed Clock and avoid comparing source timestamps to moving Instant.now() values.
+When the source assigns Instant.now() during the target method and no Clock can be injected, capture Instant before and after the target call and assert the public timestamp accessor is between them; do not truncate or compare to a single pre-call Instant.
+When source branches on LegacyScoreRules.reboundFactor(user.getLoginAttempts(), user.isActive()) and the test expects the high-rebound branch, drive User state with repeated public incrementAttempts() calls before act instead of flipping only assertions or notification verifications.
+If the existing generated test class already contains lifecycle fixture setup such as @BeforeEach/@BeforeAll for testTarget.instanceName, reuse that fixture and do not add another lifecycle helper that reconstructs the class under test.
+If the existing fixture already constructs the class under test with the same wiring, do not restate that lifecycle helper; keep the existing setup and move only additive scenario preparation into the test method.
+If the existing generated test class already has a reusable class-level fixture for testTarget.instanceName and green tests depend on it, do not introduce a new setup()/@BeforeEach helper that rebuilds the SUT differently just because no lifecycle helper exists yet.
+Keep method-specific stubbing and scenario objects inside the new test method unless a new helper is strictly necessary and does not rebind the existing SUT field.
+Do not access or modify private or internal fields (like repository.users).
+Use only fields listed in "accessibleFields".
+To prepare state, call public methods (for example: save()) instead of assigning to fields.
+When repository save semantics remove an existing element by equalsIgnoreCase before adding the new element, do not assert that two case-variant duplicate usernames remain in findAll(); assert replacement or lookup behavior through public APIs instead.
+If state preparation requires internal field access, skip that test case.
+Add assertions for return values or side effects.
+Respect the naming convention from "instructions.namingConvention".
+Use standard Java indentation and line breaks.

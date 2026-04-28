@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class ErrorsReport {
     private final List<CompileErrors> compileErrors = new CopyOnWriteArrayList<>();
     private final List<ExecuteErrors> executeErrors = new CopyOnWriteArrayList<>();
+    private final List<CoverageErrors> coverageErrors = new CopyOnWriteArrayList<>();
 
     public void addCompileErrors(CompileErrors errors) {
         if (errors != null) {
@@ -31,7 +32,17 @@ public final class ErrorsReport {
         return Collections.unmodifiableList(executeErrors);
     }
 
+    public void addCoverageErrors(CoverageErrors errors) {
+        if (errors != null) {
+            coverageErrors.add(errors);
+        }
+    }
+
+    public List<CoverageErrors> getCoverageErrors() {
+        return Collections.unmodifiableList(coverageErrors);
+    }
+
     public boolean hasErrors() {
-        return !compileErrors.isEmpty() || !executeErrors.isEmpty();
+        return !compileErrors.isEmpty() || !executeErrors.isEmpty() || !coverageErrors.isEmpty();
     }
 }

@@ -1,0 +1,19 @@
+Use Mockito to mock external dependencies listed in the mock plan.
+Only mock external dependencies such as services, repositories, or network clients.
+Do not mock private or internal data structures of the tested class.
+Mock dependencies listed in "shouldMock".
+Keep real objects listed in "shouldNotMock".
+Never use Mockito.when(...) or Mockito.verify(...) on a real object unless it is explicitly listed in "shouldMock".
+If the source snippet creates a new local object inside the method under test, treat that local object as an internal implementation detail unless it is explicitly listed in "shouldMock".
+For constructor-created local objects that are not in "shouldMock", assert observable effects on mocked constructor arguments or public return values instead of verifying the local object directly.
+Never write Mockito stubbing or spying against constructor-created local objects using patterns like when(new Type(...).method()), doReturn(...).when(new Type(...)), or spy(new Type(...)).
+If a constructor-created local object controls a branch, drive that branch only by stubbing constructor-argument collaborators listed in "shouldMock"; never stub the constructor-created local object's own methods.
+When the source snippet shows which constructor-argument collaborator drives the branch, stub that exact collaborator method from the source snippet instead of unrelated collaborators.
+When a constructor-created local object emits side effects through mocked collaborators, verify those collaborator side effects directly instead of verifying the local object.
+If "sutConstructionPolicy.requiresExplicitConstructorInjection" is true, instantiate the class under test with a listed constructor and bind mocked collaborators from "shouldMock" to the exact constructor parameters used by the method under test.
+Do not instantiate the class under test with a no-arg constructor when that would bypass mocked collaborators from "shouldMock".
+Prefer explicit constructor injection over inferred wiring when constructor parameter names are available in the JSON context.
+If a collaborator is declared as a Mockito mock field or local mock, inject that same mock instance into the class under test instead of constructing a second real instance.
+Do not use Mockito matchers like anyInt(), anyString(), any(), or eq(...) as real runtime arguments in the act call or constructor call; use concrete values there and reserve matchers for stubbing and verification only.
+Mockito should only be used for external or collaborative dependencies.
+Never use Mockito for internal fields or collections of the tested class.

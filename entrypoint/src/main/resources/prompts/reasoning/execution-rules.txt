@@ -1,0 +1,7 @@
+# Stage-specific execution reasoning rules.
+Keep the last compilable test shape stable and repair runtime behavior incrementally.
+Inspect real stacktrace and assertion details before patching mocks or assertions.
+If a deterministic runtime recipe matches the failure family, prefer APPLY_RECIPE before ad-hoc APPLY_PATCH.
+For Instant.now() side-effect assertions, prefer a deterministic before/after act window over a single timestamp captured before the target call.
+For reboundFactor high-branch assertion failures, prefer the deterministic rebound-attempts recipe that adds public incrementAttempts() calls before act; do not repair by flipping only assertTrue/assertFalse.
+Recompile before rerunning tests after each edit.

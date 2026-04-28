@@ -1,10 +1,5 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
-import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
-import com.gigachat.unit.tests.generator.dto.MockPlan;
-import com.gigachat.unit.tests.generator.dto.MockStrategy;
-import com.gigachat.unit.tests.generator.dto.TestClassInfo;
-import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
 import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
@@ -16,8 +11,10 @@ import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPr
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CompilationReasoningServiceTest {
 
@@ -70,7 +67,52 @@ class CompilationReasoningServiceTest {
         ReasoningResponse response = service.reasonAboutError(new ReasoningLoopContext(errorInfo, summary, ActionExecutionResult.empty(), null, new ReasoningMemory()));
 
         assertEquals("STOP", response.getDecision());
-        assertEquals(1, llmClient.callCount);
+        assertEquals(2, llmClient.callCount);
+    }
+
+    @Test
+    void shouldApplyPromptSuffixAndInvokeAttemptListener() {
+        String responseJson = """
+                {
+                  "decision": "STOP",
+                  "actions": [],
+                  "memory_updates": {}
+                }
+                """;
+        CapturingLlmClient llmClient = new CapturingLlmClient(responseJson);
+        CompilationReasoningService service = new CompilationReasoningService(
+                llmClient,
+                new CompilationReasoningPromptBuilder(),
+                new ReasoningResponseParser()
+        );
+        AtomicInteger beforeSendCalls = new AtomicInteger();
+        AtomicInteger afterParseCalls = new AtomicInteger();
+
+        ReasoningResponse response = service.reasonAboutError(
+                new ReasoningLoopContext(
+                        new CompilationErrorInfo("out", "msg", "fqcn", "path", 1, null),
+                        new ProjectContextSummary(List.of("src"), List.of("test"), List.of("dep")),
+                        ActionExecutionResult.empty(),
+                        null,
+                        new ReasoningMemory()),
+                new CompilationReasoningService.ReasoningOptions(
+                        "Execution-only hard constraint:\n- Prefer APPLY_FIX before STOP.",
+                        new CompilationReasoningService.AttemptListener() {
+                            @Override
+                            public void beforeSend(int attempt, String prompt) {
+                                beforeSendCalls.incrementAndGet();
+                            }
+
+                            @Override
+                            public void afterParse(int attempt, ReasoningResponse parsedResponse) {
+                                afterParseCalls.incrementAndGet();
+                            }
+                        }));
+
+        assertEquals("STOP", response.getDecision());
+        assertTrue(llmClient.lastPrompt.contains("Execution-only hard constraint"));
+        assertEquals(1, beforeSendCalls.get());
+        assertEquals(1, afterParseCalls.get());
     }
 
     private static class CapturingLlmClient implements LlmClient {
@@ -83,21 +125,17 @@ class CompilationReasoningServiceTest {
         }
 
         @Override
-        public GeneratedTestSnippet generateTestSnippet(String prompt,
-                                                        TestClassInfo classInfo,
-                                                        TestMethodInfo methodInfo,
-                                                        MockPlan plan) {
+        public String requestStructuredResponse(String prompt) {
             this.lastPrompt = prompt;
-            return new GeneratedTestSnippet(
-                    classInfo.getTestClassName(),
-                    methodInfo.getSignature(),
-                    responseJson,
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    ""
-            );
+            return responseJson;
+        }
+
+        @Override
+        public com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet generateTestSnippet(String prompt,
+                                                                                              com.gigachat.unit.tests.generator.dto.TestClassInfo classInfo,
+                                                                                              com.gigachat.unit.tests.generator.dto.TestMethodInfo methodInfo,
+                                                                                              com.gigachat.unit.tests.generator.dto.MockPlan plan) {
+            throw new UnsupportedOperationException("Not used in this test");
         }
     }
 
@@ -112,23 +150,19 @@ class CompilationReasoningServiceTest {
         }
 
         @Override
-        public GeneratedTestSnippet generateTestSnippet(String prompt,
-                                                        TestClassInfo classInfo,
-                                                        TestMethodInfo methodInfo,
-                                                        MockPlan plan) {
+        public String requestStructuredResponse(String prompt) {
             callCount++;
             String payload = responses.get(Math.min(index, responses.size() - 1));
             index++;
-            return new GeneratedTestSnippet(
-                    classInfo.getTestClassName(),
-                    methodInfo.getSignature(),
-                    payload,
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    ""
-            );
+            return payload;
+        }
+
+        @Override
+        public com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet generateTestSnippet(String prompt,
+                                                                                              com.gigachat.unit.tests.generator.dto.TestClassInfo classInfo,
+                                                                                              com.gigachat.unit.tests.generator.dto.TestMethodInfo methodInfo,
+                                                                                              com.gigachat.unit.tests.generator.dto.MockPlan plan) {
+            throw new UnsupportedOperationException("Not used in this test");
         }
     }
 }

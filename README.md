@@ -2,6 +2,26 @@
 
 This repository hosts the TestRepairAgent entrypoint module together with an example Java project used for scanner validation.
 
+## Context
+
+Long-lived project context, constraints, and the current roadmap are stored in
+[docs/PROJECT_CONTEXT.md](./docs/PROJECT_CONTEXT.md).
+
+The bounded state/action search model and active failure-pattern catalog are stored in
+[docs/STATE_MODEL_AND_ACTION_SPACE.md](./docs/STATE_MODEL_AND_ACTION_SPACE.md).
+
+The target pipeline algorithm and resource-externalization refactor plan are stored in
+[docs/PIPELINE_ALGORITHM_AND_RESOURCE_PLAN.md](./docs/PIPELINE_ALGORITHM_AND_RESOURCE_PLAN.md).
+
+Rules for expanding compile/runtime/coverage pattern catalogs are stored in
+[docs/PATTERN_CATALOG_RULES.md](./docs/PATTERN_CATALOG_RULES.md).
+
+Harder legacy-like stress targets for live runs now exist in `example-project` under
+`com.example.app.service.LegacyWorkflowService`.
+
+Readable step-by-step run tracing is written to `.agent/logs/state-trace.log` alongside the full
+`.agent/logs/pipeline.log`.
+
 ## Requirements
 
 * Java 21
@@ -14,6 +34,10 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 ```bash
 ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --project"
 ```
+
+For the bundled `example-project`, compile and execute stages can run through the enclosing root
+Gradle wrapper, and the sample project now also has its own standalone `settings.gradle` so it can
+be copied and replayed more easily as an isolated build artifact.
 
 
 ### Gradle Task Mode (`./gradlew genAiTest`)
@@ -33,6 +57,7 @@ Use Gradle to invoke the entrypoint module. For example, to scan the whole examp
 ```bash
 ./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.project=true
 ./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.class=com.example.app.service.UserService
+./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.class=com.example.app.service.LegacyWorkflowService
 ./gradlew genAiTest -Pgigachat.path=./example-project -Pgigachat.compile=true -Pgigachat.execute=true
 ```
 
@@ -146,7 +171,7 @@ gigachat.model=
 * Token authentication:
 
   ```bash
-  ./gradlew diffGenUnitTest -Pgigachat.path=./example-project -Pgigachat.token=<token> -Pgigachat.endpoint=https://gigachat.example -Pgigachat.authUrl=https://oauth.example
+  ./gradlew diffGenUnitTest -Pgigachat.path=./example-project -Pgigachat.token=<auth_key>
   ```
 
 * mTLS authentication:
@@ -238,7 +263,7 @@ GigaChat client:
 * **Token-based authentication**
 
   ```bash
-  ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --token <your_token>"
+  ./gradlew :entrypoint:run --args="--mode scan --path ./example-project --token <your_auth_key>"
   ```
 
 * **mTLS authentication**
@@ -252,8 +277,35 @@ Optional switches:
 * `--ssl` &mdash; enable strict certificate verification when talking to the GigaChat API (defaults to `false`).
 * `--proxy` &mdash; switch to unauthenticated HTTP proxy LLM client (no token/certificates required).
 * `--model` &mdash; override the model name (defaults to `GIGA_CHAT_MAX_2`).
+* `--auth-url` &mdash; override the OAuth endpoint for token auth. If omitted, the client uses the official default `https://ngw.devices.sberbank.ru:9443/api/v2/oauth`.
+* `--endpoint` &mdash; override the API base URL. If omitted, the client uses the default `https://gigachat.devices.sberbank.ru/api/v1`.
+
+Notes for token auth:
+
+* In this project the `--token` / `gigachat.token` field is used as the OAuth authorization key consumed by `GigaChatTokenClient`.
+* `--auth-url` is optional for the standard public endpoint.
+* If you already have a ready `access_token`, this repository does not yet expose a separate "use pre-fetched bearer token as-is" mode; it uses the SDK OAuth flow around the provided key.
 
 When credentials are missing the generator continues to operate with the deterministic stub so pipeline runs remain reproducible.
+
+### Simplest Real Run
+
+The shortest real run against the bundled example project is via the helper script:
+
+```bash
+GIGACHAT_AUTH_KEY=<your_auth_key> ./scripts/run-example-gigachat-token.sh
+```
+
+Optional environment variables:
+
+* `GIGACHAT_TARGET_CLASS` &mdash; defaults to `com.example.app.service.UserService`
+* `GIGACHAT_MODEL`
+* `GIGACHAT_ENDPOINT`
+* `GIGACHAT_AUTH_URL`
+* `GIGACHAT_COMPILE` / `GIGACHAT_EXECUTE` &mdash; default to `true`
+
+The script delegates to `./gradlew genAiTest` and is intended as the easiest smoke run for
+`GigaChatTokenClient`.
 
 ## Running Tests
 

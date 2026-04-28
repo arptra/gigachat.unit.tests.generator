@@ -1,5 +1,10 @@
 package com.gigachat.unit.tests.generator.reasoning.model;
 
+import com.gigachat.unit.tests.generator.resources.ReasoningLoopPolicyCatalog;
+import com.gigachat.unit.tests.generator.resources.ReasoningMemoryPolicy;
+import com.gigachat.unit.tests.generator.resources.StateMachinePolicy;
+import com.gigachat.unit.tests.generator.resources.StateMachinePolicyCatalog;
+
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Deque;
@@ -14,8 +19,8 @@ import java.util.Set;
  */
 public class ReasoningMemory {
 
-    private static final int MAX_ERROR_HISTORY = 5;
-    private static final int DEFAULT_CONTEXT_BUDGET = 3;
+    private static final ReasoningMemoryPolicy MEMORY_POLICY = new ReasoningLoopPolicyCatalog().memoryPolicy();
+    private static final StateMachinePolicy STATE_MACHINE = new StateMachinePolicyCatalog().policy();
 
     private int attempt;
     private AgentState state;
@@ -28,8 +33,8 @@ public class ReasoningMemory {
 
     public ReasoningMemory() {
         this.attempt = 0;
-        this.state = AgentState.S0_INIT;
-        this.contextRequestBudgetRemaining = DEFAULT_CONTEXT_BUDGET;
+        this.state = STATE_MACHINE.initialState();
+        this.contextRequestBudgetRemaining = MEMORY_POLICY.defaultContextBudget();
         this.recentErrorSignatures = new ArrayDeque<>();
         this.knownMissingSymbols = new HashSet<>();
         this.appliedFixSignatures = new HashSet<>();
@@ -50,6 +55,17 @@ public class ReasoningMemory {
     }
 
     public void setState(AgentState state) {
+        if (state == null) {
+            throw new IllegalArgumentException("state must not be null");
+        }
+        if (!STATE_MACHINE.canTransition(this.state, state)) {
+            throw new IllegalStateException("Invalid reasoning state transition: "
+                    + this.state
+                    + " -> "
+                    + state
+                    + "; allowed next states="
+                    + STATE_MACHINE.allowedNextStates(this.state));
+        }
         this.state = state;
     }
 
@@ -64,7 +80,7 @@ public class ReasoningMemory {
     }
 
     public void resetContextBudget() {
-        contextRequestBudgetRemaining = DEFAULT_CONTEXT_BUDGET;
+        contextRequestBudgetRemaining = MEMORY_POLICY.defaultContextBudget();
     }
 
     public List<String> getRecentErrorSignatures() {
@@ -75,7 +91,7 @@ public class ReasoningMemory {
         if (signature == null || signature.isBlank()) {
             return;
         }
-        if (recentErrorSignatures.size() >= MAX_ERROR_HISTORY) {
+        if (recentErrorSignatures.size() >= MEMORY_POLICY.maxErrorHistory()) {
             recentErrorSignatures.removeFirst();
         }
         recentErrorSignatures.addLast(signature);

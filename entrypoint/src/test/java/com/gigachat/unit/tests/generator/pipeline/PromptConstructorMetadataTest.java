@@ -112,6 +112,32 @@ class PromptConstructorMetadataTest {
         assertTrue(collectionPrompt.contains("User(String username, String email)"));
     }
 
+    @Test
+    void shouldExposeConstructorsForMethodSignatureTypesInSingleFileMode() throws Exception {
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(projectRoot)
+                .targetClass("com.example.app.repository.UserRepository")
+                .scanWholeProject(true)
+                .singleFileMode(true)
+                .build();
+
+        java.util.List<TestClassInfo> sequentialClasses = new java.util.ArrayList<>();
+        scanner.scanSequentially(config, sequentialClasses::addAll);
+
+        TestClassInfo classInfo = sequentialClasses.stream()
+                .filter(info -> "UserRepository".equals(info.getClassName()))
+                .findFirst()
+                .orElseThrow();
+        TestMethodInfo saveMethod = classInfo.getMethods().stream()
+                .filter(method -> method.getSignature().contains("save"))
+                .findFirst()
+                .orElseThrow();
+
+        String savePrompt = buildPromptJson(config, classInfo, saveMethod);
+        assertTrue(savePrompt.contains("User(String username, String email)"));
+    }
+
     private String buildPromptJson(AgentConfig config,
                                    TestClassInfo classInfo,
                                    TestMethodInfo methodInfo) {

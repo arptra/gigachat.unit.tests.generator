@@ -24,8 +24,15 @@ public class LlmClientStub implements LlmClient {
                 + "        // TODO: replace stub with real assertions for " + methodInfo.getSignature() + System.lineSeparator()
                 + "        org.junit.jupiter.api.Assertions.assertTrue(true);" + System.lineSeparator()
                 + "    }";
-        List<String> imports = List.of("org.junit.jupiter.api.Assertions");
+        List<String> imports = List.of("org.junit.jupiter.api.Assertions", "org.junit.jupiter.api.Test");
         return new GeneratedTestSnippet(classInfo.getTestClassName(), methodName, body, imports);
+    }
+
+    @Override
+    public String requestStructuredResponse(String prompt) {
+        return """
+                {"decision":"STOP","actions":[],"memory_updates":{}}
+                """;
     }
 
     private String deriveMethodName(TestMethodInfo methodInfo) {

@@ -29,20 +29,29 @@ public class DiffEngine {
             logger.info("Replaced skeleton test class " + file + " with full snippet for " + snippet.methodName());
             String diff = diff(originalSource, replacement);
             boolean changed = !Objects.equals(originalSource, replacement);
-            return new MergeResult(changed, originalSource, replacement, snippet.methodBody(), diff);
+            return new MergeResult(changed, originalSource, replacement, snippet.methodBody(), diff, snippet, "REPLACED_SKELETON_WITH_FULL_CLASS");
         }
         String withStructure = writer.applyClassStructure(originalSource, snippet);
         String withImports = writer.ensureImports(withStructure, snippet.imports());
-        String mergedSource = writer.appendMethod(withImports, snippet);
+        TestClassWriter.AppendResult appendResult = writer.appendMethod(withImports, snippet);
+        String mergedSource = appendResult.source();
         boolean changed = !mergedSource.equals(originalSource);
         if (changed) {
             writer.writeSource(file, mergedSource);
-            logger.info("Merged generated method " + snippet.methodName() + " into " + file);
+            logger.info("Merged generated method " + appendResult.mergedSnippet().methodName() + " into " + file
+                    + " [" + appendResult.diagnostic() + "]");
         } else {
-            logger.warn("No changes applied while merging snippet for " + snippet.methodName());
+            logger.warn("No changes applied while merging snippet for " + snippet.methodName()
+                    + " [" + appendResult.diagnostic() + "]");
         }
         String diff = diff(originalSource, mergedSource);
-        return new MergeResult(changed, originalSource, mergedSource, snippet.methodBody(), diff);
+        return new MergeResult(changed,
+                originalSource,
+                mergedSource,
+                appendResult.mergedSnippet().methodBody(),
+                diff,
+                appendResult.mergedSnippet(),
+                appendResult.diagnostic());
     }
 
     private boolean shouldReplaceWithFullClass(String originalSource, GeneratedTestSnippet snippet) {
@@ -85,6 +94,8 @@ public class DiffEngine {
                               String originalSource,
                               String updatedSource,
                               String insertedBlock,
-                              String diff) {
+                              String diff,
+                              GeneratedTestSnippet mergedSnippet,
+                              String diagnostic) {
     }
 }

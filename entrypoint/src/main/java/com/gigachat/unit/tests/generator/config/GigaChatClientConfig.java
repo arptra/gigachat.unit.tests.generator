@@ -144,7 +144,7 @@ public class GigaChatClientConfig {
         }
         String mergedToken = other.tokenOptional().orElse(token);
         URI mergedEndpoint = other.endpointOptional().orElse(endpoint);
-        URI mergedAuthUrl = other.endpointOptional().orElse(authUrl);
+        URI mergedAuthUrl = other.authUrlOptional().orElse(authUrl);
         Path mergedCert = other.certificatePathOptional().orElse(certificatePath);
         Path mergedRoot = other.rootCertificatePathOptional().orElse(rootCertificatePath);
         Path mergedKey = other.privateKeyPathOptional().orElse(privateKeyPath);
@@ -169,6 +169,7 @@ public class GigaChatClientConfig {
         }
         return Objects.equals(token, that.token)
                 && Objects.equals(endpoint, that.endpoint)
+                && Objects.equals(authUrl, that.authUrl)
                 && Objects.equals(certificatePath, that.certificatePath)
                 && Objects.equals(rootCertificatePath, that.rootCertificatePath)
                 && Objects.equals(privateKeyPath, that.privateKeyPath)
@@ -178,7 +179,7 @@ public class GigaChatClientConfig {
 
     @Override
     public int hashCode() {
-        return Objects.hash(token, endpoint, certificatePath, rootCertificatePath, privateKeyPath, verifySslCerts, modelName);
+        return Objects.hash(token, endpoint, authUrl, certificatePath, rootCertificatePath, privateKeyPath, verifySslCerts, modelName);
     }
 
     @Override
@@ -186,7 +187,7 @@ public class GigaChatClientConfig {
         return "GigaChatClientConfig{"
                 + "token='" + token + '\''
                 + ", endpoint=" + endpoint
-                + ", endpoint=" + authUrl
+                + ", authUrl=" + authUrl
                 + ", certificatePath=" + certificatePath
                 + ", rootCertificatePath=" + rootCertificatePath
                 + ", privateKeyPath=" + privateKeyPath

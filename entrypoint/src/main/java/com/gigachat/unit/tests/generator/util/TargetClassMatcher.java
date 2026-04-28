@@ -60,11 +60,45 @@ public final class TargetClassMatcher {
     public static boolean matches(TestClassInfo info, String target) {
         Objects.requireNonNull(info, "info");
         return matches(target,
-                "",
+                derivePackageName(info.resolveTestFile()),
                 info.getClassName(),
                 info.getTestClassName(),
                 deriveModuleRoot(info.resolveTestFile()),
                 info.resolveTestFile());
+    }
+
+    private static String derivePackageName(Path testFilePath) {
+        if (testFilePath == null) {
+            return "";
+        }
+        Path normalized = testFilePath.toAbsolutePath().normalize();
+        for (int index = 0; index < normalized.getNameCount(); index++) {
+            if (!"src".equals(normalized.getName(index).toString())) {
+                continue;
+            }
+            if (index + 2 >= normalized.getNameCount()) {
+                break;
+            }
+            boolean testTree = "test".equals(normalized.getName(index + 1).toString())
+                    && "java".equals(normalized.getName(index + 2).toString());
+            if (!testTree) {
+                continue;
+            }
+            int packageStart = index + 3;
+            int packageEnd = normalized.getNameCount() - 1;
+            if (packageStart >= packageEnd) {
+                return "";
+            }
+            StringBuilder builder = new StringBuilder();
+            for (int part = packageStart; part < packageEnd; part++) {
+                if (builder.length() > 0) {
+                    builder.append('.');
+                }
+                builder.append(normalized.getName(part).toString());
+            }
+            return builder.toString();
+        }
+        return "";
     }
 
     private static boolean isModuleWildcard(String target) {

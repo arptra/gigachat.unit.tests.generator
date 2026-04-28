@@ -1,0 +1,264 @@
+{
+  "patterns": [
+    {
+      "id": "G001_INVENTED_METHOD_USAGE",
+      "errorCode": "E102",
+      "title": "Invented method or API usage",
+      "summary": "The generated test calls a method that is not present in availableMethods for the resolved type.",
+      "containsAny": ["E102"],
+      "retryConstraints": [
+        "Do not invent setters, getters, helpers, or mutators that are absent from availableMethods for that type.",
+        "Replace invented API usage with methods that are explicitly listed in availableMethods, or reshape the setup so the unsupported call is no longer needed.",
+        "If the rejected call is the exact methodSignature target on the class under test, keep that target invocation; static target methods may be absent from availableMethods because availableMethods is instance-API oriented.",
+        "When configuring branch-driving domain state, prefer allowed public methods from availableMethods over guessed setter names.",
+        "If boolean or counter state must change, prefer explicit toggler/increment methods from availableMethods such as activate(), deactivate(), markLoggedIn(), or incrementAttempts() instead of guessed setters like setActive(...) or setLoginAttempts(...).",
+        "If a constructor establishes a default state, do not assert the opposite default before invoking the target; use listed public mutators to reach the needed precondition first."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Keep the test intent, but swap every invented method call for a listed public API or skip that case if no supported API can express it."
+    },
+    {
+      "id": "G002_INTERNAL_FIELD_ACCESS",
+      "errorCode": "E103",
+      "title": "Internal field access",
+      "summary": "The generated test reaches into private or internal state of the class under test instead of preparing state through public APIs.",
+      "containsAny": ["E103"],
+      "retryConstraints": [
+        "Never read or assign internal fields of the class under test, including repository-style collections or hidden collaborators.",
+        "Prepare state only through constructors, public methods from availableMethods, or collaborator stubs from shouldMock.",
+        "If the scenario requires direct internal field mutation to become valid, skip that test case instead of forcing it."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Replace internal field access with public setup or collaborator-driven setup, and skip cases that are only reachable through hidden state mutation."
+    },
+    {
+      "id": "G003_MISSING_CONSTRUCTOR_METADATA",
+      "errorCode": "E104",
+      "title": "Missing constructor metadata",
+      "summary": "The generated test references a constructor shape that is not present in availableConstructors for that type.",
+      "containsAny": ["E104"],
+      "retryConstraints": [
+        "Do not invent constructor overloads that are absent from availableConstructors.",
+        "If a value object must be created, use only listed constructors and then apply listed public methods from availableMethods to reach the desired state.",
+        "When the only listed constructor covers identity fields but not later state, create the object with that constructor first and then drive state transitions through listed public methods instead of guessing extra constructor parameters or a no-arg constructor.",
+        "If the invalid snippet encoded boolean or counter state inside a missing constructor such as User(name, email, true) or User(name, email, 3), rebuild the fixture as User(name, email) and then use listed public mutators like deactivate() or incrementAttempts().",
+        "If the invalid snippet switched to a missing no-arg constructor plus guessed setters such as setUsername(...), setEmail(...), or setActive(...), replace that whole fixture path with the listed constructor and legal public mutators instead of keeping the setter-based shape.",
+        "If the invalid snippet used a missing no-arg constructor such as Type(), replace that exact constructor path instead of preserving it after other import or package fixes.",
+        "If a required collaborator has no legal real construction path from availableConstructors, promote it to a Mockito mock instead of inventing null-based or synthetic constructor graphs.",
+        "If no listed constructor plus public methods can express the needed fixture, skip that scenario instead of guessing a new constructor."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS",
+        "SOURCE_DERIVED_CONSTRUCTOR_PATH_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Rebuild the fixture using an allowed constructor plus listed public methods, or drop the unsupported scenario when the object cannot be expressed legally."
+    },
+    {
+      "id": "G004_MOCKITO_DISABLED_FOR_THIS_TEST",
+      "errorCode": "E105",
+      "title": "Mockito usage forbidden for this test",
+      "summary": "The generated test uses Mockito even though the current generation state requires real objects only.",
+      "containsAny": ["E105"],
+      "retryConstraints": [
+        "Mockito is allowed only when the mock plan strategy is not NONE.",
+        "If mocks are disabled, regenerate the test using only real objects and public-behavior assertions."
+      ],
+      "dynamicConstraintBuilders": [],
+      "llmHeuristic": "Remove Mockito usage and keep only real setup plus public assertions."
+    },
+    {
+      "id": "G005_CONSTRUCTOR_LOCAL_OBJECT_MOCKING",
+      "errorCode": "E106",
+      "title": "Constructor-local object mocked directly",
+      "summary": "The generated test tries to mock, spy, stub, or verify a constructor-created local object.",
+      "containsAny": ["E106"],
+      "retryConstraints": [
+        "Never use Mockito.when(new Type(...).method()), doReturn(...).when(new Type(...)), spy(new Type(...)), or verify(localVar) for constructor-created local objects.",
+        "If a constructor-created local object controls a branch, stub only constructor-argument collaborators from shouldMock and verify collaborator side effects instead of the local object.",
+        "When constructorLocalContexts is present, use constructorLocalContexts[*].invokedMethods[*].sourceSnippet as the source of truth for which collaborator or domain input actually drives the branch.",
+        "Prefer constructorLocalContexts[*].invokedMethods[*].branchDrivers over free-form guesswork when choosing the exact collaborator stub, threshold, or domain-object mutation that drives the branch.",
+        "When constructorLocalContexts[*].invokedMethods[*].publicStateMutators is present, use those public domain-object mutations to drive branchDrivers that depend on getters like getX()/isX().",
+        "Do not guess a synthetic branch driver when constructorLocalContexts already shows the exact feature flag, collaborator method, or domain getter used by the constructor-local object."
+      ],
+      "dynamicConstraintBuilders": [
+        "CONSTRUCTOR_LOCAL_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Replace direct constructor-local mocking with collaborator stubs and observable side-effect verification."
+    },
+    {
+      "id": "G006_SUT_CONSTRUCTION_BYPASSES_MOCKS",
+      "errorCode": "E107",
+      "title": "SUT construction bypasses required mocks",
+      "summary": "The generated test constructs the class under test in a way that ignores required mocked collaborators.",
+      "containsAny": ["E107"],
+      "retryConstraints": [
+        "Do not instantiate the class under test with a no-arg constructor when shouldMock is non-empty and a matching constructor is available.",
+        "Bind mocked collaborators from shouldMock to the exact constructor parameters of the class under test instead of creating fresh real collaborators.",
+        "If a collaborator is declared as a Mockito mock field or local mock, inject that same mock instance into the class under test instead of constructing a second real instance."
+      ],
+      "dynamicConstraintBuilders": [
+        "TARGET_CONSTRUCTION_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Keep the test shape, but replace SUT wiring with explicit constructor injection that reuses the existing mocks."
+    },
+    {
+      "id": "G007_TARGET_METHOD_NOT_EXERCISED",
+      "errorCode": "E108",
+      "title": "Generated test never exercises the target method",
+      "summary": "The generated test is a placeholder, tautology, or otherwise skips invoking the real method under test.",
+      "containsAny": ["E108"],
+      "retryConstraints": [
+        "The generated test must invoke the target method described by methodContext.methodSignature on testTarget.instanceName, or on the target class only when the target is static.",
+        "Reject placeholder tests such as TODO stubs or tautological assertions like assertTrue(true) when they do not exercise the target method."
+      ],
+      "dynamicConstraintBuilders": [],
+      "llmHeuristic": "Preserve any valid setup, but replace placeholder assertions with a real direct invocation of the target method."
+    },
+    {
+      "id": "G008_VOID_METHOD_STUBBED_WITH_WHEN",
+      "errorCode": "E109",
+      "title": "Void method stubbed with Mockito.when",
+      "summary": "The generated test tries to stub a void method through Mockito.when(...), which is invalid and usually signals hallucinated mock semantics.",
+      "containsAny": ["E109"],
+      "retryConstraints": [
+        "Never place a void method invocation inside Mockito.when(...).",
+        "Never use return-style chaining such as when(voidCall).thenReturn(...), when(voidCall).thenCallRealMethod(), or when(voidCall).thenAnswer(...) for a void method.",
+        "For void collaborators, prefer doNothing(), doThrow(), or direct verify(...) depending on the intended behavior.",
+        "Do not invent boolean-returning semantics for void collaborator methods just to satisfy an assertion.",
+        "When constructorLocalContexts is present, use constructorLocalContexts[*].invokedMethods[*].branchDrivers to find a non-void branch driver collaborator or domain input instead of stubbing a void side effect.",
+        "Treat constructorLocalContexts[*].invokedMethods[*].voidSideEffects as verification-only or doNothing()/doThrow() targets, never as return-style stubs.",
+        "When constructorLocalContexts[*].invokedMethods[*].publicStateMutators is present, prefer those public domain-object mutations over collaborator stubbing for getter-driven branches.",
+        "If constructorLocalContexts[*].invokedMethods[*].branchDrivers mention domain getters on a real object, drive that branch by mutating the real object through its public API instead of stubbing a void collaborator."
+      ],
+      "dynamicConstraintBuilders": [],
+      "llmHeuristic": "Replace return-style stubbing of void methods, including thenCallRealMethod chains, with doNothing/doThrow or with post-act verification of the collaborator side effect."
+    },
+    {
+      "id": "G009_REQUIRED_SUT_CONSTRUCTOR_ARG_IS_NULL",
+      "errorCode": "E110",
+      "title": "Required SUT constructor argument is null",
+      "summary": "The generated test passes a null literal into a constructor position that the source class requires to be non-null.",
+      "containsAny": ["E110"],
+      "retryConstraints": [
+        "Do not pass null literals to required constructor arguments of the class under test.",
+        "If the required constructor argument is listed in shouldMock, inject that same Mockito mock instance into the SUT constructor.",
+        "If the required constructor argument is not listed in shouldMock, instantiate the smallest valid real collaborator from availableConstructors instead of using null.",
+        "Keep the existing test shape and replace only the invalid constructor argument wiring."
+      ],
+      "dynamicConstraintBuilders": [
+        "TARGET_CONSTRUCTION_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Keep the test intent, but replace null constructor arguments on the SUT with the required mock or minimal real collaborator from the allowed constructors."
+    },
+    {
+      "id": "G010_WRONG_PROJECT_IMPORT_PACKAGE",
+      "errorCode": "E111",
+      "title": "Wrong in-project import package",
+      "summary": "The generated test imports a project type from a package that does not exist in the scanned source tree even though the same simple name exists elsewhere in the project.",
+      "containsAny": ["E111"],
+      "retryConstraints": [
+        "Do not invent or relocate the package of an in-project type import.",
+        "If a compiler or validator reports that an imported project type does not resolve, replace that import with the authoritative in-project type that has the same simple name.",
+        "After correcting an import, re-check every constructor call for that type and replace unsupported paths such as Type() or new Type(null) with a listed constructor or a promoted Mockito mock when no legal real path exists.",
+        "Keep the existing test shape and change only the wrong import or type reference that caused the package mismatch."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_SNIPPET_TYPE_RETRY_CONSTRAINTS",
+        "SOURCE_DERIVED_CONSTRUCTOR_PATH_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Preserve the test logic, but replace the invented in-project package with the real project import for that type."
+    },
+    {
+      "id": "G011_CONFLICTING_LIFECYCLE_FIXTURE_REDEFINITION",
+      "errorCode": "E112",
+      "title": "Conflicting lifecycle helper redefines existing fixture",
+      "summary": "The generated test adds a lifecycle helper that reinitializes the class under test even though the target generated test class already has reusable fixture wiring for the same SUT field.",
+      "containsAny": ["E112"],
+      "retryConstraints": [
+        "Do not add a second lifecycle helper such as @BeforeEach or @BeforeAll that reconstructs the class under test when the generated test class already has fixture setup for that SUT field.",
+        "If the generated test class already has a class-level field for testTarget.instanceName and existing green tests rely on that field wiring, do not introduce a new lifecycle helper that rebuilds the SUT differently just because the existing class does not yet contain @BeforeEach.",
+        "Reuse the existing fixture and move scenario-specific stubbing, object creation, and assertions into the new test method body instead of redefining setup().",
+        "Keep the existing generated fixture wiring stable unless the validator explicitly rejected that fixture for the current method.",
+        "If the existing fixture already constructs the class under test with the same constructor wiring, do not restate that lifecycle helper; keep that wiring and move only additive scenario setup into the test body.",
+        "If the new test method already works with fields provided by the existing generated fixture, remove the conflicting lifecycle helper entirely and keep only the new @Test method plus any required imports.",
+        "If extra collaborators or domain objects are needed only for this scenario, declare them inside the test method instead of adding another class-level lifecycle method."
+      ],
+      "dynamicConstraintBuilders": [],
+      "llmHeuristic": "Keep the existing generated fixture intact; if the new scenario can run against that fixture, drop the duplicate lifecycle helper and keep only the new test method plus additive in-method setup."
+    },
+    {
+      "id": "G012_VOID_MUTATOR_USED_AS_VALUE",
+      "errorCode": "E113",
+      "title": "Void state mutator used as a value expression",
+      "summary": "The generated test calls a known void domain mutator in a place that expects a value, such as inside add(...), assertX(...), return, or variable initialization.",
+      "containsAny": ["E113"],
+      "retryConstraints": [
+        "Never use a known void mutator call as an argument, initializer, assertion value, or chained return expression.",
+        "If a real domain object must be mutated and then reused, split it into separate statements: create the object first, call the void mutator on its own line, then pass the same mutated object reference onward.",
+        "For collection setup, write object creation, then void state mutation, then collection add(...) as separate statements instead of chaining the mutator into add(...).",
+        "Keep the intended branch-driving state change, but move the void mutator to a standalone statement and reuse the same object variable afterward."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_SNIPPET_TYPE_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Preserve the scenario intent, but separate object creation, void mutation, and later reuse into distinct statements instead of treating the void mutator as a value."
+    },
+    {
+      "id": "G013_NON_MOCK_STATIC_BRANCH_DRIVER_STUBBED",
+      "errorCode": "E114",
+      "title": "Static branch driver stubbed with Mockito.when",
+      "summary": "The generated test tries to stub a static or real branch-driving method that is not a Mockito mock, such as LegacyScoreRules.shouldEscalate(...).",
+      "containsAny": ["E114"],
+      "retryConstraints": [
+        "Never use Mockito.when(...), doReturn(...).when(...), or thenReturn(...) on a static utility or real branch-driving method that is not listed in shouldMock.",
+        "If a constructor-local flow already exposes branchDrivers, drive the branch by stubbing the listed collaborator inputs or by mutating the real domain object through listed publicStateMutators instead of stubbing the static utility directly.",
+        "For LegacyUpgradeSession-style flows, keep featureToggleService.isEnabled(...) as the mocked branch switch, then use concrete rawSignal values and legal User mutators such as deactivate() or incrementAttempts() to reach promoted/rejected branches.",
+        "Keep static utility calls such as normalizeSignal(...) and shouldEscalate(...) real; assert their observable outcome through the SUT result and collaborator verifications instead of mocking them."
+      ],
+      "dynamicConstraintBuilders": [
+        "CONSTRUCTOR_LOCAL_RETRY_CONSTRAINTS",
+        "SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Remove Mockito stubbing from the non-mock static branch driver and rebuild the branch with concrete inputs plus real domain-object state transitions."
+    },
+    {
+      "id": "G014_CLOCK_BACKED_SNAPSHOT_ACCESSOR",
+      "errorCode": "SCRATCH_EXECUTION_FAILED",
+      "title": "Clock-backed snapshot accessor used with moving time",
+      "summary": "A generated accessor test fails in scratch execution because it asserts wall-clock time while the source supports fixed Clock construction.",
+      "containsAny": ["SCRATCH_EXECUTION_FAILED", "Clock", "Instant.now", "timestamp"],
+      "retryConstraints": [
+        "When the class under test has a Clock constructor, create the SUT with Clock.fixed(...) for timestamp-producing setup.",
+        "Do not compare a source timestamp to Instant.now() from the test unless the source also uses that same fixed Clock.",
+        "For snapshot accessors that return unmodifiable collections, assert stable public data such as size and message, and assert immutability through public collection operations."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS",
+        "SOURCE_DERIVED_CONSTRUCTOR_PATH_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Reuse fixed-clock construction and avoid moving-time assertions when testing timestamped collection snapshots."
+    },
+    {
+      "id": "G015_STATIC_MUTABLE_STATE_PUBLIC_API",
+      "errorCode": "SCRATCH_EXECUTION_FAILED",
+      "title": "Static mutable state tested without public lifecycle isolation",
+      "summary": "A generated static-state test fails because it assumes empty or locally controlled state instead of preparing and cleaning the real static collection through public APIs.",
+      "containsAny": ["SCRATCH_EXECUTION_FAILED", "static", "snapshot", "clear"],
+      "retryConstraints": [
+        "Never access or mutate private static collection fields directly, even when the field name is visible in source.",
+        "For static mutable collection APIs, isolate each test with the public lifecycle: clear before the scenario, emit or record through a public mutator, assert through snapshot or another public accessor, then clear again in finally.",
+        "Do not create local stand-in lists or arrays to simulate static state; invoke the real static target method and observe the real public snapshot.",
+        "When testing a static snapshot accessor, seed state through a public emitter before asserting size, contents, or unmodifiable collection behavior.",
+        "When testing a static clear/reset method, seed state through a public emitter, assert the snapshot is non-empty, call the target clear/reset method, then assert the snapshot is empty."
+      ],
+      "dynamicConstraintBuilders": [
+        "SOURCE_DERIVED_AVAILABLE_METHOD_RETRY_CONSTRAINTS"
+      ],
+      "llmHeuristic": "Rebuild the test around the public clear -> emit -> snapshot lifecycle and wrap static cleanup in finally."
+    }
+  ]
+}

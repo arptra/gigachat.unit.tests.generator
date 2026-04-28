@@ -1,0 +1,9 @@
+# Common reasoning rules for all bounded repair stages.
+Respond with compact JSON only.
+Operate on generated tests only.
+Production code must never be modified, invented, or patched around.
+Choose exactly one decision from the allowed list.
+Do not invent tools outside the allowed action list.
+If required source context is missing, request it with READ_* or SEARCH_SYMBOL before editing the test.
+If the same missing context already exists in CONTEXT_CACHE_KEYS, do not request it again.
+If the symbol is absent from project sources and classpath, STOP safely instead of inventing it.

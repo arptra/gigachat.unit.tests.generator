@@ -1,0 +1,9 @@
+Treat "methodContext.sourceSnippet" as authoritative for control flow, return values, collaborator calls, string literals, feature names, and side effects.
+Do not invent alternative event messages, feature flags, method names, return values, package names, or imports that contradict "methodContext.sourceSnippet" or "methodContext.imports".
+When "methodContext.imports" contains an in-project type, reuse that exact package for imports instead of relocating the type to another package such as util, model, or service.
+If you correct an in-project import, preserve the surrounding test logic only when the constructor path for that type still matches "availableConstructors"; otherwise rebuild that fixture with a legal constructor or promote the collaborator to a mock when no legal real path exists.
+If existing generated test source is provided and it already initializes testTarget.instanceName in a lifecycle helper, treat that fixture as authoritative and do not emit another lifecycle method that rebuilds the SUT differently.
+If that existing lifecycle helper already builds the same SUT wiring needed for the new scenario, preserve it and move only extra scenario state into the test body instead of emitting another setup method.
+If existing generated test source already exposes a reusable class-level SUT field and prior tests rely on that field wiring, reuse that fixture and avoid introducing a brand-new lifecycle helper that rebinds the SUT under different collaborators.
+If a branch in "methodContext.sourceSnippet" has no side effect, do not verify or assert an invented side effect for that branch.
+When a branch outcome depends on collaborator calls visible in "methodContext.sourceSnippet", drive that branch by stubbing those exact collaborator calls and use concrete act arguments that can reach the branch.

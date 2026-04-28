@@ -1,0 +1,39 @@
+{
+  "generationDefault": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION",
+    "allowedActions": [
+      "KEEP_CURRENT_DIRECTION"
+    ],
+    "forbiddenActions": []
+  },
+  "compilationFailed": {
+    "mode": "bounded-action",
+    "currentState": "S2_COMPILATION_FAILED",
+    "stage": "COMPILATION",
+    "allowedActions": [
+      "PATCH_ONLY_REPORTED_COMPILER_ERROR",
+      "KEEP_PREVIOUS_TEST_SHAPE",
+      "USE_STAGE_FEEDBACK_AS_SOURCE_OF_TRUTH"
+    ],
+    "forbiddenActions": [
+      "REWRITE_TEST_FROM_SCRATCH",
+      "MODIFY_PRODUCTION_CODE"
+    ]
+  },
+  "executionFailed": {
+    "mode": "bounded-action",
+    "currentState": "S2_2_EXECUTION_FAILED",
+    "stage": "EXECUTION",
+    "allowedActions": [
+      "PATCH_RUNTIME_SETUP_OR_ASSERTION",
+      "PRESERVE_COMPILED_TEST",
+      "USE_STAGE_FEEDBACK_AS_SOURCE_OF_TRUTH"
+    ],
+    "forbiddenActions": [
+      "REWRITE_TEST_FROM_SCRATCH",
+      "MODIFY_PRODUCTION_CODE"
+    ]
+  }
+}

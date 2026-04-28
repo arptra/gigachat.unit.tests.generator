@@ -146,6 +146,7 @@ public class AgentConfig {
         builder.append("\n    \"authMode\": \"").append(gigaChat.authMode()).append("\",");
         builder.append("\n    \"token\": ").append(renderNullable(gigaChat.tokenOptional().orElse(null))).append(",");
         builder.append("\n    \"endpoint\": ").append(renderNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append(",");
+        builder.append("\n    \"authUrl\": ").append(renderNullable(gigaChat.authUrlOptional().map(Object::toString).orElse(null))).append(",");
         builder.append("\n    \"certificate\": ").append(renderNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append(",");
         builder.append("\n    \"rootCertificate\": ").append(renderNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append(",");
         builder.append("\n    \"privateKey\": ").append(renderNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append(",");
@@ -198,8 +199,9 @@ public class AgentConfig {
         builder.append("targetBranch: ").append(renderYamlNullable(targetBranch)).append('\n');
         builder.append("gigaChat:\n");
         builder.append("  authMode: ").append(gigaChat.authMode()).append('\n');
-        builder.append("  token: ").append(renderYamlNullable(gigaChat.tokenOptional().orElse(null))).append('\n');
+        builder.append("  token: ").append(renderYamlNullable(maskSecret(gigaChat.tokenOptional().orElse(null)))).append('\n');
         builder.append("  endpoint: ").append(renderYamlNullable(gigaChat.endpointOptional().map(Object::toString).orElse(null))).append('\n');
+        builder.append("  authUrl: ").append(renderYamlNullable(gigaChat.authUrlOptional().map(Object::toString).orElse(null))).append('\n');
         builder.append("  certificate: ").append(renderYamlNullable(gigaChat.certificatePathOptional().map(Object::toString).orElse(null))).append('\n');
         builder.append("  rootCertificate: ").append(renderYamlNullable(gigaChat.rootCertificatePathOptional().map(Object::toString).orElse(null))).append('\n');
         builder.append("  privateKey: ").append(renderYamlNullable(gigaChat.privateKeyPathOptional().map(Object::toString).orElse(null))).append('\n');
@@ -262,6 +264,16 @@ public class AgentConfig {
 
     private String renderYamlNullable(Object value) {
         return value == null ? "null" : '"' + value.toString() + '"';
+    }
+
+    private String maskSecret(String secret) {
+        if (secret == null || secret.isBlank()) {
+            return secret;
+        }
+        if (secret.length() <= 8) {
+            return "****";
+        }
+        return secret.substring(0, 4) + "..." + secret.substring(secret.length() - 4);
     }
 
     private String sanitiseBranch(String value) {

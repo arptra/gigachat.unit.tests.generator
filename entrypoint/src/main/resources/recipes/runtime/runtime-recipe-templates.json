@@ -1,0 +1,113 @@
+{
+  "SOURCE_DERIVED_RUNTIME_ALIGNMENT": {
+    "id": "ALIGN_${sourceClassUpper}_SOURCE_RUNTIME_CONTRACT",
+    "kind": "SOURCE_DERIVED_RUNTIME_ALIGNMENT",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Align mock verifications with source-derived dynamic payload prefixes emitted by ${sourceClassSimple}.",
+    "sourceClass": "${sourceClassSimple}",
+    "operations": {
+      "$bind": "operations"
+    },
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "CONSTRUCTOR_LOCAL_RUNTIME_ALIGNMENT": {
+    "id": "ALIGN_${sourceClassUpper}_RUNTIME_CONTRACT_${recipeIndex}",
+    "kind": "CONSTRUCTOR_LOCAL_RUNTIME_ALIGNMENT",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Align runtime mocks and verifications with source-derived behavior of constructor-created ${sourceClassSimple} used by ${sutClass}.",
+    "sourceClass": "${sourceClassSimple}",
+    "invokedMethods": {
+      "$bind": "invokedMethods"
+    },
+    "operations": {
+      "$bind": "operations"
+    },
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "PARENT_STATIC_VOID_BLOCKER": {
+    "id": "MOCK_STATIC_VOID_BLOCKER_${ownerClassUpper}",
+    "kind": "PARENT_STATIC_VOID_BLOCKER",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Wrap the act phase with scoped Mockito.mockStatic for ${ownerFqcn}.${staticMethod}(\"${stringLiteral}\") before rerunning ${sutClass}.",
+    "sourceClass": "${ownerFqcn}",
+    "operations": [
+      {
+        "type": "wrap_act_with_static_void_mock",
+        "ownerClass": "${ownerClassSimple}",
+        "staticMethod": "${staticMethod}",
+        "stringLiteral": "${stringLiteral}",
+        "sutMethod": "${sutMethod}"
+      }
+    ],
+    "requiredImports": [
+      "${ownerFqcn}",
+      "org.mockito.MockedStatic",
+      "static org.mockito.Mockito.mockStatic"
+    ]
+  },
+  "THRESHOLD_REJECTION_RUNTIME_ALIGNMENT": {
+    "id": "ALIGN_${sourceClassUpper}_THRESHOLD_REJECTION_BRANCH",
+    "kind": "THRESHOLD_REJECTION_RUNTIME_ALIGNMENT",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Align ${sourceClassSimple} rejection-branch setup by lowering the numeric branch input and preserving rejection collaborator assertions.",
+    "sourceClass": "${sourceClassSimple}",
+    "operations": [
+      {
+        "type": "align_threshold_rejection_branch",
+        "testMethodName": "${testMethodName}",
+        "sutMethod": "${sutMethod}",
+        "featureMock": "${featureMock}",
+        "featureName": "${featureName}",
+        "numericArgumentValue": "${numericArgumentValue}",
+        "notificationMock": "${notificationMock}",
+        "promotionMethod": "${promotionMethod}",
+        "rejectionMethod": "${rejectionMethod}",
+        "auditMock": "${auditMock}",
+        "auditMethod": "${auditMethod}",
+        "auditPrefix": "${auditPrefix}"
+      }
+    ],
+    "requiredImports": [
+      "static org.junit.jupiter.api.Assertions.assertFalse",
+      "static org.mockito.ArgumentMatchers.startsWith"
+    ]
+  },
+  "TEMPORAL_NOW_ASSERTION_WINDOW": {
+    "id": "STABILIZE_${sourceClassUpper}_TEMPORAL_NOW_ASSERTION",
+    "kind": "TEMPORAL_NOW_ASSERTION_WINDOW",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Stabilize ${sourceClassSimple} current-time assertions by capturing Instant before and after the act phase.",
+    "sourceClass": "${sourceClassSimple}",
+    "operations": [
+      {
+        "type": "stabilize_temporal_now_assertion",
+        "testMethodName": "${testMethodName}",
+        "sutMethod": "${sutMethod}"
+      }
+    ],
+    "requiredImports": [
+      "java.time.Instant"
+    ]
+  },
+  "REBOUND_THRESHOLD_ATTEMPTS_RUNTIME_ALIGNMENT": {
+    "id": "ALIGN_${sourceClassUpper}_REBOUND_THRESHOLD_ATTEMPTS",
+    "kind": "REBOUND_THRESHOLD_ATTEMPTS_RUNTIME_ALIGNMENT",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Raise the public User login-attempt state before ${sourceClassSimple}.${sutMethod} so a generated high-rebound assertion reaches the real rebound threshold.",
+    "sourceClass": "${sourceClassSimple}",
+    "operations": [
+      {
+        "type": "ensure_minimum_rebound_attempts",
+        "testMethodName": "${testMethodName}",
+        "sutMethod": "${sutMethod}",
+        "userVariable": "${userVariable}",
+        "minimumAttempts": "${minimumAttempts}"
+      }
+    ],
+    "requiredImports": []
+  }
+}

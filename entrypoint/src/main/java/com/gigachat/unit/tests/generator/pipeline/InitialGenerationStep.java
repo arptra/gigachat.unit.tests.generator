@@ -3,93 +3,62 @@ package com.gigachat.unit.tests.generator.pipeline;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
-import com.gigachat.unit.tests.generator.analyzer.ExternalCollaboratorDetector;
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.PipelineModuleConfig;
 import com.gigachat.unit.tests.generator.config.ParallelMode;
 import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
-import com.gigachat.unit.tests.generator.dto.CompileErrors;
+import com.gigachat.unit.tests.generator.coverage.CoverageInvoker;
+import com.gigachat.unit.tests.generator.coverage.CoverageResult;
+import com.gigachat.unit.tests.generator.coverage.JaCoCoCoverageInvoker;
 import com.gigachat.unit.tests.generator.dto.ErrorsReport;
-import com.gigachat.unit.tests.generator.dto.ExecuteErrors;
 import com.gigachat.unit.tests.generator.dto.FailedMethodSnapshot;
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
-import com.gigachat.unit.tests.generator.dto.MockStrategy;
-import com.gigachat.unit.tests.generator.dto.ClassMetadata;
-import com.gigachat.unit.tests.generator.dto.FieldMetadata;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.execute.ExecuteResult;
 import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.llm.LlmClient;
+import com.gigachat.unit.tests.generator.pipeline.orchestrator.GenerationMethodOrchestrator;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
 import com.gigachat.unit.tests.generator.pipeline.helpers.DiffEngine;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
+import com.gigachat.unit.tests.generator.pipeline.helpers.generation.GenerationSnippetRequester;
 import com.gigachat.unit.tests.generator.pipeline.helpers.ExistingTestDetector;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestGenerationRegistry;
-import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
+import com.gigachat.unit.tests.generator.pipeline.helpers.repair.ExecutionFailureSupport;
+import com.gigachat.unit.tests.generator.pipeline.helpers.repair.GenerationRepairContextBuilder;
+import com.gigachat.unit.tests.generator.pipeline.helpers.repair.GenerationValidationRetryBuilder;
+import com.gigachat.unit.tests.generator.pipeline.helpers.validation.GeneratedSnippetValidator;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureLogParser;
 import com.gigachat.unit.tests.generator.cleaner.parser.ExecutionFailureParseResult;
 import com.gigachat.unit.tests.generator.report.parser.ExecutionReportParser;
 import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
-import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
-import com.gigachat.unit.tests.generator.reasoning.model.CompilationErrorInfo;
-import com.gigachat.unit.tests.generator.reasoning.model.AgentState;
-import com.gigachat.unit.tests.generator.reasoning.model.ProjectContextSummary;
-import com.gigachat.unit.tests.generator.reasoning.model.ReasoningLoopContext;
-import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
-import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
-import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
-import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationPipelineOrchestrator;
-import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
-import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
-import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
-import com.gigachat.unit.tests.generator.reasoning.service.BuildFileEditor;
+import com.gigachat.unit.tests.generator.reasoning.orchestrator.CoveragePipelineOrchestrator;
+import com.gigachat.unit.tests.generator.reasoning.orchestrator.ExecutionPipelineOrchestrator.ExecutionRepairResult;
+import com.gigachat.unit.tests.generator.reasoning.service.CompilationReasoningService;
 import com.gigachat.unit.tests.generator.reasoning.service.ExecutionFailureContextCollector;
 import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
-import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
 import com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor;
 import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
+import com.gigachat.unit.tests.generator.resources.GenerationPatternCatalog;
+import com.gigachat.unit.tests.generator.resources.StateModelCatalog;
 import com.gigachat.unit.tests.generator.compile.classification.classify.CompilationErrorClassifier;
 
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
-
-
-import com.github.javaparser.ParseProblemException;
-import com.github.javaparser.StaticJavaParser;
-import com.github.javaparser.ast.CompilationUnit;
-import com.github.javaparser.ast.body.MethodDeclaration;
-import com.github.javaparser.ast.body.Parameter;
-import com.github.javaparser.ast.body.VariableDeclarator;
-import com.github.javaparser.ast.expr.Expression;
-import com.github.javaparser.ast.expr.FieldAccessExpr;
-import com.github.javaparser.ast.expr.MethodCallExpr;
-import com.github.javaparser.ast.expr.NameExpr;
-import com.github.javaparser.ast.expr.ObjectCreationExpr;
-import com.github.javaparser.ast.expr.ThisExpr;
 
 /**
  * Executes the first seven stages of the generation pipeline for each discovered method.
@@ -100,18 +69,18 @@ public class InitialGenerationStep {
     private final SkeletonPromptBuilder skeletonPromptBuilder;
     private final Analyze analyze;
     private final PromptBuilder promptBuilder;
-    private final LlmClient llmClient;
     private final DiffEngine diffEngine;
     private final CompilerInvoker compilerInvoker;
     private final ExecutionInvoker executionInvoker;
     private final SnapshotStorage snapshotStorage;
-    private final ExternalCollaboratorDetector collaboratorDetector;
-    private final MethodSignatureRegistry signatureRegistry;
-    private final AutoCorrectionStage autoCorrectionStage;
     private final ExecutionFailureLogParser executionFailureLogParser;
     private final ExecutionReportParser executionReportParser;
     private final ExecutionFailureContextCollector executionFailureContextCollector;
-    private final ReasoningWorkflow reasoningWorkflow;
+    private final CompilationReasoningService reasoningService;
+    private final CoverageInvoker coverageInvoker;
+    private final GenerationRepairContextBuilder repairContextBuilder;
+    private final ExecutionFailureSupport executionFailureSupport;
+    private final GenerationSnippetRequester generationSnippetRequester;
     private ExistingTestDetector existingTestDetector;
     private TestGenerationRegistry generationRegistry;
 
@@ -126,24 +95,48 @@ public class InitialGenerationStep {
                                  ExecutionInvoker executionInvoker,
                                  SnapshotStorage snapshotStorage,
                                  MethodSignatureRegistry signatureRegistry,
-                                 ReasoningWorkflow reasoningWorkflow) {
+                                 CompilationReasoningService reasoningService) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.testClassWriter = Objects.requireNonNull(testClassWriter, "testClassWriter");
         this.skeletonPromptBuilder = Objects.requireNonNull(skeletonPromptBuilder, "skeletonPromptBuilder");
         this.analyze = Objects.requireNonNull(analyze, "analyze");
         this.promptBuilder = Objects.requireNonNull(promptBuilder, "promptBuilder");
-        this.llmClient = Objects.requireNonNull(llmClient, "llmClient");
+        Objects.requireNonNull(llmClient, "llmClient");
         this.diffEngine = Objects.requireNonNull(diffEngine, "diffEngine");
         this.compilerInvoker = Objects.requireNonNull(compilerInvoker, "compilerInvoker");
         this.executionInvoker = Objects.requireNonNull(executionInvoker, "executionInvoker");
         this.snapshotStorage = Objects.requireNonNull(snapshotStorage, "snapshotStorage");
-        this.collaboratorDetector = new ExternalCollaboratorDetector();
-        this.signatureRegistry = Objects.requireNonNull(signatureRegistry, "signatureRegistry");
-        this.autoCorrectionStage = new AutoCorrectionStage();
+        Objects.requireNonNull(signatureRegistry, "signatureRegistry");
         this.executionFailureLogParser = new ExecutionFailureLogParser();
         this.executionReportParser = new ExecutionReportParser();
         this.executionFailureContextCollector = new ExecutionFailureContextCollector();
-        this.reasoningWorkflow = Objects.requireNonNull(reasoningWorkflow, "reasoningWorkflow");
+        this.reasoningService = Objects.requireNonNull(reasoningService, "reasoningService");
+        this.coverageInvoker = new JaCoCoCoverageInvoker(logger);
+        AutoCorrectionStage autoCorrectionStage = new AutoCorrectionStage();
+        GenerationPatternCatalog generationPatternCatalog = new GenerationPatternCatalog();
+        StateModelCatalog stateModelCatalog = new StateModelCatalog();
+        this.repairContextBuilder = new GenerationRepairContextBuilder(stateModelCatalog);
+        GeneratedSnippetValidator generatedSnippetValidator = new GeneratedSnippetValidator(logger, analyze, signatureRegistry);
+        GenerationValidationRetryBuilder generationValidationRetryBuilder = new GenerationValidationRetryBuilder(
+                logger,
+                generationPatternCatalog,
+                stateModelCatalog,
+                generatedSnippetValidator::buildTargetConstructionRetryConstraints);
+        this.executionFailureSupport = new ExecutionFailureSupport(
+                logger,
+                compilerInvoker,
+                executionInvoker,
+                executionFailureLogParser,
+                executionReportParser,
+                executionFailureContextCollector,
+                reasoningService);
+        this.generationSnippetRequester = new GenerationSnippetRequester(
+                logger,
+                promptBuilder,
+                llmClient,
+                autoCorrectionStage,
+                generationValidationRetryBuilder,
+                generatedSnippetValidator);
     }
 
     public ErrorsReport run(AgentConfig config, List<TestClassInfo> classes) {
@@ -197,329 +190,150 @@ public class InitialGenerationStep {
                                TestMethodInfo methodInfo,
                                PipelineModuleConfig moduleConfig,
                                ErrorsReport report) {
-        logger.info("Processing method " + methodInfo.getSignature() + " for class " + classInfo.getClassName());
-        String skeletonPrompt = skeletonPromptBuilder.build(classInfo, methodInfo);
-        Analyze.AnalysisSummary analysisSummary = analyze.analyze(config, classInfo, methodInfo);
-        if (!analysisSummary.invalidCalls().isEmpty()) {
-            logger.warn("[WARN] Some inferred invocations were excluded (nonexistent in class metadata):");
-            for (String invalidCall : analysisSummary.invalidCalls()) {
-                logger.warn("  - " + invalidCall);
-            }
-        }
-        MockPlan plan = analysisSummary.mockPlan();
-        String promptJson = promptBuilder.build(config, classInfo, methodInfo, skeletonPrompt, analysisSummary);
-        JSONObject contextJson = toJsonObject(promptJson, methodInfo);
-        logger.info("-> DEBUG info about tested method \n" + methodInfo);
-        GeneratedTestSnippet snippet = requestSnippetSimple(config,
-                classInfo,
-                methodInfo,
-                plan,
-                contextJson,
-                analysisSummary,
-                moduleConfig,
-                false);
-        if (snippet == null) {
-            logger.warn("LLM did not return a snippet for method " + methodInfo.getSignature());
-            return;
-        }
+        createMethodOrchestrator().processMethod(config, classInfo, methodInfo, moduleConfig, report);
+    }
 
-        ProjectContextCollector projectContextCollector = new ProjectContextCollector(config.getProjectPath());
-        SourceFileEditor sourceFileEditor = new SourceFileEditor();
-        BuildFileEditor buildFileEditor = new BuildFileEditor(config.getProjectPath());
-        boolean success = false;
-        int attempt = 0;
-        int maxAttempts = 5;
-        JSONObject repairContext = contextJson;
-        DiffEngine.MergeResult mergeResult = null;
-        CompileResult lastCompileResult = null;
-        ExecuteResult lastExecuteResult = null;
-        ExecutionFailureParseResult lastFailureParseResult = null;
-        List<TestReportFailure> lastReportFailures = List.of();
-
-        while (attempt < maxAttempts) {
-            ToolActionExecutor actionExecutor = createActionExecutor(config,
-                    classInfo,
-                    buildFileEditor,
-                    sourceFileEditor,
-                    snippet);
-            CompilationPipelineOrchestrator fixingOrchestrator = createFixingOrchestrator(config,
-                    classInfo,
-                    projectContextCollector,
-                    actionExecutor,
-                    snippet);
-            mergeResult = diffEngine.merge(classInfo, snippet);
-            if (!mergeResult.changed()) {
-                logger.warn("Merge step did not change target class for method " + snippet.methodName());
-                break;
-            }
-            if (moduleConfig.compileEnabled()) {
-                lastCompileResult = compilerInvoker.compile(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
-                if (!lastCompileResult.success()) {
-                    logger.warn("Compilation failed for method " + snippet.methodName());
-                    report.addCompileErrors(new CompileErrors(classInfo.getTargetPath(),
-                            snippet.methodName(),
-                            lastCompileResult.messages(),
-                            lastCompileResult.stdout(),
-                            lastCompileResult.stderr()));
-                    try {
-                        lastCompileResult = fixingOrchestrator.runFixingLoop();
-                    } catch (FixingFailureException exception) {
-                        logger.error("Reasoning loop failed to fix compilation errors: " + exception.getMessage(), exception);
-                        lastCompileResult = exception.getLastResult();
-                    }
-                    if (!lastCompileResult.success()) {
-                        revertMerge(classInfo, mergeResult);
-                        repairContext = buildRepairContext(repairContext,
-                                lastCompileResult,
-                                null,
-                                null,
-                                List.of(),
-                                snippet,
-                                attempt + 1);
-                        snippet = requestSnippetSimple(config,
+    private GenerationMethodOrchestrator createMethodOrchestrator() {
+        return new GenerationMethodOrchestrator(
+                logger,
+                skeletonPromptBuilder,
+                analyze,
+                promptBuilder,
+                diffEngine,
+                compilerInvoker,
+                executionInvoker,
+                new CoveragePipelineOrchestrator(logger, compilerInvoker, executionInvoker, reasoningService),
+                new GenerationMethodOrchestrator.Support() {
+                    @Override
+                    public GeneratedTestSnippet requestSnippet(AgentConfig config,
+                                                               TestClassInfo classInfo,
+                                                               TestMethodInfo methodInfo,
+                                                               MockPlan plan,
+                                                               JSONObject contextJson,
+                                                               Analyze.AnalysisSummary analysisSummary,
+                                                               PipelineModuleConfig moduleConfig,
+                                                               boolean retryAttempt) {
+                        return generationSnippetRequester.requestSnippet(config,
                                 classInfo,
                                 methodInfo,
                                 plan,
-                                repairContext,
+                                contextJson,
                                 analysisSummary,
                                 moduleConfig,
-                                true);
-                        if (snippet == null) {
-                            logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
-                            break;
-                        }
-                        attempt++;
-                        continue;
+                                retryAttempt);
                     }
-                }
-            } else {
-                logger.info("Compilation disabled via configuration; skipping compile step.");
-                lastCompileResult = new CompileResult(true, List.of(), "", "");
-            }
 
-            if (moduleConfig.executeEnabled()) {
-                logger.info("[EXECUTION_REASONING] Stage=RUN_GENERATED_TEST method=" + snippet.methodName());
-                lastExecuteResult = executionInvoker.execute(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
-                if (!lastExecuteResult.success()) {
-                    logger.warn("Execution failed for method " + snippet.methodName());
-                    report.addExecuteErrors(new ExecuteErrors(classInfo.getTargetPath(),
-                            snippet.methodName(),
-                            lastExecuteResult.failedTests(),
-                            lastExecuteResult.stdout(),
-                            lastExecuteResult.stderr()));
-                    logger.info("[EXECUTION_REASONING] Stage=PARSE_RUNTIME_FAILURE method=" + snippet.methodName());
-                    lastFailureParseResult = parseExecutionLog(lastExecuteResult);
-                    lastReportFailures = parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
-                    logger.info("[EXECUTION_REASONING] Parsed runtime failure for "
-                            + snippet.methodName()
-                            + ": consoleFailures="
-                            + lastFailureParseResult.failures().size()
-                            + ", reportFailures="
-                            + lastReportFailures.size());
-                    ExecutionRepairResult executionRepairResult = repairExecutionFailure(config,
-                            classInfo,
-                            methodInfo,
-                            analysisSummary,
-                            actionExecutor,
-                            fixingOrchestrator,
-                            lastCompileResult,
-                            lastExecuteResult,
-                            snippet.methodName(),
-                            lastFailureParseResult,
-                            lastReportFailures,
-                            snippet);
-                    lastCompileResult = executionRepairResult.compileResult();
-                    lastExecuteResult = executionRepairResult.executeResult();
-                    lastFailureParseResult = executionRepairResult.failureParseResult();
-                    lastReportFailures = executionRepairResult.reportFailures();
-                    if (executionRepairResult.success()) {
-                        success = true;
-                        existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
-                        break;
+                    @Override
+                    public ToolActionExecutor createActionExecutor(AgentConfig config,
+                                                                   TestClassInfo classInfo,
+                                                                   GeneratedTestSnippet snippet) {
+                        SourceFileEditor sourceFileEditor = new SourceFileEditor();
+                        return InitialGenerationStep.this.createActionExecutor(config,
+                                classInfo,
+                                sourceFileEditor,
+                                snippet);
                     }
-                    if (!executionRepairResult.shouldRegenerate()) {
-                        logger.warn("Execution reasoning did not fully fix method "
-                                + snippet.methodName()
-                                + ", but compilation stayed valid. Keeping the current test and skipping full regeneration.");
-                        return;
+
+                    @Override
+                    public CompilationPipelineOrchestrator createFixingOrchestrator(AgentConfig config,
+                                                                                    TestClassInfo classInfo,
+                                                                                    ProjectContextCollector projectContextCollector,
+                                                                                    ToolActionExecutor actionExecutor,
+                                                                                    GeneratedTestSnippet snippet) {
+                        return InitialGenerationStep.this.createFixingOrchestrator(config,
+                                classInfo,
+                                projectContextCollector,
+                                actionExecutor,
+                                snippet);
                     }
-                    logger.warn("Execution reasoning introduced or exposed compilation problems for method "
-                            + snippet.methodName()
-                            + "; switching to full regeneration.");
-                    revertMerge(classInfo, mergeResult);
-                    repairContext = buildRepairContext(repairContext,
-                            lastCompileResult,
-                            lastExecuteResult,
-                            lastFailureParseResult,
-                            lastReportFailures,
-                            snippet,
-                            attempt + 1);
-                    snippet = requestSnippetSimple(config,
-                            classInfo,
-                            methodInfo,
-                            plan,
-                            repairContext,
-                            analysisSummary,
-                            moduleConfig,
-                            true);
-                    if (snippet == null) {
-                        logger.warn("LLM did not return a repair snippet for method " + methodInfo.getSignature());
-                        break;
+
+                    @Override
+                    public JSONObject buildRepairContext(JSONObject baseContext,
+                                                         CompileResult compileResult,
+                                                         ExecuteResult executeResult,
+                                                         ExecutionFailureParseResult failureParseResult,
+                                                         List<TestReportFailure> reportFailures,
+                                                         GeneratedTestSnippet snippet,
+                                                         int attempt) {
+                        return repairContextBuilder.build(baseContext,
+                                compileResult,
+                                executeResult,
+                                failureParseResult,
+                                reportFailures,
+                                snippet,
+                                attempt);
                     }
-                    attempt++;
-                    continue;
-                }
-            } else {
-                logger.info("Execution disabled via configuration; skipping execution step.");
-                lastExecuteResult = new ExecuteResult(true, List.of(), "", "");
-            }
-            success = true;
-            existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
-            break;
-        }
 
-        if (!success) {
-            if (mergeResult != null) {
-                handleFailure(classInfo, snippet, mergeResult, moduleConfig, "Compilation/Execution failure");
-            }
-            return;
-        }
+                    @Override
+                    public ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
+                        return executionFailureSupport.parseExecutionLog(executeResult);
+                    }
 
-        logger.info("Generation pipeline completed successfully for method " + snippet.methodName());
-    }
+                    @Override
+                    public List<TestReportFailure> parseExecutionReport(Path projectRoot, ExecutionFailureParseResult parseResult) {
+                        return executionFailureSupport.parseExecutionReport(projectRoot, parseResult);
+                    }
 
+                    @Override
+                    public ExecutionRepairResult repairExecutionFailure(AgentConfig config,
+                                                                        TestClassInfo classInfo,
+                                                                        TestMethodInfo methodInfo,
+                                                                        Analyze.AnalysisSummary analysisSummary,
+                                                                        ToolActionExecutor actionExecutor,
+                                                                        CompilationPipelineOrchestrator fixingOrchestrator,
+                                                                        CompileResult compileResult,
+                                                                        ExecuteResult executeResult,
+                                                                        String generatedMethodName,
+                                                                        ExecutionFailureParseResult failureParseResult,
+                                                                        List<TestReportFailure> reportFailures,
+                                                                        GeneratedTestSnippet snippet) {
+                        return executionFailureSupport.repairExecutionFailure(config,
+                                classInfo,
+                                methodInfo,
+                                analysisSummary,
+                                actionExecutor,
+                                fixingOrchestrator,
+                                compileResult,
+                                executeResult,
+                                generatedMethodName,
+                                failureParseResult,
+                                reportFailures,
+                                snippet);
+                    }
 
-    private JSONObject toJsonObject(String promptJson, TestMethodInfo methodInfo) {
-        if (promptJson == null || promptJson.isBlank()) {
-            logger.warn("Prompt JSON was empty for method " + methodInfo.getSignature());
-            return new JSONObject();
-        }
-        try {
-            return new JSONObject(promptJson);
-        } catch (JSONException exception) {
-            logger.warn("Failed to parse prompt JSON for method " + methodInfo.getSignature() + ": " + exception.getMessage());
-            return new JSONObject();
-        }
-    }
-
-    private GeneratedTestSnippet generateSnippetWithRetry(AgentConfig config,
+                    @Override
+                    public CoverageResult measureCoverage(AgentConfig config,
                                                           TestClassInfo classInfo,
                                                           TestMethodInfo methodInfo,
-                                                          String skeletonPrompt,
-                                                          MockPlan plan,
-                                                          JSONObject contextJson,
-                                                          Analyze.AnalysisSummary analysisSummary,
-                                                          PipelineModuleConfig moduleConfig) {
-        try {
-            return requestSnippet(config,
-                    classInfo,
-                    methodInfo,
-                    plan,
-                    contextJson,
-                    analysisSummary,
-                    moduleConfig,
-                    false);
-        } catch (InvalidLLMResponseException first) {
-            if (!shouldRetry(first)) {
-                throw first;
-            }
-            logger.warn("Retrying generation for method " + methodInfo.getSignature()
-                    + " due to invalid response (" + first.getMessage() + ")");
-            Analyze.AnalysisSummary refreshedSummary = analyze.analyze(config, classInfo, methodInfo);
-            MockPlan refreshedPlan = refreshedSummary.mockPlan();
-            String refreshedPromptJson = promptBuilder.build(config,
-                    classInfo,
-                    methodInfo,
-                    skeletonPrompt,
-                    refreshedSummary);
-            JSONObject refreshedContextJson = toJsonObject(refreshedPromptJson, methodInfo);
-            if (first.getMessage() != null && first.getMessage().contains("E104")) {
-                logger.warn("Triggering constructor metadata refresh prior to retry.");
-            }
-            appendRetryHint(refreshedContextJson);
-            return requestSnippet(config,
-                    classInfo,
-                    methodInfo,
-                    refreshedPlan,
-                    refreshedContextJson,
-                    refreshedSummary,
-                    moduleConfig,
-                    true);
-        }
-    }
+                                                          GeneratedTestSnippet snippet) {
+                        return coverageInvoker.measure(config.getProjectPath(),
+                                classInfo.getTargetPath(),
+                                "",
+                                classInfo.getClassName(),
+                                methodInfo.getSignature());
+                    }
 
-    private GeneratedTestSnippet requestSnippet(AgentConfig config,
-                                                TestClassInfo classInfo,
-                                                TestMethodInfo methodInfo,
-                                                MockPlan plan,
-                                                JSONObject contextJson,
-                                                Analyze.AnalysisSummary analysisSummary,
-                                                PipelineModuleConfig moduleConfig,
-                                                boolean retryAttempt) {
-        String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
-        logger.info("-> DEBUG LOG Request to gigachat \n" + llmPrompt);
-        logger.info("Prepared LLM prompt for method " + methodInfo.getSignature()
-                + (retryAttempt ? " [retry]" : ""));
-        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
-        logger.info("Response from gigachat " + snippet);
-                snippet = autoCorrectionStage.apply(snippet);
-        validateGeneratedSnippet(config, classInfo, snippet, methodInfo, analysisSummary, moduleConfig);
-        return snippet;
-    }
+                    @Override
+                    public void handleFailure(TestClassInfo classInfo,
+                                              GeneratedTestSnippet snippet,
+                                              DiffEngine.MergeResult mergeResult,
+                                              PipelineModuleConfig moduleConfig,
+                                              String reason) {
+                        InitialGenerationStep.this.handleFailure(classInfo, snippet, mergeResult, moduleConfig, reason);
+                    }
 
-    private GeneratedTestSnippet requestSnippetSimple(AgentConfig config,
-                                                      TestClassInfo classInfo,
-                                                      TestMethodInfo methodInfo,
-                                                      MockPlan plan,
-                                                      JSONObject contextJson,
-                                                      Analyze.AnalysisSummary analysisSummary,
-                                                      PipelineModuleConfig moduleConfig,
-                                                      boolean retryAttempt) {
-        String llmPrompt = promptBuilder.buildPromptForLLM(contextJson, config.getPromptConfig());
-        logger.info("-> DEBUG LOG Request to gigachat \n" + llmPrompt);
-        logger.info("Prepared LLM prompt for method " + methodInfo.getSignature()
-                + (retryAttempt ? " [retry]" : ""));
-        GeneratedTestSnippet snippet = llmClient.generateTestSnippet(llmPrompt, classInfo, methodInfo, plan);
-        logger.info("Response from gigachat " + snippet);
-        return autoCorrectionStage.apply(snippet);
-    }
-
-    private boolean shouldRetry(InvalidLLMResponseException exception) {
-        if (exception == null) {
-            return false;
-        }
-        String message = exception.getMessage();
-        if (message == null) {
-            return false;
-        }
-        return message.contains("E102") || message.contains("E103") || message.contains("E104");
-    }
-
-    private void appendRetryHint(JSONObject contextJson) {
-        if (contextJson == null) {
-            return;
-        }
-        final String hint = "Skip unreachable or undefined constructors.";
-        JSONArray hints = contextJson.optJSONArray("hints");
-        if (hints == null) {
-            hints = new JSONArray();
-            contextJson.put("hints", hints);
-        }
-        for (int i = 0; i < hints.length(); i++) {
-            if (hint.equalsIgnoreCase(hints.optString(i))) {
-                return;
-            }
-        }
-        hints.put(hint);
+                    @Override
+                    public void recordSuccessfulTest(TestClassInfo classInfo, TestMethodInfo methodInfo) {
+                        existingTestDetector.recordSuccessfulTest(classInfo, methodInfo);
+                    }
+                });
     }
 
     private ToolActionExecutor createActionExecutor(AgentConfig config,
                                                     TestClassInfo classInfo,
-                                                    BuildFileEditor buildFileEditor,
                                                     SourceFileEditor sourceFileEditor,
                                                     GeneratedTestSnippet snippet) {
-        return new ToolActionExecutor(buildFileEditor,
-                sourceFileEditor,
+        return new ToolActionExecutor(sourceFileEditor,
                 compilerInvoker,
                 executionInvoker,
                 config.getProjectPath(),
@@ -534,692 +348,15 @@ public class InitialGenerationStep {
                                                                      ToolActionExecutor actionExecutor,
                                                                      GeneratedTestSnippet snippet) {
         return new CompilationPipelineOrchestrator(compilerInvoker,
-                reasoningWorkflow,
+                reasoningService,
                 projectContextCollector,
                 actionExecutor,
                 new CompilationErrorClassifier(),
+                logger,
                 config.getProjectPath(),
                 classInfo.getTargetPath(),
                 classInfo.getTestClassName(),
                 snippet.methodName());
-    }
-
-    private JSONObject buildRepairContext(JSONObject baseContext,
-                                          CompileResult compileResult,
-                                          ExecuteResult executeResult,
-                                          ExecutionFailureParseResult failureParseResult,
-                                          List<TestReportFailure> reportFailures,
-                                          GeneratedTestSnippet snippet,
-                                          int attempt) {
-        JSONObject nextContext = baseContext == null ? new JSONObject() : new JSONObject(baseContext.toString());
-        JSONObject repair = nextContext.optJSONObject("repair");
-        if (repair == null) {
-            repair = new JSONObject();
-            nextContext.put("repair", repair);
-        }
-        repair.put("attempt", attempt);
-        repair.put("chainOfThought", "Use chain-of-thought reasoning to iteratively fix compilation and execution issues.");
-        if (snippet != null) {
-            repair.put("previousSnippet", snippet.methodBody());
-        }
-        JSONArray diagnostics = new JSONArray();
-        if (compileResult != null) {
-            JSONObject compileBlock = new JSONObject();
-            compileBlock.put("stage", "compile");
-            compileBlock.put("messages", new JSONArray(compileResult.messages()));
-            compileBlock.put("stdout", compileResult.stdout());
-            compileBlock.put("stderr", compileResult.stderr());
-            diagnostics.put(compileBlock);
-        }
-        if (executeResult != null) {
-            JSONObject executeBlock = new JSONObject();
-            executeBlock.put("stage", "execute");
-            JSONArray messages = new JSONArray(executeResult.failedTests());
-            if (failureParseResult != null && !failureParseResult.failures().isEmpty()) {
-                JSONArray parsedFailures = new JSONArray();
-                failureParseResult.failures().forEach(failure -> parsedFailures.put(failure.className() + "." + failure.methodName()));
-                executeBlock.put("parsedFailures", parsedFailures);
-                for (int i = 0; i < parsedFailures.length(); i++) {
-                    messages.put(parsedFailures.get(i));
-                }
-            }
-            if (reportFailures != null && !reportFailures.isEmpty()) {
-                JSONArray reports = new JSONArray();
-                for (TestReportFailure reportFailure : reportFailures) {
-                    JSONObject detail = new JSONObject();
-                    detail.put("class", reportFailure.className());
-                    detail.put("method", reportFailure.methodName());
-                    detail.put("message", reportFailure.message());
-                    detail.put("stackTrace", new JSONArray(reportFailure.stackTrace()));
-                    reports.put(detail);
-                }
-                executeBlock.put("reportFailures", reports);
-            }
-            executeBlock.put("messages", messages);
-            executeBlock.put("stdout", executeResult.stdout());
-            executeBlock.put("stderr", executeResult.stderr());
-            diagnostics.put(executeBlock);
-        }
-        if (diagnostics.length() > 0) {
-            repair.put("diagnostics", diagnostics);
-        }
-        return nextContext;
-    }
-
-    private ExecutionRepairResult repairExecutionFailure(AgentConfig config,
-                                                         TestClassInfo classInfo,
-                                                         TestMethodInfo methodInfo,
-                                                         Analyze.AnalysisSummary analysisSummary,
-                                                         ToolActionExecutor actionExecutor,
-                                                         CompilationPipelineOrchestrator fixingOrchestrator,
-                                                         CompileResult compileResult,
-                                                         ExecuteResult executeResult,
-                                                         String generatedMethodName,
-                                                         ExecutionFailureParseResult failureParseResult,
-                                                         List<TestReportFailure> reportFailures,
-                                                         GeneratedTestSnippet snippet) {
-        ReasoningMemory memory = new ReasoningMemory();
-        memory.setState(AgentState.S2_2_EXECUTION_FAILED);
-        ActionExecutionResult cumulativeResult = executionFailureContextCollector.collect(config.getProjectPath(),
-                classInfo,
-                methodInfo,
-                analysisSummary,
-                executeResult,
-                failureParseResult,
-                reportFailures);
-        logExecutionReasoningStart(snippet.methodName(), executeResult, cumulativeResult);
-        CompileResult currentCompileResult = compileResult;
-        ExecuteResult currentExecuteResult = executeResult;
-        ExecutionFailureParseResult currentFailureParseResult = failureParseResult;
-        List<TestReportFailure> currentReportFailures = reportFailures == null ? List.of() : List.copyOf(reportFailures);
-
-        for (int iteration = 0; iteration < 6; iteration++) {
-            memory.incrementAttempt();
-            String signature = deriveExecutionErrorSignature(currentExecuteResult, currentReportFailures);
-            memory.addErrorSignature(signature);
-            logger.info("[EXECUTION_REASONING] Attempt "
-                    + memory.getAttempt()
-                    + " for "
-                    + snippet.methodName()
-                    + "; signature="
-                    + signature);
-            if (memory.countOccurrences(signature) >= 3) {
-                logger.warn("[EXECUTION_REASONING] Repeated runtime failure signature detected for method "
-                        + snippet.methodName()
-                        + ". Stopping execution reasoning without regeneration.");
-                break;
-            }
-
-            ReasoningResponse response = triggerReasoningWorkflow(config,
-                    classInfo,
-                    methodInfo,
-                    generatedMethodName,
-                    currentCompileResult,
-                    currentExecuteResult,
-                    cumulativeResult,
-                    memory,
-                    currentFailureParseResult,
-                    currentReportFailures);
-            logReasoningResponse("execute", response);
-            logExecutionReasoningDecision(snippet.methodName(), response);
-            String decision = response == null || response.getDecision() == null
-                    ? "STOP"
-                    : response.getDecision().trim().toUpperCase();
-            if ("STOP".equals(decision)) {
-                if (iteration == 0) {
-                    logger.warn("[EXECUTION_REASONING] Model stopped before fixing runtime failure for method "
-                            + snippet.methodName()
-                            + ". Forcing one more reasoning round with explicit feedback.");
-                    cumulativeResult = cumulativeResult.merge(new ActionExecutionResult(Map.of(
-                            "agentFeedback", List.of(Map.of(
-                                    "stage", "execute",
-                                    "message", "Runtime failure is still present. Do not STOP yet. Request context or apply a concrete fix in test code."
-                            )))));
-                    continue;
-                }
-                logger.warn("[EXECUTION_REASONING] Agent returned STOP for method "
-                        + snippet.methodName()
-                        + ". Keeping current test state and not regenerating.");
-                break;
-            }
-
-            if ("REQUEST_CONTEXT".equals(decision)) {
-                ToolAction toolAction = response.toToolAction();
-                logExecutionReasoningToolAction("REQUEST_CONTEXT", snippet.methodName(), toolAction);
-                ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
-                cumulativeResult = cumulativeResult.merge(iterationResult);
-                applyMemoryUpdates(memory, response, iterationResult);
-                memory.setState(AgentState.S2_1_NEED_MORE_CONTEXT);
-                logExecutionReasoningActionResult("REQUEST_CONTEXT", snippet.methodName(), iterationResult);
-                memory.decrementContextBudget();
-                if (memory.getContextRequestBudgetRemaining() <= 0) {
-                    logger.warn("[EXECUTION_REASONING] Context budget exhausted for method "
-                            + snippet.methodName()
-                            + ". Keeping current test state and not regenerating.");
-                    break;
-                }
-                continue;
-            }
-
-            if ("MARK_FALSE_DEPENDENCY".equals(decision)) {
-                applyMemoryUpdates(memory, response, ActionExecutionResult.empty());
-                memory.setState(AgentState.S3_FALSE_DEPENDENCY_DETECTED);
-                logger.info("[EXECUTION_REASONING] Marked dependency as false/missing for method " + snippet.methodName());
-                continue;
-            }
-
-            if (!"APPLY_FIX".equals(decision)) {
-                logger.warn("[EXECUTION_REASONING] Unsupported decision "
-                        + decision
-                        + " for method "
-                        + snippet.methodName()
-                        + ". Stopping execution reasoning.");
-                break;
-            }
-
-            ToolAction toolAction = response.toToolAction();
-            logExecutionReasoningToolAction("APPLY_FIX", snippet.methodName(), toolAction);
-            ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
-            cumulativeResult = cumulativeResult.merge(iterationResult);
-            applyMemoryUpdates(memory, response, iterationResult);
-            memory.setState(AgentState.S4_FIX_APPLIED);
-            logExecutionReasoningActionResult("APPLY_FIX", snippet.methodName(), iterationResult);
-            currentCompileResult = compilerInvoker.compileWithoutCache(config.getProjectPath(),
-                    classInfo.getTargetPath(),
-                    snippet.methodName());
-            logger.info("[EXECUTION_REASONING] Recompile after execution fix for "
-                    + snippet.methodName()
-                    + " -> success="
-                    + currentCompileResult.success());
-            if (!currentCompileResult.success()) {
-                try {
-                    logger.warn("[EXECUTION_REASONING] Execution fix caused compilation failure for "
-                            + snippet.methodName()
-                            + ". Trying compile-fix loop before regeneration.");
-                    currentCompileResult = fixingOrchestrator.runFixingLoop();
-                } catch (FixingFailureException exception) {
-                    logger.error("Compilation fixing loop failed during execution repair: " + exception.getMessage(), exception);
-                    currentCompileResult = exception.getLastResult();
-                }
-                if (currentCompileResult == null || !currentCompileResult.success()) {
-                    return new ExecutionRepairResult(false,
-                            true,
-                            currentCompileResult,
-                            currentExecuteResult,
-                            currentFailureParseResult,
-                            currentReportFailures,
-                            cumulativeResult);
-                }
-                logger.info("[EXECUTION_REASONING] Compilation recovered after execution fix for " + snippet.methodName());
-            }
-
-            currentExecuteResult = executionInvoker.execute(config.getProjectPath(),
-                    classInfo.getTargetPath(),
-                    snippet.methodName());
-            logger.info("[EXECUTION_REASONING] Reran test after fix for "
-                    + snippet.methodName()
-                    + " -> success="
-                    + currentExecuteResult.success());
-            if (currentExecuteResult.success()) {
-                logger.info("[EXECUTION_REASONING] Execution fixed successfully for method " + snippet.methodName());
-                return new ExecutionRepairResult(true,
-                        false,
-                        currentCompileResult,
-                        currentExecuteResult,
-                        new ExecutionFailureParseResult(List.of(), Optional.empty()),
-                        List.of(),
-                        cumulativeResult);
-            }
-
-            currentFailureParseResult = parseExecutionLog(currentExecuteResult);
-            currentReportFailures = parseExecutionReport(config.getProjectPath(), currentFailureParseResult);
-            cumulativeResult = cumulativeResult.merge(executionFailureContextCollector.collect(config.getProjectPath(),
-                    classInfo,
-                    methodInfo,
-                    analysisSummary,
-                    currentExecuteResult,
-                    currentFailureParseResult,
-                    currentReportFailures));
-            memory.setState(AgentState.S2_2_EXECUTION_FAILED);
-            logger.warn("[EXECUTION_REASONING] Test is still failing at runtime for method "
-                    + snippet.methodName()
-                    + ". Continuing execution reasoning without regeneration.");
-        }
-
-        return new ExecutionRepairResult(false,
-                false,
-                currentCompileResult,
-                currentExecuteResult,
-                currentFailureParseResult,
-                currentReportFailures,
-                cumulativeResult);
-    }
-
-    private ReasoningResponse triggerReasoningWorkflow(AgentConfig config,
-                                                       TestClassInfo classInfo,
-                                                       TestMethodInfo methodInfo,
-                                                       String generatedMethodName,
-                                                       CompileResult compileResult,
-                                                       ExecuteResult executeResult,
-                                                       ActionExecutionResult actionResult,
-                                                       ReasoningMemory memory,
-                                                       ExecutionFailureParseResult failureParseResult,
-                                                       List<TestReportFailure> reportFailures) {
-        try {
-            boolean compileFailure = compileResult != null && !compileResult.success();
-            CompilationErrorInfo errorInfo = compileFailure
-                    ? buildCompilationErrorInfo(compileResult, classInfo)
-                    : buildExecutionErrorInfo(executeResult, classInfo, methodInfo, failureParseResult, reportFailures);
-            ProjectContextSummary summary = buildProjectContextSummary(config, classInfo);
-            com.gigachat.unit.tests.generator.compile.classification.model.CompilationErrorReport errorReport = compileFailure
-                    ? new CompilationErrorClassifier().classify(compileResult.stderr())
-                    : null;
-            ReasoningLoopContext loopContext = new NextContextBuilder()
-                    .build(errorInfo, summary, actionResult, errorReport, memory);
-            return invokeExecutionReasoning(config.getProjectPath(), generatedMethodName, loopContext);
-        } catch (Exception exception) {
-            logger.error("Reasoning workflow failed for method " + methodInfo.getSignature()
-                    + ": " + exception.getMessage(), exception);
-            return null;
-        }
-    }
-
-    private ReasoningResponse invokeExecutionReasoning(Path projectRoot,
-                                                       String generatedMethodName,
-                                                       ReasoningLoopContext loopContext) {
-        CompilationReasoningPromptBuilder promptBuilder = new CompilationReasoningPromptBuilder();
-        ReasoningResponseParser responseParser = new ReasoningResponseParser();
-        String basePrompt = promptBuilder.buildPrompt(loopContext)
-                + System.lineSeparator()
-                + System.lineSeparator()
-                + "Execution-only constraint:"
-                + System.lineSeparator()
-                + "- Do not give up while the failure is a runtime test failure and test-side fixes are still possible."
-                + System.lineSeparator()
-                + "- Prefer REQUEST_CONTEXT or APPLY_FIX over STOP."
-                + System.lineSeparator()
-                + "- Return JSON only.";
-        TestClassInfo placeholderClass = new TestClassInfo(
-                "ExecutionReasoningPlaceholder",
-                "ExecutionReasoningPlaceholderTest",
-                Path.of("."),
-                List.of(),
-                List.of()
-        );
-        TestMethodInfo placeholderMethod = new TestMethodInfo("reason()", "void", "");
-        MockPlan emptyPlan = new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of());
-
-        String prompt = basePrompt;
-        for (int attempt = 1; attempt <= 3; attempt++) {
-            Path promptFile = writeExecutionReasoningArtifact(projectRoot, generatedMethodName, attempt, "prompt", prompt);
-            logger.info("[EXECUTION_REASONING] Stage=SEND_TO_GIGACHAT method="
-                    + generatedMethodName
-                    + ", attempt="
-                    + attempt
-                    + ", promptFile="
-                    + describeArtifactPath(promptFile));
-            logger.info("[EXECUTION_REASONING] LLM prompt attempt " + attempt + ":\n" + prompt);
-            GeneratedTestSnippet snippet = llmClient.generateTestSnippet(prompt, placeholderClass, placeholderMethod, emptyPlan);
-            String raw = snippet == null ? "" : snippet.methodBody();
-            Path responseFile = writeExecutionReasoningArtifact(projectRoot, generatedMethodName, attempt, "response", raw);
-            logger.info("[EXECUTION_REASONING] Stage=RECEIVE_FROM_GIGACHAT method="
-                    + generatedMethodName
-                    + ", attempt="
-                    + attempt
-                    + ", responseFile="
-                    + describeArtifactPath(responseFile)
-                    + ", responseLength="
-                    + raw.length());
-            logger.info("[EXECUTION_REASONING] LLM raw response attempt " + attempt + ":\n" + raw);
-            try {
-                logger.info("[EXECUTION_REASONING] Stage=PARSE_GIGACHAT_RESPONSE method="
-                        + generatedMethodName
-                        + ", attempt="
-                        + attempt);
-                ReasoningResponse parsed = responseParser.parseStrict(raw);
-                logger.info("[EXECUTION_REASONING] Parsed LLM response attempt "
-                        + attempt
-                        + ": decision="
-                        + parsed.getDecision()
-                        + ", actions="
-                        + (parsed.getActions() == null ? 0 : parsed.getActions().size()));
-                return parsed;
-            } catch (RuntimeException exception) {
-                logger.warn("[EXECUTION_REASONING] Failed to parse LLM response on attempt "
-                        + attempt
-                        + ": "
-                        + exception.getMessage());
-                if (attempt == 3) {
-                    break;
-                }
-                prompt = buildExecutionReasoningRetryPrompt(basePrompt, raw, exception.getMessage(), attempt + 1);
-            }
-        }
-
-        ReasoningResponse response = new ReasoningResponse();
-        response.setDecision("STOP");
-        response.setActions(List.of());
-        logger.warn("[EXECUTION_REASONING] Falling back to STOP after exhausting execution-only LLM retries.");
-        return response;
-    }
-
-    private String buildExecutionReasoningRetryPrompt(String basePrompt,
-                                                      String rawResponse,
-                                                      String failureReason,
-                                                      int nextAttempt) {
-        return basePrompt
-                + System.lineSeparator()
-                + System.lineSeparator()
-                + "Previous response was invalid."
-                + System.lineSeparator()
-                + "Reason: "
-                + failureReason
-                + System.lineSeparator()
-                + "Invalid response:"
-                + System.lineSeparator()
-                + rawResponse
-                + System.lineSeparator()
-                + "Retry attempt "
-                + nextAttempt
-                + ": return ONLY valid JSON matching the required schema.";
-    }
-
-    private CompilationErrorInfo buildCompilationErrorInfo(CompileResult compileResult, TestClassInfo classInfo) {
-        String primaryMessage = compileResult.messages().isEmpty()
-                ? compileResult.stderr()
-                : compileResult.messages().get(0);
-        String compilerOutput = (compileResult.stdout() + System.lineSeparator() + compileResult.stderr()).trim();
-        if (compilerOutput.isBlank()) {
-            compilerOutput = String.join(System.lineSeparator(), compileResult.messages());
-        }
-        return new CompilationErrorInfo(
-                compilerOutput,
-                primaryMessage,
-                classInfo.getTestClassName(),
-                classInfo.getTargetPath().toString(),
-                null,
-                null
-        );
-    }
-
-    private CompilationErrorInfo buildExecutionErrorInfo(ExecuteResult executeResult,
-                                                         TestClassInfo classInfo,
-                                                         TestMethodInfo methodInfo,
-                                                         ExecutionFailureParseResult failureParseResult,
-                                                         List<TestReportFailure> reportFailures) {
-        TestReportFailure primaryFailure = reportFailures == null || reportFailures.isEmpty()
-                ? null
-                : reportFailures.get(0);
-        String primaryMessage = executeResult.failedTests().isEmpty()
-                ? executeResult.stderr()
-                : executeResult.failedTests().get(0);
-        if (primaryFailure != null && !primaryFailure.message().isBlank()) {
-            primaryMessage = primaryFailure.message();
-        }
-        String output = (executeResult.stdout() + System.lineSeparator() + executeResult.stderr()).trim();
-        if (output.isBlank()) {
-            output = "Execution failed for " + methodInfo.getSignature();
-        }
-        if (failureParseResult != null && !failureParseResult.failures().isEmpty()) {
-            output = output + System.lineSeparator()
-                    + "Parsed failing tests: "
-                    + failureParseResult.failures().stream()
-                    .map(failure -> failure.className() + "." + failure.methodName())
-                    .reduce((left, right) -> left + ", " + right)
-                    .orElse("");
-        }
-        String stackTrace = primaryFailure == null || primaryFailure.stackTrace().isEmpty()
-                ? null
-                : String.join(System.lineSeparator(), primaryFailure.stackTrace());
-        return new CompilationErrorInfo(
-                output,
-                primaryMessage,
-                classInfo.getTestClassName(),
-                classInfo.getTargetPath().toString(),
-                null,
-                stackTrace
-        );
-    }
-
-    private ProjectContextSummary buildProjectContextSummary(AgentConfig config, TestClassInfo classInfo) {
-        Path projectRoot = config.getProjectPath();
-        Path testDirectory = classInfo.getTargetPath().getParent();
-        ProjectContextSummary summary = new ProjectContextCollector(projectRoot).collect();
-        if (testDirectory != null && !summary.getTestSourceRoots().contains(testDirectory.toString())) {
-            LinkedHashSet<String> testRoots = new LinkedHashSet<>(summary.getTestSourceRoots());
-            testRoots.add(testDirectory.toString());
-            summary.setTestSourceRoots(List.copyOf(testRoots));
-        }
-        return summary;
-    }
-
-    private void logReasoningResponse(String stage, ReasoningResponse response) {
-        if (response == null) {
-            logger.warn("Reasoning workflow returned no response for " + stage + " failure.");
-            return;
-        }
-        logger.info("Reasoning workflow result for "
-                + stage
-                + " failure: decision="
-                + response.getDecision()
-                + ", actions="
-                + summariseReasoningActions(response)
-                + ", memoryUpdates="
-                + summariseMemoryUpdates(response));
-    }
-
-    private void applyMemoryUpdates(ReasoningMemory memory,
-                                    ReasoningResponse response,
-                                    ActionExecutionResult actionResult) {
-        if (memory == null || response == null) {
-            return;
-        }
-        memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
-                response.getMemoryUpdates().getAppliedFixSignatures(),
-                mergeContextCache(response.getMemoryUpdates().getContextCache(), extractContextCache(actionResult)));
-    }
-
-    private Map<String, String> mergeContextCache(Map<String, String> declaredUpdates,
-                                                  Map<String, String> executionUpdates) {
-        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
-        if (declaredUpdates != null) {
-            merged.putAll(declaredUpdates);
-        }
-        if (executionUpdates != null) {
-            merged.putAll(executionUpdates);
-        }
-        return merged;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, String> extractContextCache(ActionExecutionResult result) {
-        if (result == null || result.getInformation().isEmpty()) {
-            return Map.of();
-        }
-        Object updates = result.getInformation().get("contextCacheUpdates");
-        if (updates instanceof Map<?, ?> map) {
-            LinkedHashMap<String, String> converted = new LinkedHashMap<>();
-            map.forEach((key, value) -> {
-                if (key != null && value != null) {
-                    converted.put(key.toString(), value.toString());
-                }
-            });
-            return converted;
-        }
-        return Map.of();
-    }
-
-    private String deriveExecutionErrorSignature(ExecuteResult executeResult,
-                                                List<TestReportFailure> reportFailures) {
-        if (reportFailures != null && !reportFailures.isEmpty()) {
-            TestReportFailure failure = reportFailures.get(0);
-            return failure.className() + "|" + failure.methodName() + "|" + failure.message();
-        }
-        if (executeResult == null) {
-            return "execute|unknown";
-        }
-        String failedTest = executeResult.failedTests().isEmpty()
-                ? "unknown"
-                : executeResult.failedTests().get(0);
-        return failedTest + "|" + executeResult.stderr();
-    }
-
-    private void logExecutionReasoningStart(String methodName,
-                                            ExecuteResult executeResult,
-                                            ActionExecutionResult cumulativeResult) {
-        logger.info("[EXECUTION_REASONING] Starting execution reasoning for method " + methodName);
-        if (executeResult != null) {
-            logger.info("[EXECUTION_REASONING] Initial runtime failure summary for "
-                    + methodName
-                    + ": failedTests="
-                    + executeResult.failedTests());
-        }
-        if (cumulativeResult != null && !cumulativeResult.getInformation().isEmpty()) {
-            logger.info("[EXECUTION_REASONING] Collected execution context keys for "
-                    + methodName
-                    + ": "
-                    + cumulativeResult.getInformation().keySet());
-        }
-    }
-
-    private void logExecutionReasoningDecision(String methodName, ReasoningResponse response) {
-        if (response == null) {
-            logger.warn("[EXECUTION_REASONING] No reasoning response for method " + methodName);
-            return;
-        }
-        logger.info("[EXECUTION_REASONING] Decision for "
-                + methodName
-                + ": "
-                + response.getDecision()
-                + "; actions="
-                + summariseReasoningActions(response));
-    }
-
-    private void logExecutionReasoningActionResult(String phase,
-                                                   String methodName,
-                                                   ActionExecutionResult result) {
-        if (result == null) {
-            logger.info("[EXECUTION_REASONING] " + phase + " for " + methodName + " produced no action result.");
-            return;
-        }
-        logger.info("[EXECUTION_REASONING] "
-                + phase
-                + " for "
-                + methodName
-                + " -> performedActions="
-                + result.getPerformedActions()
-                + ", infoKeys="
-                + result.getInformation().keySet());
-    }
-
-    private void logExecutionReasoningToolAction(String phase,
-                                                 String methodName,
-                                                 ToolAction toolAction) {
-        if (toolAction == null) {
-            logger.warn("[EXECUTION_REASONING] "
-                    + phase
-                    + " for "
-                    + methodName
-                    + " did not include executable tool actions.");
-            return;
-        }
-        logger.info("[EXECUTION_REASONING] "
-                + phase
-                + " tool action for "
-                + methodName
-                + ": "
-                + toolAction);
-    }
-
-    private String summariseReasoningActions(ReasoningResponse response) {
-        if (response == null || response.getActions() == null || response.getActions().isEmpty()) {
-            return "[]";
-        }
-        return response.getActions().stream()
-                .map(action -> {
-                    String type = action.getType() == null ? "UNKNOWN" : action.getType();
-                    Map<String, Object> args = action.getArgs() == null ? Map.of() : action.getArgs();
-                    return type + args;
-                })
-                .reduce((left, right) -> left + ", " + right)
-                .map(value -> "[" + value + "]")
-                .orElse("[]");
-    }
-
-    private String summariseMemoryUpdates(ReasoningResponse response) {
-        if (response == null) {
-            return "{}";
-        }
-        ReasoningResponse.MemoryUpdate updates = response.getMemoryUpdates();
-        return "{knownMissingSymbols="
-                + updates.getKnownMissingSymbols()
-                + ", appliedFixSignatures="
-                + updates.getAppliedFixSignatures()
-                + ", contextCacheKeys="
-                + updates.getContextCache().keySet()
-                + "}";
-    }
-
-    private Path writeExecutionReasoningArtifact(Path projectRoot,
-                                                 String generatedMethodName,
-                                                 int attempt,
-                                                 String suffix,
-                                                 String content) {
-        Path artifactDir = projectRoot.resolve(".agent").resolve("logs").resolve("execution-reasoning");
-        try {
-            Files.createDirectories(artifactDir);
-            Path artifact = artifactDir.resolve(sanitizeExecutionArtifactName(generatedMethodName)
-                    + "-attempt-"
-                    + attempt
-                    + "."
-                    + suffix
-                    + ".txt");
-            Files.writeString(artifact,
-                    content == null ? "" : content,
-                    StandardCharsets.UTF_8);
-            return artifact.toAbsolutePath().normalize();
-        } catch (IOException exception) {
-            logger.warn("[EXECUTION_REASONING] Failed to persist "
-                    + suffix
-                    + " artifact for "
-                    + generatedMethodName
-                    + " attempt "
-                    + attempt
-                    + ": "
-                    + exception.getMessage());
-            return null;
-        }
-    }
-
-    private String sanitizeExecutionArtifactName(String value) {
-        String candidate = value == null || value.isBlank() ? "unknown-method" : value;
-        return candidate.replaceAll("[^A-Za-z0-9._-]+", "_");
-    }
-
-    private String describeArtifactPath(Path artifact) {
-        return artifact == null ? "unavailable" : artifact.toString();
-    }
-
-    private ExecutionFailureParseResult parseExecutionLog(ExecuteResult executeResult) {
-        if (executeResult == null) {
-            return new ExecutionFailureParseResult(List.of(), Optional.empty());
-        }
-        String combined = (executeResult.stdout() + System.lineSeparator() + executeResult.stderr()).trim();
-        return executionFailureLogParser.parse(combined);
-    }
-
-    private List<TestReportFailure> parseExecutionReport(Path projectRoot, ExecutionFailureParseResult parseResult) {
-        if (parseResult == null || parseResult.reportPath().isEmpty()) {
-            return List.of();
-        }
-        Path reportPath = parseResult.reportPath().get();
-        Path resolved = reportPath.isAbsolute() ? reportPath : projectRoot.resolve(reportPath);
-        try {
-            return executionReportParser.parse(resolved);
-        } catch (Exception exception) {
-            logger.warn("Failed to parse execution report at " + resolved + ": " + exception.getMessage());
-            return List.of();
-        }
     }
 
     private void handleFailure(TestClassInfo classInfo,
@@ -1227,9 +364,12 @@ public class InitialGenerationStep {
                                DiffEngine.MergeResult mergeResult,
                                PipelineModuleConfig moduleConfig,
                                String reason) {
-        logger.warn("Preparing repair step for method " + snippet.methodName() + " due to " + reason);
-        revertMerge(classInfo, mergeResult);
-        if (moduleConfig.snapshotsEnabled()) {
+        String methodName = snippet == null ? "<unknown>" : snippet.methodName();
+        logger.warn("Preparing repair step for method " + methodName + " due to " + reason);
+        if (mergeResult != null) {
+            revertMerge(classInfo, mergeResult);
+        }
+        if (moduleConfig.snapshotsEnabled() && snippet != null) {
             FailedMethodSnapshot snapshot = new FailedMethodSnapshot(classInfo.getTargetPath(),
                     snippet.methodName(),
                     snippet.methodBody(),
@@ -1244,432 +384,5 @@ public class InitialGenerationStep {
         Path file = classInfo.getTargetPath();
         testClassWriter.writeSource(file, mergeResult.originalSource());
         logger.info("Reverted generated method from " + file);
-    }
-
-    private void validateGeneratedSnippet(AgentConfig config,
-                                          TestClassInfo classInfo,
-                                          GeneratedTestSnippet snippet,
-                                          TestMethodInfo methodInfo,
-                                          Analyze.AnalysisSummary analysisSummary,
-                                          PipelineModuleConfig moduleConfig) {
-        if (snippet == null || methodInfo == null) {
-            return;
-        }
-        String fullSource = snippet.fullClassSource();
-        if (fullSource == null || fullSource.isBlank()) {
-            return;
-        }
-        String signature = methodInfo.getSignature();
-        if (signature == null || signature.isBlank()) {
-            return;
-        }
-        String normalisedSignature = signature.replaceAll("\\s+", " ").trim();
-        String normalisedSource = fullSource.replaceAll("\\s+", " ").trim();
-        if (normalisedSource.contains(normalisedSignature + " {")) {
-            String methodName = analysisSummary.methodAnalysis().method().name();
-            logger.warn("⚠️  LLM reimplemented method " + methodName + " inside test class. Marking generation as invalid.");
-            throw new InvalidLLMResponseException("LLM returned reimplementation of tested method instead of test.");
-        }
-        CompilationUnit compilationUnit = parseCompilationUnit(fullSource);
-        if (compilationUnit == null) {
-            return;
-        }
-        Map<String, String> variableTypes = ensureMethodAndConstructorUsageIsValid(config,
-                compilationUnit,
-                analysisSummary,
-                classInfo,
-                methodInfo);
-        ensureNoInternalFieldAccess(fullSource, analysisSummary);
-        if (moduleConfig != null && moduleConfig.validateMockUsage()) {
-            ensureMockUsageIsValid(fullSource, analysisSummary, classInfo);
-        }
-    }
-
-    private CompilationUnit parseCompilationUnit(String source) {
-        if (source == null || source.isBlank()) {
-            return null;
-        }
-        try {
-            return StaticJavaParser.parse(source);
-        } catch (ParseProblemException exception) {
-            logger.warn("Unable to parse generated source for API validation: " + exception.getMessage());
-            return null;
-        }
-    }
-
-    private Map<String, String> ensureMethodAndConstructorUsageIsValid(AgentConfig config,
-                                                                       CompilationUnit compilationUnit,
-                                                                       Analyze.AnalysisSummary analysisSummary,
-                                                                       TestClassInfo classInfo,
-                                                                       TestMethodInfo methodInfo) {
-        if (compilationUnit == null) {
-            return Map.of();
-        }
-        Map<String, String> variableTypes = collectVariableTypes(compilationUnit, analysisSummary, classInfo);
-        LinkedHashSet<String> issues = new LinkedHashSet<>();
-        LinkedHashSet<String> missingConstructorMetadata = new LinkedHashSet<>();
-        Set<String> signatureTypes = collectMethodSignatureTypeNames(methodInfo);
-        compilationUnit.findAll(ObjectCreationExpr.class).forEach(expr -> {
-            String type = simpleName(expr.getType().asString());
-            if (type.isEmpty() || !signatureRegistry.hasClass(type)) {
-                return;
-            }
-            int argumentCount = expr.getArguments().size();
-            signatureRegistry.registerConstructorsIfAbsent(type);
-            List<ConstructorMetadata> constructors = signatureRegistry.getConstructorsForClass(type);
-            if (constructors.isEmpty() || !signatureRegistry.constructorExists(type, argumentCount)) {
-                if (signatureTypes.contains(type)) {
-                    attemptConstructorRefresh(config, classInfo, methodInfo, type);
-                    constructors = signatureRegistry.getConstructorsForClass(type);
-                    if (!constructors.isEmpty() && signatureRegistry.constructorExists(type, argumentCount)) {
-                        return;
-                    }
-                }
-                missingConstructorMetadata.add(type);
-                issues.add("E104: Missing constructor metadata for " + formatConstructorInvocation(type, expr));
-            }
-        });
-        compilationUnit.findAll(MethodCallExpr.class).forEach(expr -> {
-            Optional<Expression> scope = expr.getScope();
-            if (scope.isEmpty()) {
-                return;
-            }
-            String resolvedType = resolveExpressionType(scope.get(), variableTypes, classInfo);
-            if (isStandardLibraryType(resolvedType)) {
-                return;
-            }
-            String simple = simpleName(resolvedType);
-            if (simple.isEmpty() || !signatureRegistry.hasClass(simple)) {
-                return;
-            }
-            if (!signatureRegistry.methodExists(simple, expr.getNameAsString(), expr.getArguments().size())) {
-                issues.add("E102: Invented method " + formatMethodInvocation(simple, expr));
-            }
-        });
-        if (!missingConstructorMetadata.isEmpty()) {
-            logger.warn("Constructor metadata missing for: " + String.join(", ", missingConstructorMetadata));
-        }
-        if (!issues.isEmpty()) {
-            String message = String.join("; ", issues);
-            logger.warn("⚠️  " + message);
-            throw new InvalidLLMResponseException(message);
-        }
-        return variableTypes;
-    }
-
-    private Set<String> collectMethodSignatureTypeNames(TestMethodInfo methodInfo) {
-        LinkedHashSet<String> names = new LinkedHashSet<>();
-        if (methodInfo == null) {
-            return names;
-        }
-        MethodDeclaration declaration = methodInfo.getDeclaration();
-        if (declaration != null) {
-            declaration.getParameters().forEach(parameter ->
-                    extractTypeNames(parameter.getType(), names));
-            extractTypeNames(declaration.getType(), names);
-        } else {
-            String returnType = methodInfo.getReturnType();
-            if (returnType != null && !returnType.isBlank()) {
-                names.add(simpleName(returnType));
-            }
-        }
-        return names;
-    }
-
-    private void extractTypeNames(com.github.javaparser.ast.type.Type type, Set<String> collector) {
-        if (type == null || collector == null) {
-            return;
-        }
-        if (type.isPrimitiveType()) {
-            return;
-        }
-        if (type.isArrayType()) {
-            extractTypeNames(type.asArrayType().getComponentType(), collector);
-            return;
-        }
-        if (type.isUnionType()) {
-            type.asUnionType().getElements().forEach(element -> extractTypeNames(element, collector));
-            return;
-        }
-        if (type.isIntersectionType()) {
-            type.asIntersectionType().getElements().forEach(element -> extractTypeNames(element, collector));
-            return;
-        }
-        if (type.isWildcardType()) {
-            type.asWildcardType().getExtendedType().ifPresent(t -> extractTypeNames(t, collector));
-            type.asWildcardType().getSuperType().ifPresent(t -> extractTypeNames(t, collector));
-            return;
-        }
-        if (type.isClassOrInterfaceType()) {
-            collector.add(simpleName(type.asClassOrInterfaceType().getNameWithScope()));
-            type.asClassOrInterfaceType().getTypeArguments()
-                    .ifPresent(arguments -> arguments.forEach(argument -> extractTypeNames(argument, collector)));
-            return;
-        }
-        collector.add(simpleName(type.asString()));
-    }
-
-    private void attemptConstructorRefresh(AgentConfig config,
-                                           TestClassInfo classInfo,
-                                           TestMethodInfo methodInfo,
-                                           String type) {
-        if (config == null || analyze == null) {
-            return;
-        }
-        boolean refreshTriggered = signatureRegistry != null && signatureRegistry.refreshConstructors(type);
-        if (logger != null) {
-            String baseMessage = "Attempting constructor metadata refresh for type " + type
-                    + " referenced in method signature before failing validation.";
-            if (!refreshTriggered) {
-                logger.warn(baseMessage + " Registry has no cached constructors yet.");
-            } else {
-                logger.warn(baseMessage);
-            }
-        }
-        analyze.analyze(config, classInfo, methodInfo);
-    }
-
-    private void ensureNoInternalFieldAccess(String generatedCode,
-                                             Analyze.AnalysisSummary analysisSummary) {
-        if (analysisSummary == null) {
-            return;
-        }
-        Set<String> internalFields = analysisSummary.internalFields();
-        if (internalFields == null || internalFields.isEmpty()) {
-            return;
-        }
-        String code = generatedCode == null ? "" : generatedCode;
-        if (code.isBlank()) {
-            return;
-        }
-        Pattern pattern = Pattern.compile("\\b(\\w+)\\.(\\w+)\\b");
-        Matcher matcher = pattern.matcher(code);
-        LinkedHashSet<String> violations = new LinkedHashSet<>();
-        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
-        String targetInstance = targetContext == null ? "" : normalise(targetContext.instanceName());
-        Set<String> accessible = analysisSummary.accessibleFields();
-        while (matcher.find()) {
-            String instance = matcher.group(1);
-            String field = matcher.group(2);
-            if ("this".equals(instance) && field.equals(targetInstance)) {
-                continue;
-            }
-            if (accessible != null && accessible.contains(field)) {
-                continue;
-            }
-            int lookahead = matcher.end();
-            while (lookahead < code.length() && Character.isWhitespace(code.charAt(lookahead))) {
-                lookahead++;
-            }
-            if (lookahead < code.length() && code.charAt(lookahead) == '(') {
-                continue;
-            }
-            if (internalFields.contains(field)) {
-                violations.add(instance + '.' + field);
-            }
-        }
-        if (!violations.isEmpty()) {
-            String message = "E103: Internal field access " + String.join(", ", violations);
-            logger.warn("⚠️  " + message);
-            throw new InvalidLLMResponseException(message);
-        }
-    }
-
-    private Map<String, String> collectVariableTypes(CompilationUnit compilationUnit,
-                                                     Analyze.AnalysisSummary analysisSummary,
-                                                     TestClassInfo classInfo) {
-        Map<String, String> types = new LinkedHashMap<>();
-        Analyze.TestTargetContext targetContext = analysisSummary.testTargetContext();
-        if (targetContext != null && targetContext.instanceName() != null && !targetContext.instanceName().isBlank()) {
-            types.put(targetContext.instanceName(), targetContext.className());
-        }
-        analysisSummary.availableMethods().keySet().forEach(className -> types.putIfAbsent(className, className));
-        analysisSummary.availableConstructors().keySet().forEach(className -> types.putIfAbsent(className, className));
-        compilationUnit.findAll(VariableDeclarator.class).forEach(declarator -> {
-            String name = declarator.getNameAsString();
-            if (name == null || name.isBlank()) {
-                return;
-            }
-            String type = declarator.getType().asString();
-            if ("var".equals(type)) {
-                type = inferTypeFromInitializer(declarator.getInitializer());
-            }
-            types.putIfAbsent(name, type);
-        });
-        compilationUnit.findAll(MethodDeclaration.class).forEach(method ->
-                method.getParameters().forEach(parameter -> types.putIfAbsent(parameter.getNameAsString(), parameter.getType().asString())));
-        if (classInfo != null && classInfo.getClassMetadata() != null) {
-            classInfo.getClassMetadata().getFields().forEach(field -> types.putIfAbsent(field.getName(), field.getTypeName()));
-        }
-        return types;
-    }
-
-    private String inferTypeFromInitializer(Optional<Expression> initializer) {
-        if (initializer.isEmpty()) {
-            return "";
-        }
-        Expression expression = initializer.get();
-        if (expression instanceof ObjectCreationExpr creationExpr) {
-            return creationExpr.getType().asString();
-        }
-        return "";
-    }
-
-    private String resolveExpressionType(Expression expression,
-                                         Map<String, String> variableTypes,
-                                         TestClassInfo classInfo) {
-        if (expression instanceof ThisExpr) {
-            return classInfo == null ? "" : classInfo.getClassName();
-        }
-        if (expression instanceof NameExpr nameExpr) {
-            return variableTypes.getOrDefault(nameExpr.getNameAsString(), "");
-        }
-        if (expression instanceof FieldAccessExpr fieldAccessExpr) {
-            String fieldName = fieldAccessExpr.getNameAsString();
-            String direct = variableTypes.get(fieldName);
-            if (direct != null && !direct.isBlank()) {
-                return direct;
-            }
-            return resolveExpressionType(fieldAccessExpr.getScope(), variableTypes, classInfo);
-        }
-        return "";
-    }
-
-    private String formatConstructorInvocation(String type, ObjectCreationExpr expr) {
-        String arguments = describeArguments(new java.util.ArrayList<>(expr.getArguments()));
-        return type + '(' + arguments + ')';
-    }
-
-    private String formatMethodInvocation(String type, MethodCallExpr expr) {
-        String arguments = describeArguments(new java.util.ArrayList<>(expr.getArguments()));
-        return type + '.' + expr.getNameAsString() + '(' + arguments + ')';
-    }
-
-    private String describeArguments(List<Expression> arguments) {
-        if (arguments == null || arguments.isEmpty()) {
-            return "";
-        }
-        List<String> parts = new java.util.ArrayList<>(arguments.size());
-        for (Expression argument : arguments) {
-            String text = argument == null ? "" : argument.toString();
-            if (text.length() > 40) {
-                text = text.substring(0, 37) + "...";
-            }
-            parts.add(text);
-        }
-        return String.join(", ", parts);
-    }
-
-    private String simpleName(String type) {
-        if (type == null) {
-            return "";
-        }
-        String trimmed = type.trim();
-        if (trimmed.isEmpty()) {
-            return "";
-        }
-        int genericStart = trimmed.indexOf('<');
-        if (genericStart >= 0) {
-            trimmed = trimmed.substring(0, genericStart);
-        }
-        int arrayIndex = trimmed.indexOf('[');
-        if (arrayIndex >= 0) {
-            trimmed = trimmed.substring(0, arrayIndex);
-        }
-        int lastDot = trimmed.lastIndexOf('.');
-        if (lastDot >= 0 && lastDot + 1 < trimmed.length()) {
-            return trimmed.substring(lastDot + 1);
-        }
-        return trimmed;
-    }
-
-    private void ensureMockUsageIsValid(String fullSource,
-                                        Analyze.AnalysisSummary analysisSummary,
-                                        TestClassInfo classInfo) {
-        MockPlan plan = analysisSummary.mockPlan();
-        if (plan != null && plan.strategy() == MockStrategy.NONE && containsMockito(fullSource)) {
-            String collaboratorField = collaboratorDetector.findFirstExternalCollaborator(
-                            classInfo != null ? classInfo.getClassMetadata() : null)
-                    .map(field -> field.getTypeName() + " " + field.getName())
-                    .orElse(null);
-            if (collaboratorField != null) {
-                logger.warn("⚠️  E105: unexpected Mockito usage when mocks are disabled. External collaborator field detected: "
-                        + collaboratorField + '.');
-            } else {
-                logger.warn("⚠️  E105: unexpected Mockito usage when mocks are disabled.");
-            }
-            throw new InvalidLLMResponseException("E105: unexpected Mockito usage when mocks are disabled.");
-        }
-    }
-
-    private String normalise(String value) {
-        if (value == null) {
-            return "";
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? "" : trimmed;
-    }
-
-    private boolean containsMockito(String source) {
-        if (source == null || source.isBlank()) {
-            return false;
-        }
-        if (source.contains("Mockito")) {
-            return true;
-        }
-        return source.contains("org.mockito")
-                || source.contains("import static org.mockito")
-                || source.contains("@Mock");
-    }
-
-    private boolean isStandardLibraryType(String type) {
-        if (type == null || type.isBlank()) {
-            return false;
-        }
-        for (String standard : Analyze.STANDARD_TYPES) {
-            if (matchesStandardLibraryType(type, standard)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean matchesStandardLibraryType(String candidate, String standard) {
-        if (candidate == null || standard == null) {
-            return false;
-        }
-        String trimmedCandidate = candidate.trim();
-        if (trimmedCandidate.isEmpty()) {
-            return false;
-        }
-        if (trimmedCandidate.contains(standard)) {
-            return true;
-        }
-        String standardSimple = simpleName(standard);
-        String candidateSimple = simpleName(trimmedCandidate);
-        if (!standardSimple.isEmpty()) {
-            if (candidateSimple.equals(standardSimple)) {
-                return true;
-            }
-            if (trimmedCandidate.startsWith(standardSimple + "<")) {
-                return true;
-            }
-            if (trimmedCandidate.endsWith('.' + standardSimple)) {
-                return true;
-            }
-            if (trimmedCandidate.equals(standardSimple)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private record ExecutionRepairResult(boolean success,
-                                         boolean shouldRegenerate,
-                                         CompileResult compileResult,
-                                         ExecuteResult executeResult,
-                                         ExecutionFailureParseResult failureParseResult,
-                                         List<TestReportFailure> reportFailures,
-                                         ActionExecutionResult actionExecutionResult) {
     }
 }

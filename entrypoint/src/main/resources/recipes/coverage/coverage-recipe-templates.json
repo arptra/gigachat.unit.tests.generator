@@ -1,0 +1,197 @@
+{
+  "ADD_BOOLEAN_BRANCH_SIBLING_TEST": {
+    "id": "ADD_BOOLEAN_BRANCH_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_BOOLEAN_BRANCH_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive the remaining boolean branch for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_NULL_GUARD_SIBLING_TEST": {
+    "id": "ADD_NULL_GUARD_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_NULL_GUARD_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive the remaining null or non-null guard for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_EMPTY_INPUT_BRANCH_SIBLING_TEST": {
+    "id": "ADD_EMPTY_INPUT_BRANCH_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_EMPTY_INPUT_BRANCH_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive the remaining empty or non-empty input branch for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_COLLECTION_ELEMENT_TYPE_SAFE_SIBLING_TEST": {
+    "id": "ADD_COLLECTION_ELEMENT_TYPE_SAFE_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_COLLECTION_ELEMENT_TYPE_SAFE_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test that preserves the source collection element type while driving the remaining collection branch for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_NUMERIC_BOUNDARY_SIBLING_TEST": {
+    "id": "ADD_NUMERIC_BOUNDARY_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_NUMERIC_BOUNDARY_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive the remaining numeric boundary branch for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_CONSTRUCTOR_LOCAL_REBOUND_SIBLING_TEST": {
+    "id": "ADD_CONSTRUCTOR_LOCAL_REBOUND_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_CONSTRUCTOR_LOCAL_REBOUND_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive a constructor-local rebound branch for ${targetMethodSimple} through real domain-object state mutations and collaborator assertions.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_LEGACY_BOOLEAN_BRANCH_SIBLING_TEST": {
+    "id": "ADD_LEGACY_BOOLEAN_BRANCH_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_LEGACY_BOOLEAN_BRANCH_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test that flips a legacy boolean driver and rewrites result plus collaborator assertions for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_TYPED_COLLECTION_EARLY_RETURN_SIBLING_TEST": {
+    "id": "ADD_TYPED_COLLECTION_EARLY_RETURN_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_TYPED_COLLECTION_EARLY_RETURN_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive a typed empty-collection early-return branch for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_REBOUND_FACTOR_BRANCH_SIBLING_TEST": {
+    "id": "ADD_REBOUND_FACTOR_BRANCH_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_REBOUND_FACTOR_BRANCH_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive the remaining reboundFactor branch while rewriting the expected numeric assertion.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_REBOUND_THRESHOLD_SIBLING_TEST": {
+    "id": "ADD_REBOUND_THRESHOLD_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_REBOUND_THRESHOLD_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test for rebound threshold coverage while recalculating numeric assertions from source constants.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_SOURCE_DERIVED_RETURN_BRANCH_SIBLING_TEST": {
+    "id": "ADD_SOURCE_DERIVED_RETURN_BRANCH_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_SOURCE_DERIVED_RETURN_BRANCH_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test for ${targetMethodSimple} that follows a source guard's normal return contract instead of treating the guard as an exception path.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_CONSTRUCTOR_LOCAL_PROMOTION_SIBLING_TEST": {
+    "id": "ADD_CONSTRUCTOR_LOCAL_PROMOTION_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_CONSTRUCTOR_LOCAL_PROMOTION_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive a constructor-local promotion branch for ${targetMethodSimple} through collaborator state and rewritten assertions.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  },
+  "ADD_EXCEPTION_GUARD_SIBLING_TEST": {
+    "id": "ADD_EXCEPTION_GUARD_SIBLING_TEST_${targetMethodUpper}",
+    "kind": "ADD_EXCEPTION_GUARD_SIBLING_TEST",
+    "state": "S8_COVERAGE_FAILED",
+    "summary": "Add a sibling test inside the generated class to drive a remaining guard or exception path for ${targetMethodSimple}.",
+    "operations": [
+      {
+        "type": "insert_method_before_class_end",
+        "methodSource": "${methodSource}"
+      }
+    ],
+    "requiredImports": {
+      "$bind": "requiredImports"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+2026-04-27T06:50:49.531470Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T06:59:42.159518Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T07:30:49.607584Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T07:32:59.156222Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T07:35:36.590362Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T07:51:35.171822Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T07:58:52.584817Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T08:22:56.840536Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T16:43:19.083115Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T17:43:03.698962Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T18:25:02.636021Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T18:41:19.493392Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T18:50:29.169237Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage
+2026-04-27T19:52:53.711277Z [TRACE] [STATE] method=testSendWelcome state=COVERAGE message=running jacoco coverage

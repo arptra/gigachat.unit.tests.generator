@@ -25,15 +25,19 @@ class ArgsParserPipelineOptionsTest {
 
         assertFalse(moduleConfig.compileEnabled());
         assertFalse(moduleConfig.executeEnabled());
+        assertFalse(moduleConfig.coverageEnabled());
+        assertEquals(java.util.List.of(100), moduleConfig.coverageGoals());
     }
 
     @Test
-    void compileAndExecuteFlagsEnablePipelineSteps() {
+    void compileExecuteAndCoverageFlagsEnablePipelineSteps() {
         String[] args = {
                 "--mode", "scan",
                 "--path", "./example-project",
                 "--compile",
-                "--execute"
+                "--execute",
+                "--coverage",
+                "--coverage-goals", "40,60,80"
         };
 
         AgentConfig config = parser.parse(args);
@@ -41,6 +45,8 @@ class ArgsParserPipelineOptionsTest {
 
         assertTrue(moduleConfig.compileEnabled());
         assertTrue(moduleConfig.executeEnabled());
+        assertTrue(moduleConfig.coverageEnabled());
+        assertEquals(java.util.List.of(40, 60, 80), moduleConfig.coverageGoals());
     }
 
     @Test

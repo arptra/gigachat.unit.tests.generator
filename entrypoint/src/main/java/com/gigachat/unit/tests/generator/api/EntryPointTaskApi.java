@@ -43,6 +43,11 @@ public class EntryPointTaskApi {
         if (properties.isExecute()) {
             args.add("--execute");
         }
+        if (properties.isCoverage()) {
+            args.add("--coverage");
+        }
+        addArg(args, "coverage-goals", properties.getCoverageGoals());
+        addArg(args, "coverage-threshold", properties.getCoverageThreshold());
 
         addArg(args, "source-branch", properties.getSourceBranch());
         addArg(args, "target-branch", properties.getTargetBranch());

@@ -2,6 +2,9 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 
@@ -28,7 +31,11 @@ public class ExistingTestDetector {
         if (methodSignature == null || methodSignature.isBlank()) {
             return false;
         }
-        return registry.hasEntry(classInfo.resolveTestFile(), methodSignature);
+        Path testFile = classInfo.resolveTestFile();
+        if (!registry.hasEntry(testFile, methodSignature)) {
+            return false;
+        }
+        return hasConcreteTestContent(testFile);
     }
 
     public void recordSuccessfulTest(TestClassInfo classInfo, TestMethodInfo methodInfo) {
@@ -54,5 +61,24 @@ public class ExistingTestDetector {
             candidate = parts[parts.length - 1];
         }
         return candidate.isEmpty() ? null : candidate;
+    }
+
+    private boolean hasConcreteTestContent(Path testFile) {
+        if (testFile == null || !Files.exists(testFile)) {
+            return false;
+        }
+        try {
+            String source = Files.readString(testFile, StandardCharsets.UTF_8);
+            if (source.isBlank()) {
+                return false;
+            }
+            return source.contains("@Test")
+                    || source.contains("@ParameterizedTest")
+                    || source.contains("@RepeatedTest")
+                    || source.contains("@TestFactory")
+                    || source.contains("@TestTemplate");
+        } catch (IOException exception) {
+            return false;
+        }
     }
 }

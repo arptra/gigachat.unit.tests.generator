@@ -157,7 +157,7 @@ public class TestCleaner {
     }
 
     private void runExecutionStage(AgentConfig config) throws IOException {
-        ExecuteResult result = executionInvoker.execute(config.getProjectPath(), config.getProjectPath(), "");
+        ExecuteResult result = executionInvoker.execute(config.getProjectPath(), config.getProjectPath(), null);
         if (result.success()) {
             return;
         }

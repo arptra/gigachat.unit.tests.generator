@@ -1,6 +1,7 @@
 package com.gigachat.unit.tests.generator.compile;
 
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
+import com.gigachat.unit.tests.generator.gradle.GradleBuildLocator;
 
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
@@ -90,6 +91,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     public CompileResult compileAllTests(Path projectRoot, String methodName) {
         Objects.requireNonNull(projectRoot, "projectRoot");
+        Path buildRoot = GradleBuildLocator.findInvocationRoot(projectRoot);
 
         List<String> messages = new ArrayList<>();
         List<Path> testSources;
@@ -111,15 +113,15 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         boolean overallSuccess = true;
 
         var targetsByModule = testSources.stream()
-                .collect(Collectors.groupingBy(source -> determineGradlePath(projectRoot, source), LinkedHashMap::new, Collectors.toList()));
+                .collect(Collectors.groupingBy(source -> determineGradlePath(buildRoot, source), LinkedHashMap::new, Collectors.toList()));
 
         for (var entry : targetsByModule.entrySet()) {
             String modulePath = entry.getKey();
             List<Path> moduleTargets = entry.getValue();
 
-            boolean dependenciesChanged = dependencyFileUpdated(projectRoot);
+            boolean dependenciesChanged = dependencyFileUpdated(buildRoot);
             if (dependenciesChanged) {
-                invalidateClasspathCacheForProject(projectRoot);
+                invalidateClasspathCacheForProject(buildRoot);
                 moduleTargets.forEach(COMPILATION_CACHE::remove);
             }
 
@@ -145,11 +147,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 continue;
             }
 
-            Path moduleRoot = modulePath.isBlank()
-                    ? projectRoot
-                    : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
+            Path moduleRoot = resolveModuleRoot(buildRoot, modulePath);
 
-            ModuleCompilationOutcome moduleOutcome = compileModuleTests(projectRoot, modulePath, moduleRoot, moduleTargets, methodName, messages, dependenciesChanged);
+            ModuleCompilationOutcome moduleOutcome = compileModuleTests(buildRoot, modulePath, moduleRoot, moduleTargets, methodName, messages, dependenciesChanged);
             CompileResult moduleResult = moduleOutcome.result();
             overallSuccess &= moduleResult.success();
             appendOutputs(stdout, stderr, moduleResult);
@@ -195,13 +195,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
         Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
         Path representative = compilationTargets.get(0);
-        String modulePath = determineGradlePath(projectRoot, representative);
-        Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
+        Path buildRoot = GradleBuildLocator.findInvocationRoot(projectRoot);
+        String modulePath = determineGradlePath(buildRoot, representative);
+        Path moduleRoot = resolveModuleRoot(buildRoot, modulePath);
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
 
-        boolean dependenciesChanged = dependencyFileUpdated(projectRoot);
+        boolean dependenciesChanged = dependencyFileUpdated(buildRoot);
         if (dependenciesChanged) {
-            invalidateClasspathCacheForProject(projectRoot);
+            invalidateClasspathCacheForProject(buildRoot);
             if (useCache) {
                 COMPILATION_CACHE.remove(cacheKey);
             }
@@ -216,9 +217,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages, dependenciesChanged);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(buildRoot, modulePath, messages, dependenciesChanged);
             if (includeAllTestClasses) {
-                classpathEntries.addAll(resolveAllTestOutputs(projectRoot, messages));
+                classpathEntries.addAll(resolveAllTestOutputs(buildRoot, messages));
             }
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
@@ -242,6 +243,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
                 logger.info("Compiling " + compilationTargets.size() + " test source(s) starting at " + testClassFile
                         + " for method " + methodName);
+                logger.trace("COMPILE", methodName, "COMPILATION", "compiling testFile=" + testClassFile.toAbsolutePath().normalize());
                 Boolean success = compiler.getTask(compilerOutput, fileManager, diagnostics, options, null, units).call();
                 String stdout = compilerOutput.toString();
                 String stderr = diagnostics.getDiagnostics().stream()
@@ -250,6 +252,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 boolean compilationSucceeded = Boolean.TRUE.equals(success);
                 if (!compilationSucceeded) {
                     logger.warn("Compilation failed for " + testClassFile);
+                    logger.trace("RESULT", methodName, "S2_COMPILATION_FAILED", "compiler reported failure for " + testClassFile.getFileName());
+                } else {
+                    logger.trace("RESULT", methodName, "S5_COMPILATION_SUCCESS", "compiler succeeded for " + testClassFile.getFileName());
                 }
                 CompileResult result = new CompileResult(compilationSucceeded, messages, stdout, stderr);
                 return useCache ? cacheResult(cacheKey, result) : result;
@@ -394,13 +399,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
         Path cacheKey = deriveCacheKey(compilationTargets, testClassFile);
         Path representative = compilationTargets.get(0);
-        String modulePath = determineGradlePath(projectRoot, representative);
-        Path moduleRoot = modulePath.isBlank() ? projectRoot : projectRoot.resolve(Path.of(modulePath.replace(":", "/")));
+        Path buildRoot = GradleBuildLocator.findInvocationRoot(projectRoot);
+        String modulePath = determineGradlePath(buildRoot, representative);
+        Path moduleRoot = resolveModuleRoot(buildRoot, modulePath);
         Path outputDir = moduleRoot.resolve("build/classes/java/test");
 
-        boolean dependenciesChanged = dependencyFileUpdated(projectRoot);
+        boolean dependenciesChanged = dependencyFileUpdated(buildRoot);
         if (dependenciesChanged) {
-            invalidateClasspathCacheForProject(projectRoot);
+            invalidateClasspathCacheForProject(buildRoot);
             COMPILATION_CACHE.remove(cacheKey);
         } else {
             CompileResult cachedResult = getCachedResult(cacheKey);
@@ -413,7 +419,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         try {
             Files.createDirectories(outputDir);
 
-            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(projectRoot, modulePath, messages, dependenciesChanged);
+            Set<Path> classpathEntries = resolveTestClasspathWithRefresh(buildRoot, modulePath, messages, dependenciesChanged);
             classpathEntries.add(outputDir);
             classpathEntries.add(moduleRoot.resolve("build/classes/java/main"));
             classpathEntries.add(moduleRoot.resolve("build/resources/test"));
@@ -522,6 +528,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         return String.join(":", segments);
     }
 
+    private Path resolveModuleRoot(Path buildRoot, String modulePath) {
+        return modulePath.isBlank()
+                ? buildRoot
+                : buildRoot.resolve(Path.of(modulePath.replace(":", "/")));
+    }
+
     private List<Path> resolveCompilationTargets(Path testClassFile) throws IOException {
         if (Files.isDirectory(testClassFile)) {
             try (Stream<Path> stream = Files.walk(testClassFile)) {
@@ -612,7 +624,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         }
 
         ClasspathResolution classpath = resolveTestClasspath(projectRoot, modulePath, messages, forceRefresh);
-        if (classpath.entries().isEmpty() && Files.exists(projectRoot.resolve("gradlew")) && !forceRefresh) {
+        if (classpath.entries().isEmpty() && GradleBuildLocator.resolveGradleCommand(projectRoot) != null && !forceRefresh) {
             classpath = resolveTestClasspath(projectRoot, modulePath, messages, true);
         }
 
@@ -624,9 +636,9 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
     private ClasspathResolution resolveTestClasspath(Path projectRoot, String modulePath, List<String> messages, boolean refreshDependencies) {
         Set<Path> entries = new LinkedHashSet<>();
-        Path gradlew = projectRoot.resolve("gradlew");
-        if (!Files.exists(gradlew)) {
-            messages.add("Gradle wrapper not found. Using current JVM classpath only.");
+        String gradleCommand = GradleBuildLocator.resolveGradleCommand(projectRoot);
+        if (gradleCommand == null) {
+            messages.add("Gradle build was not detected. Using current JVM classpath only.");
             entries.addAll(DEFAULT_CLASSPATH);
             return new ClasspathResolution(entries, false);
         }
@@ -642,11 +654,11 @@ public class GradleCompilerInvoker implements CompilerInvoker {
 
         String refreshFlag = refreshDependencies ? " --refresh-dependencies" : "";
         String gradleTask = (modulePath.isBlank() ? "" : (":" + modulePath + ":")) + "printTestClasspath";
-        String command = "./gradlew -q " + gradleTask + " --init-script " + initScript.toAbsolutePath() + refreshFlag;
+        String command = gradleCommand + " -q " + gradleTask + " --init-script " + initScript.toAbsolutePath() + refreshFlag;
         try {
             GradleTaskResult gradleResult = runGradleCommand(projectRoot, command);
             if (!gradleResult.success() && !modulePath.isBlank()) {
-                String rootCommand = "./gradlew -q printTestClasspath --init-script " + initScript.toAbsolutePath() + refreshFlag;
+                String rootCommand = gradleCommand + " -q printTestClasspath --init-script " + initScript.toAbsolutePath() + refreshFlag;
                 gradleResult = runGradleCommand(projectRoot, rootCommand);
             }
             if (!gradleResult.success()) {
@@ -680,7 +692,10 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                     .filter(path -> !path.isBlank())
                     .map(Path::of)
                     .collect(Collectors.toCollection(LinkedHashSet::new)));
-            messages.add("Gradle wrapper detected. Resolved test classpath via printTestClasspath task" + (refreshDependencies ? " with refresh." : "."));
+            String resolutionMode = "gradle".equals(gradleCommand)
+                    ? "installed Gradle"
+                    : "Gradle wrapper";
+            messages.add(resolutionMode + " detected. Resolved test classpath via printTestClasspath task" + (refreshDependencies ? " with refresh." : "."));
             return new ClasspathResolution(entries, true);
         } catch (IOException | InterruptedException exception) {
             if (exception instanceof InterruptedException) {
@@ -848,12 +863,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
     }
 
     private Set<Path> resolveAllTestOutputs(Path projectRoot, List<String> messages) {
-        Path gradlew = projectRoot.resolve("gradlew");
-        if (Files.exists(gradlew)) {
+        String gradleCommand = GradleBuildLocator.resolveGradleCommand(projectRoot);
+        if (gradleCommand != null) {
             Path initScript = null;
             try {
                 initScript = createAllTestOutputsInitScript();
-                String command = "./gradlew -q printAllTestOutputs --init-script " + initScript.toAbsolutePath();
+                String command = gradleCommand + " -q printAllTestOutputs --init-script " + initScript.toAbsolutePath();
                 ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
                 builder.directory(projectRoot.toFile());
                 builder.redirectErrorStream(true);

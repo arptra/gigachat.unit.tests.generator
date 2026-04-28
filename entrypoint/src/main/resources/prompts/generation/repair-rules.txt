@@ -1,0 +1,4 @@
+The JSON contains deterministic feedback from previous pipeline stages in "repair.stageFeedback"; treat it as authoritative repair input.
+Keep the same class under test and fix only the generated test code.
+Preserve working parts of "repair.previousSnippet" unless the stage feedback explicitly marks them as part of the failure.
+Apply the smallest concrete correction that addresses the latest stage failure instead of rewriting the whole test design.

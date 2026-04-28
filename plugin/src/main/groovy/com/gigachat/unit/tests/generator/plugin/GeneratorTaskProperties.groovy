@@ -13,6 +13,9 @@ class GeneratorTaskProperties {
     boolean project
     boolean compile
     boolean execute
+    boolean coverage
+    String coverageGoals
+    String coverageThreshold
     String sourceBranch
     String targetBranch
     String token
@@ -36,6 +39,9 @@ class GeneratorTaskProperties {
         project = project || bool(projectRef.findProperty('gigachat.project'))
         compile = compile || bool(projectRef.findProperty('gigachat.compile'))
         execute = execute || bool(projectRef.findProperty('gigachat.execute'))
+        coverage = coverage || bool(projectRef.findProperty('gigachat.coverage'))
+        coverageGoals = text(coverageGoals) ?: text(projectRef.findProperty('gigachat.coverageGoals'))
+        coverageThreshold = text(coverageThreshold) ?: text(projectRef.findProperty('gigachat.coverageThreshold'))
         sourceBranch = text(sourceBranch) ?: text(projectRef.findProperty('gigachat.sourceBranch'))
         targetBranch = text(targetBranch) ?: text(projectRef.findProperty('gigachat.targetBranch'))
         token = text(token) ?: text(projectRef.findProperty('gigachat.token'))

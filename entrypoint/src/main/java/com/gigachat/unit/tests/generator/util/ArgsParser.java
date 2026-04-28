@@ -66,6 +66,9 @@ public class ArgsParser {
                 case "key" -> privateKeyPath = toPath(readValue(args, ++i, key));
                 case "compile" -> builder.moduleOption("pipeline.compile.enabled", true);
                 case "execute" -> builder.moduleOption("pipeline.execute.enabled", true);
+                case "coverage" -> builder.moduleOption("pipeline.coverage.enabled", true);
+                case "coverage-goals" -> builder.moduleOption("pipeline.coverage.goals", splitValues(readValue(args, ++i, key)));
+                case "coverage-threshold" -> builder.moduleOption("pipeline.coverage.goals", List.of(readValue(args, ++i, key)));
                 case "ssl" -> {
                     boolean value = true;
                     if (hasValue(args, i)) {

@@ -17,6 +17,9 @@ public class EntryPointTaskProperties {
     private boolean project;
     private boolean compile;
     private boolean execute;
+    private boolean coverage;
+    private String coverageGoals;
+    private String coverageThreshold;
     private String sourceBranch;
     private String targetBranch;
     private String token;
@@ -49,6 +52,12 @@ public class EntryPointTaskProperties {
     public void setCompile(boolean compile) { this.compile = compile; }
     public boolean isExecute() { return execute; }
     public void setExecute(boolean execute) { this.execute = execute; }
+    public boolean isCoverage() { return coverage; }
+    public void setCoverage(boolean coverage) { this.coverage = coverage; }
+    public String getCoverageGoals() { return coverageGoals; }
+    public void setCoverageGoals(String coverageGoals) { this.coverageGoals = coverageGoals; }
+    public String getCoverageThreshold() { return coverageThreshold; }
+    public void setCoverageThreshold(String coverageThreshold) { this.coverageThreshold = coverageThreshold; }
     public String getSourceBranch() { return sourceBranch; }
     public void setSourceBranch(String sourceBranch) { this.sourceBranch = sourceBranch; }
     public String getTargetBranch() { return targetBranch; }

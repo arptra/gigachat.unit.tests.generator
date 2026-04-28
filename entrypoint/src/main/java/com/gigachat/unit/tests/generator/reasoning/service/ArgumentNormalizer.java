@@ -1,5 +1,7 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
+import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
+
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -14,6 +16,10 @@ public final class ArgumentNormalizer {
     }
 
     public static Map<String, Object> normalize(Map<String, Object> raw) {
+        return normalize(raw, null);
+    }
+
+    public static Map<String, Object> normalize(Map<String, Object> raw, ToolActionType actionType) {
         if (raw == null || raw.isEmpty()) {
             return Map.of();
         }
@@ -22,7 +28,7 @@ public final class ArgumentNormalizer {
             if (key == null) {
                 return;
             }
-            String canonical = canonicalKey(key);
+            String canonical = canonicalKey(key, actionType);
             if (canonical != null) {
                 normalized.put(canonical, value);
             }
@@ -30,14 +36,28 @@ public final class ArgumentNormalizer {
         return normalized;
     }
 
-    private static String canonicalKey(String key) {
+    private static String canonicalKey(String key, ToolActionType actionType) {
         String cleaned = key.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "");
+        if ("fqcn".equals(cleaned) || "fqn".equals(cleaned)) {
+            if (actionType == ToolActionType.ADD_IMPORT) {
+                return "import";
+            }
+            if (actionType == ToolActionType.READ_CLASS
+                    || actionType == ToolActionType.READ_METHOD
+                    || actionType == ToolActionType.LIST_METHODS) {
+                return "className";
+            }
+            return "symbol";
+        }
         return switch (cleaned) {
             case "filepath", "path", "target", "file" -> "path";
             case "classname" -> "className";
+            case "testclass" -> "testClass";
             case "methodname", "method" -> "methodName";
+            case "testpattern" -> "testPattern";
             case "symbol", "name" -> "symbol";
-            case "import", "importfqcn", "fqcn" -> "import";
+            case "recipeid", "recipe" -> "recipeId";
+            case "import", "importfqcn" -> "import";
             case "patch", "diff", "content" -> "patch";
             default -> null;
         };

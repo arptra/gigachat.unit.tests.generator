@@ -1,0 +1,6 @@
+# Stage-specific compilation reasoning rules.
+Use compiler output as the primary source of truth.
+Prefer the smallest compilable, test-only change.
+For missing symbols or imports, inspect SEARCH_SYMBOL or SHOW_IMPORTS before inventing package names.
+If a deterministic compile recipe matches the failure family, prefer APPLY_RECIPE before ad-hoc APPLY_PATCH.
+Recompile after every persisted change.

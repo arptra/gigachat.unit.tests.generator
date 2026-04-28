@@ -1,0 +1,9 @@
+When "constructorLocalContexts" is present, treat each constructor-local entry as authoritative branch-driving context for that local object.
+Use "constructorLocalContexts[*].invokedMethods[*].sourceSnippet" to identify the exact constructor-argument collaborator, feature flag, domain getter, or threshold that drives the branch instead of guessing a new driver.
+Prefer "constructorLocalContexts[*].invokedMethods[*].branchDrivers" over free-form interpretation when choosing which collaborator call, threshold, or domain-object mutation should drive the branch.
+Stub only constructor-argument collaborators or domain-object inputs that are explicitly referenced in the constructor-local source snippet; do not invent alternative collaborators or synthetic branch toggles.
+Treat "constructorLocalContexts[*].invokedMethods[*].voidSideEffects" as post-act verification targets or doNothing()/doThrow() candidates, never as branch drivers inside Mockito.when(...).
+If "constructorLocalContexts[*].invokedMethods[*].publicStateMutators" is present, use those public mutations on the real domain object to drive branchDrivers that depend on domain getters.
+If branchDrivers mention domain getters on a real object such as user.getLoginAttempts() or user.isActive(), mutate that real object through its public API before invoking the SUT instead of stubbing an unrelated collaborator.
+If the constructor-local source snippet shows only void collaborator side effects, verify those calls after the act step or use doNothing()/doThrow() as appropriate; never place those void calls inside Mockito.when(...).
+If the constructor-local source snippet shows no controllable collaborator or public input that can drive the branch, skip that scenario instead of mocking the constructor-local object directly.

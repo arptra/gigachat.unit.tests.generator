@@ -1,0 +1,5 @@
+Do not use Mockito. Use only JUnit 5 and real objects.
+Focus on asserting observable behaviour through the class's public API.
+Never modify or access internal fields of the tested class.
+Use only public methods or constructors listed in "availableConstructors" to prepare state.
+If preparing internal state is impossible without private access, skip that scenario.

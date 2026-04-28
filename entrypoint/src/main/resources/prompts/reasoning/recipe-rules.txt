@@ -1,0 +1,4 @@
+# Shared rules for recipe-driven repair.
+When deterministic repair recipes are present, prefer APPLY_RECIPE over free-form APPLY_PATCH.
+Use the exact recipeId from the supplied catalog.
+Only fall back to APPLY_PATCH when no recipe matches and you can describe a concrete test-side edit.

@@ -13,6 +13,10 @@ import com.gigachat.unit.tests.generator.dto.MockStrategy;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.ClassExpr;
+import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.MethodReferenceExpr;
+import com.github.javaparser.ast.expr.TypeExpr;
 import com.github.javaparser.ast.type.ArrayType;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import com.github.javaparser.ast.type.IntersectionType;
@@ -116,9 +120,10 @@ public class Analyze {
         if ((hasExternalCollaborators || invokesCollaborator) && plan.strategy() == MockStrategy.NONE) {
             plan = new MockPlan(plan.targets(), MockStrategy.MOCKITO, plan.shouldMock(), plan.shouldNotMock());
         }
-        MethodAnalysisResult sanitisedResult = sanitizeInvocations(filteredResult, internalFields);
+        MethodAnalysisResult sanitisedResult = sanitizeInvocations(filteredResult, metadata, internalFields);
+        plan = enrichMockPlan(plan, sanitisedResult, metadata, hasExternalCollaborators || invokesCollaborator);
         Map<String, String> verificationPolicy = analysisConfig.includeVerificationPolicy()
-                ? buildVerificationPolicy(sanitisedResult.invocations())
+                ? buildVerificationPolicy(sanitisedResult.invocations(), plan)
                 : Map.of();
         if (plan.strategy() == MockStrategy.NONE) {
             verificationPolicy = Map.of();
@@ -127,6 +132,7 @@ public class Analyze {
         TestTargetContext targetContext = extractTestTargetContext(classInfo, methodInfo);
         Set<String> enrichedRelevantClasses = new LinkedHashSet<>(filteredAnalysis.relevantClasses());
         Set<String> methodRelatedTypes = collectMethodRelatedTypes(methodInfo);
+        methodRelatedTypes.addAll(collectMethodBodyReferencedTypes(classInfo, methodInfo));
         methodRelatedTypes.addAll(methodParameterTypes);
         methodRelatedTypes.addAll(methodReturnTypes);
         for (String type : methodRelatedTypes) {
@@ -232,16 +238,18 @@ public class Analyze {
     }
 
     private MethodAnalysisResult sanitizeInvocations(MethodAnalysisResult analysis,
+                                                     ClassMetadata metadata,
                                                      Set<String> internalFields) {
         if (analysis == null || internalFields == null || internalFields.isEmpty()) {
             return analysis;
         }
+        Map<String, FieldMetadata> fieldsByName = indexFieldsByName(metadata);
         List<InvocationInfo> sanitisedInvocations = new ArrayList<>();
         for (InvocationInfo invocation : analysis.invocations()) {
             if (invocation == null) {
                 continue;
             }
-            String target = sanitizeInvocationTarget(invocation.target(), internalFields);
+            String target = sanitizeInvocationTarget(invocation.target(), internalFields, fieldsByName);
             sanitisedInvocations.add(new InvocationInfo(target, invocation.methodName(), invocation.argTypes()));
         }
         return new MethodAnalysisResult(analysis.method(),
@@ -251,24 +259,31 @@ public class Analyze {
                 analysis.unresolved());
     }
 
-    private String sanitizeInvocationTarget(String target, Set<String> internalFields) {
+    private String sanitizeInvocationTarget(String target,
+                                            Set<String> internalFields,
+                                            Map<String, FieldMetadata> fieldsByName) {
         String text = defaultString(target);
         if (text.isEmpty()) {
             return text;
         }
-        if (containsInternalFieldReference(text, internalFields)) {
+        String referencedField = findReferencedInternalField(text, internalFields);
+        if (referencedField != null) {
+            FieldMetadata metadata = fieldsByName.get(referencedField);
+            if (isCollaboratorField(metadata)) {
+                return referencedField;
+            }
             return "internal_state";
         }
         return text;
     }
 
-    private boolean containsInternalFieldReference(String target, Set<String> internalFields) {
+    private String findReferencedInternalField(String target, Set<String> internalFields) {
         if (internalFields == null || internalFields.isEmpty()) {
-            return false;
+            return null;
         }
         String normalised = defaultString(target);
         if (normalised.isEmpty()) {
-            return false;
+            return null;
         }
         for (String field : internalFields) {
             String candidate = defaultString(field);
@@ -281,10 +296,138 @@ public class Analyze {
                     || normalised.startsWith("this." + candidate + '.')
                     || normalised.endsWith('.' + candidate)
                     || normalised.contains('.' + candidate + '.')) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private Map<String, FieldMetadata> indexFieldsByName(ClassMetadata metadata) {
+        Map<String, FieldMetadata> indexed = new LinkedHashMap<>();
+        if (metadata == null || metadata.getFields().isEmpty()) {
+            return indexed;
+        }
+        for (FieldMetadata field : metadata.getFields()) {
+            if (field == null) {
+                continue;
+            }
+            String fieldName = defaultString(field.getName());
+            if (!fieldName.isBlank()) {
+                indexed.put(fieldName, field);
+            }
+        }
+        return indexed;
+    }
+
+    private MockPlan enrichMockPlan(MockPlan originalPlan,
+                                    MethodAnalysisResult analysis,
+                                    ClassMetadata metadata,
+                                    boolean preferMockito) {
+        MockPlan basePlan = originalPlan == null
+                ? new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of())
+                : originalPlan;
+        Map<String, FieldMetadata> fieldsByName = indexFieldsByName(metadata);
+        if (fieldsByName.isEmpty() || analysis == null) {
+            return basePlan;
+        }
+        LinkedHashMap<String, com.gigachat.unit.tests.generator.dto.MockTarget> targets = new LinkedHashMap<>();
+        for (com.gigachat.unit.tests.generator.dto.MockTarget target : basePlan.targets()) {
+            targets.put(target.qualifiedType() + "#" + target.identifier(), target);
+        }
+        LinkedHashSet<String> shouldMock = new LinkedHashSet<>(basePlan.shouldMock());
+        for (InvocationInfo invocation : analysis.invocations()) {
+            if (invocation == null) {
+                continue;
+            }
+            FieldMetadata field = fieldsByName.get(defaultString(invocation.target()));
+            if (!isCollaboratorField(field)) {
+                continue;
+            }
+            String identifier = field.getName();
+            shouldMock.add(identifier);
+            if (!defaultString(field.getTypeName()).isBlank()) {
+                targets.putIfAbsent(field.getTypeName() + "#" + identifier,
+                        new com.gigachat.unit.tests.generator.dto.MockTarget(field.getTypeName(), identifier));
+            }
+        }
+        for (DependencyInfo dependency : analysis.dependencies()) {
+            if (dependency == null || dependency.mockType() != MockType.CONSTRUCTOR) {
+                continue;
+            }
+            for (String argumentName : extractConstructorArgumentNames(dependency.context())) {
+                FieldMetadata field = fieldsByName.get(argumentName);
+                if (!isCollaboratorField(field)) {
+                    continue;
+                }
+                String identifier = field.getName();
+                shouldMock.add(identifier);
+                if (!defaultString(field.getTypeName()).isBlank()) {
+                    targets.putIfAbsent(field.getTypeName() + "#" + identifier,
+                            new com.gigachat.unit.tests.generator.dto.MockTarget(field.getTypeName(), identifier));
+                }
+            }
+        }
+        if (shouldMock.equals(new LinkedHashSet<>(basePlan.shouldMock()))) {
+            return basePlan;
+        }
+        MockStrategy strategy = basePlan.strategy();
+        if (!shouldMock.isEmpty() && (preferMockito || strategy == MockStrategy.NONE)) {
+            strategy = MockStrategy.MOCKITO;
+        }
+        return new MockPlan(List.copyOf(targets.values()),
+                strategy,
+                List.copyOf(shouldMock),
+                basePlan.shouldNotMock());
+    }
+
+    private boolean isCollaboratorField(FieldMetadata field) {
+        if (field == null) {
+            return false;
+        }
+        String name = defaultString(field.getName()).toLowerCase(Locale.ROOT);
+        String type = defaultString(field.getTypeName()).toLowerCase(Locale.ROOT);
+        for (String marker : List.of("service",
+                "repository",
+                "client",
+                "gateway",
+                "component",
+                "sender",
+                "producer",
+                "publisher",
+                "manager",
+                "facade",
+                "adapter",
+                "store")) {
+            if (name.contains(marker) || type.contains(marker)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private List<String> extractConstructorArgumentNames(String constructorContext) {
+        String context = defaultString(constructorContext);
+        int openParen = context.indexOf('(');
+        int closeParen = context.lastIndexOf(')');
+        if (openParen < 0 || closeParen <= openParen) {
+            return List.of();
+        }
+        String argumentsSection = context.substring(openParen + 1, closeParen).trim();
+        if (argumentsSection.isEmpty()) {
+            return List.of();
+        }
+        List<String> identifiers = new ArrayList<>();
+        for (String rawArgument : argumentsSection.split(",")) {
+            String candidate = defaultString(rawArgument).trim();
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            candidate = candidate.replace("this.", "").trim();
+            if (candidate.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+                identifiers.add(candidate);
+            }
+        }
+        return identifiers;
     }
 
     private FilteredAnalysis filterInvalidCalls(MethodAnalysisResult analysis,
@@ -642,6 +785,81 @@ public class Analyze {
         return types;
     }
 
+    private Set<String> collectMethodBodyReferencedTypes(TestClassInfo classInfo, TestMethodInfo methodInfo) {
+        LinkedHashSet<String> types = new LinkedHashSet<>();
+        if (methodInfo == null || methodInfo.getDeclaration() == null) {
+            return types;
+        }
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        declaration.findAll(Type.class).forEach(type -> extractTypesFromAst(type, types));
+        declaration.findAll(ClassExpr.class).forEach(classExpr -> extractTypesFromAst(classExpr.getType(), types));
+
+        Set<String> importedSimpleNames = importedSimpleNames(classInfo);
+        declaration.findAll(MethodReferenceExpr.class).forEach(methodReference ->
+                addMethodReferenceScopeType(types, methodReference.getScope(), importedSimpleNames));
+        return types;
+    }
+
+    private Set<String> importedSimpleNames(TestClassInfo classInfo) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        if (classInfo == null || classInfo.getImports() == null || classInfo.getImports().isEmpty()) {
+            return names;
+        }
+        for (String rawImport : classInfo.getImports()) {
+            String text = defaultString(rawImport);
+            if (text.isEmpty() || text.contains("*")) {
+                continue;
+            }
+            text = text.replace("import static ", "")
+                    .replace("import ", "")
+                    .replace(";", "")
+                    .trim();
+            String simple = simpleName(text);
+            if (!simple.isBlank()) {
+                names.add(simple);
+            }
+        }
+        return names;
+    }
+
+    private void addMethodReferenceScopeType(Set<String> collector,
+                                             Expression scope,
+                                             Set<String> importedSimpleNames) {
+        if (collector == null || scope == null) {
+            return;
+        }
+        if (scope instanceof TypeExpr typeExpr) {
+            extractTypesFromAst(typeExpr.getType(), collector);
+            return;
+        }
+        String scopeText = defaultString(scope.toString());
+        if (scopeText.isEmpty()) {
+            return;
+        }
+        String simple = simpleName(scopeText);
+        if (simple.isBlank()) {
+            return;
+        }
+        if (isTypeLikeMethodReferenceScope(scopeText, simple, importedSimpleNames)) {
+            collector.add(scopeText);
+        }
+    }
+
+    private boolean isTypeLikeMethodReferenceScope(String scopeText,
+                                                   String simple,
+                                                   Set<String> importedSimpleNames) {
+        if (signatureRegistry.hasClass(simple)) {
+            return true;
+        }
+        if (importedSimpleNames != null && importedSimpleNames.contains(simple)) {
+            return true;
+        }
+        if (!simple.isEmpty() && Character.isUpperCase(simple.charAt(0))) {
+            return true;
+        }
+        return isStandardType(scopeText) || isStandardType(simple);
+    }
+
     private void extractTypesFromAst(Type type, Set<String> collector) {
         if (type == null) {
             return;
@@ -920,13 +1138,19 @@ public class Analyze {
         return summary.mockPlan();
     }
 
-    public Map<String, String> buildVerificationPolicy(List<InvocationInfo> invocations) {
+    public Map<String, String> buildVerificationPolicy(List<InvocationInfo> invocations, MockPlan plan) {
         if (invocations == null || invocations.isEmpty()) {
             return Map.of();
         }
+        Set<String> mockableTargets = plan == null
+                ? Set.of()
+                : new LinkedHashSet<>(plan.shouldMock());
         Map<String, String> policy = new LinkedHashMap<>();
         for (InvocationInfo invocation : invocations) {
             if (invocation == null) {
+                continue;
+            }
+            if (!mockableTargets.isEmpty() && !mockableTargets.contains(defaultString(invocation.target()))) {
                 continue;
             }
             String key = invocation.target() + "." + invocation.methodName();

@@ -74,7 +74,6 @@ public class JavaProjectScanner {
 
     public void scanSequentially(AgentConfig config, Consumer<List<TestClassInfo>> perFileConsumer) throws IOException {
         Objects.requireNonNull(perFileConsumer, "perFileConsumer");
-        Path projectPath = config.getProjectPath();
         List<Path> moduleRoots = determineModuleRoots(config);
         Set<Path> diffFiles = resolveDiffJavaFiles(config);
         for (Path moduleRoot : moduleRoots) {
@@ -82,13 +81,17 @@ public class JavaProjectScanner {
             if (!Files.exists(sourceRoot)) {
                 continue;
             }
+            List<Path> javaFiles;
             try (Stream<Path> files = Files.walk(sourceRoot)) {
-                files.filter(Files::isRegularFile)
+                javaFiles = files.filter(Files::isRegularFile)
                         .filter(path -> path.toString().endsWith(".java"))
                         .filter(path -> shouldProcessFile(path, diffFiles))
-                        .forEach(path -> parseAndEmit(path, moduleRoot, config, perFileConsumer));
-            } catch (java.io.UncheckedIOException ex) {
-                throw (IOException) ex.getCause();
+                        .sorted()
+                        .toList();
+            }
+            preRegisterSignatures(javaFiles);
+            for (Path javaFile : javaFiles) {
+                parseAndEmit(javaFile, moduleRoot, config, perFileConsumer);
             }
         }
     }
@@ -143,6 +146,25 @@ public class JavaProjectScanner {
         parseJavaFile(javaFile, moduleRoot, config, collector);
         if (!collector.isEmpty()) {
             perFileConsumer.accept(List.copyOf(collector));
+        }
+    }
+
+    private void preRegisterSignatures(List<Path> javaFiles) {
+        if (javaFiles == null || javaFiles.isEmpty()) {
+            return;
+        }
+        for (Path javaFile : javaFiles) {
+            try {
+                javaParser.parse(javaFile).getResult().ifPresent(compilationUnit -> {
+                    compilationUnit.getTypes().stream()
+                            .filter(ClassOrInterfaceDeclaration.class::isInstance)
+                            .map(ClassOrInterfaceDeclaration.class::cast)
+                            .filter(declaration -> !declaration.isInterface())
+                            .forEach(this::registerSignatures);
+                });
+            } catch (IOException ex) {
+                throw new java.io.UncheckedIOException(ex);
+            }
         }
     }
 
@@ -279,7 +301,7 @@ public class JavaProjectScanner {
             return;
         }
         for (MethodDeclaration method : methods) {
-            if (method.isPrivate() || !method.isPublic() || method.isStatic()) {
+            if (method.isPrivate() || !method.isPublic()) {
                 continue;
             }
             String signature = method.getType().asString() + " "

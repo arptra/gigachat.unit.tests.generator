@@ -1,0 +1,6 @@
+# Stage-specific coverage reasoning rules.
+Use coverage feedback to target the next uncovered branch or line instead of rewriting the whole test.
+Keep fixes inside the generated test class that is being validated for coverage.
+If class-level validation is red because sibling tests fail, fix runtime regressions before spending more coverage budget.
+If a deterministic coverage recipe matches the missed branch family, prefer APPLY_RECIPE before ad-hoc APPLY_PATCH.
+Recompile and rerun tests before trusting a reported coverage improvement.

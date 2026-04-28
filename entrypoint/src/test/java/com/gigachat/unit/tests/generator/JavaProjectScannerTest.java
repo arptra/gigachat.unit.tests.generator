@@ -3,6 +3,7 @@ package com.gigachat.unit.tests.generator;
 import com.gigachat.unit.tests.generator.config.AgentConfig;
 import com.gigachat.unit.tests.generator.config.AgentConfigBuilder;
 import com.gigachat.unit.tests.generator.config.AgentMode;
+import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
 import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
@@ -164,6 +165,37 @@ class JavaProjectScannerTest {
         assertTrue(info.getTargetPath().toString().contains("mtd"));
     }
 
+    @Test
+    void registersPublicStaticMethodsAsAvailableApi() throws IOException {
+        Path sourceFolder = workingDirectory.resolve(Path.of("src", "main", "java", "com", "example", "demo"));
+        Files.createDirectories(sourceFolder);
+        Files.writeString(sourceFolder.resolve("StaticTelemetry.java"), """
+                package com.example.demo;
+
+                import java.util.List;
+
+                public final class StaticTelemetry {
+                    public static void emit(String stream, String message) {}
+                    public static List<String> snapshot() { return List.of(); }
+                    public static void clear() {}
+                    private static void hidden() {}
+                }
+                """);
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(workingDirectory)
+                .build();
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        JavaProjectScanner scanner = new JavaProjectScanner(registry);
+
+        scanner.scan(config);
+
+        assertTrue(registry.methodExists("StaticTelemetry", "emit", 2));
+        assertTrue(registry.methodExists("StaticTelemetry", "snapshot", 0));
+        assertTrue(registry.methodExists("StaticTelemetry", "clear", 0));
+        assertFalse(registry.methodExists("StaticTelemetry", "hidden", 0));
+    }
+
 
     @Test
     void diffModeScansOnlyChangedJavaFilesBetweenBranches() throws IOException {
@@ -193,6 +225,7 @@ class JavaProjectScannerTest {
                 """);
 
         run(projectRoot, "git init");
+        run(projectRoot, "git branch -M master");
         run(projectRoot, "git config user.email test@example.com");
         run(projectRoot, "git config user.name test");
         run(projectRoot, "git add .");

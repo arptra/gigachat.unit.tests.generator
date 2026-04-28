@@ -3,6 +3,7 @@ package com.gigachat.unit.tests.generator.reasoning.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
+import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 
 public class ReasoningResponseParser {
 
@@ -76,6 +77,21 @@ public class ReasoningResponseParser {
         }
         if (response.getActions() == null) {
             response.setActions(java.util.List.of());
+        }
+        for (ReasoningResponse.ReasoningAction action : response.getActions()) {
+            if (action == null || action.getType() == null || action.getType().isBlank()) {
+                throw new IllegalArgumentException("Action type is required");
+            }
+            String normalisedType = action.getType().trim().toUpperCase();
+            try {
+                ToolActionType.valueOf(normalisedType);
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalArgumentException("Unsupported action type: " + action.getType(), exception);
+            }
+            action.setType(normalisedType);
+            if (action.getArgs() == null) {
+                action.setArgs(java.util.Map.of());
+            }
         }
         if (response.getMemoryUpdates() == null) {
             response.setMemoryUpdates(new ReasoningResponse.MemoryUpdate());

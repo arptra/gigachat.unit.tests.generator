@@ -21,7 +21,7 @@ class ExistingTestDetectorTest {
         TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
         ExistingTestDetector detector = new ExistingTestDetector(registry);
 
-        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest");
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest", true);
         TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
         TestMethodInfo methodInfo = new TestMethodInfo("shouldDoThing()", "void", "{}");
 
@@ -35,7 +35,7 @@ class ExistingTestDetectorTest {
         TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
         ExistingTestDetector detector = new ExistingTestDetector(registry);
 
-        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest");
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest", true);
         TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
         TestMethodInfo methodInfo = new TestMethodInfo("shouldDoThing()", "void", "{}");
 
@@ -44,7 +44,7 @@ class ExistingTestDetectorTest {
 
     @Test
     void persistsAcrossDetectorInstances(@TempDir Path tempDir) throws IOException {
-        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest");
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest", true);
         TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
         ExistingTestDetector detector = new ExistingTestDetector(registry);
         TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
@@ -55,10 +55,44 @@ class ExistingTestDetectorTest {
         assertTrue(secondDetector.isTestMethodPresent(classInfo, methodInfo));
     }
 
-    private Path prepareTestFile(Path root, String pkg, String className) throws IOException {
+    @Test
+    void ignoresStaleRegistryEntryWhenSkeletonHasNoRealTests(@TempDir Path tempDir) throws IOException {
+        TestGenerationRegistry registry = new TestGenerationRegistry(tempDir);
+        ExistingTestDetector detector = new ExistingTestDetector(registry);
+
+        Path testFile = prepareTestFile(tempDir, "com.example", "SampleTest", false);
+        TestClassInfo classInfo = new TestClassInfo("com.example.Sample", "SampleTest", testFile, List.of(), List.of());
+        TestMethodInfo methodInfo = new TestMethodInfo("shouldDoThing()", "void", "{}");
+
+        detector.recordSuccessfulTest(classInfo, methodInfo);
+
+        assertFalse(detector.isTestMethodPresent(classInfo, methodInfo));
+    }
+
+    private Path prepareTestFile(Path root, String pkg, String className, boolean withRealTest) throws IOException {
         Path file = root.resolve("src/test/java/" + pkg.replace('.', '/') + "/" + className + ".java");
         Files.createDirectories(file.getParent());
-        Files.writeString(file, "// placeholder", StandardCharsets.UTF_8);
+        String contents = withRealTest
+                ? """
+                package com.example;
+
+                import org.junit.jupiter.api.Test;
+
+                class SampleTest {
+                    @Test
+                    void placeholder() {
+                    }
+                }
+                """
+                : """
+                package com.example;
+
+                import org.junit.jupiter.api.Test;
+
+                class SampleTest {
+                }
+                """;
+        Files.writeString(file, contents, StandardCharsets.UTF_8);
         return file;
     }
 }

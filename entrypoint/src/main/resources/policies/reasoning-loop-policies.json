@@ -1,0 +1,55 @@
+{
+  "reasoningMemory": {
+    "defaultContextBudget": 3,
+    "maxErrorHistory": 5
+  },
+  "compilationLoop": {
+    "maxIterations": 10,
+    "repeatedSignatureThreshold": 2,
+    "stopGraceRounds": 0,
+    "defaultForbiddenActions": [
+      "ADD_DEPENDENCY"
+    ],
+    "decisionNextStates": {
+      "REQUEST_CONTEXT": "S2_1_NEED_MORE_CONTEXT",
+      "APPLY_FIX": "S4_FIX_APPLIED",
+      "MARK_FALSE_DEPENDENCY": "S3_FALSE_DEPENDENCY_DETECTED",
+      "STOP": "S6_GIVE_UP"
+    },
+    "falseDependency": {
+      "nextState": "S3_FALSE_DEPENDENCY_DETECTED",
+      "forbiddenActions": [
+        "ADD_IMPORT"
+      ]
+    }
+  },
+  "executionLoop": {
+    "maxIterations": 6,
+    "repeatedSignatureThreshold": 3,
+    "stopGraceRounds": 1,
+    "defaultForbiddenActions": [],
+    "decisionNextStates": {
+      "REQUEST_CONTEXT": "S2_1_NEED_MORE_CONTEXT",
+      "APPLY_FIX": "S4_FIX_APPLIED",
+      "MARK_FALSE_DEPENDENCY": "S3_FALSE_DEPENDENCY_DETECTED",
+      "STOP": "S6_GIVE_UP"
+    }
+  },
+  "coverageLoop": {
+    "maxIterations": 4,
+    "repeatedSignatureThreshold": 2,
+    "stopGraceRounds": 0,
+    "defaultForbiddenActions": [],
+    "runtimeRegression": {
+      "afterCoverageRecipe": "DETERMINISTIC_RUNTIME_REPAIR",
+      "maxRuntimeRepairAttempts": "1",
+      "stopAfterFailedRuntimeRepair": "true",
+      "forbidRequestContextAfterRegression": "true"
+    },
+    "decisionNextStates": {
+      "REQUEST_CONTEXT": "S2_1_NEED_MORE_CONTEXT",
+      "APPLY_FIX": "S4_FIX_APPLIED",
+      "STOP": "S6_GIVE_UP"
+    }
+  }
+}

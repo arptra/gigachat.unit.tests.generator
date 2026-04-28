@@ -1,0 +1,202 @@
+{
+  "patterns": [
+    {
+      "id": "V001_MISSED_BOOLEAN_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Missed boolean branch",
+      "errorFamily": "MISSED_BOOLEAN_BRANCH",
+      "summary": "A true/false branch remains uncovered, often behind feature flags, null checks, or threshold rules.",
+      "containsAny": ["missed branch", "branch coverage", "condition not covered"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_uncovered_branch", "add_boolean_branch_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Reuse the current passing setup; once the target method is already present in CONTEXT_CACHE_KEYS, stop requesting the same source again and add the minimal input variation needed to flip the uncovered branch inside the generated test class that is being validated. If a bounded coverage recipe is present for a boolean branch variant, prefer APPLY_RECIPE over a free-form patch."
+    },
+    {
+      "id": "V002_MISSED_EXCEPTION_PATH",
+      "stage": "COVERAGE",
+      "title": "Missed exception or guard path",
+      "errorFamily": "MISSED_EXCEPTION_PATH",
+      "summary": "Coverage is missing around validation guards, exception paths, or early-return branches.",
+      "containsAny": ["exception path", "guard clause", "return before", "early return", "validation guard", "illegalargumentexception", "nullpointerexception"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_guard_logic", "add_negative_case", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Add a targeted negative or guard-case path inside the generated test class being validated, keep the patch close to the existing setup, and avoid repeating the same READ_* request after that method/class is already cached. If a deterministic coverage recipe exists for the remaining branch family, prefer APPLY_RECIPE, especially ADD_EXCEPTION_GUARD_SIBLING_TEST for assertThrows-style guard coverage. If APPLIED_FIXES already names a prior guard/negative case, choose a different uncovered path."
+    },
+    {
+      "id": "V003_MISSED_STATIC_SIDE_EFFECT",
+      "stage": "COVERAGE",
+      "title": "Static side effect path not covered",
+      "errorFamily": "MISSED_STATIC_SIDE_EFFECT",
+      "summary": "A branch containing static utility or static void side effects was not traversed by the current tests.",
+      "containsAny": ["static path", "telemetry", "side effect not covered"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_static_side_effect_branch", "extend_branch_trigger", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Drive the branch through real collaborator conditions, not by mocking constructor-local static behavior directly. If APPLIED_FIXES already contains a static-side-effect branch case, choose another uncovered path rather than repeating that patch."
+    },
+    {
+      "id": "V004_CLASS_LEVEL_RUNTIME_REGRESSION",
+      "stage": "COVERAGE",
+      "title": "Coverage validation blocked by failing sibling tests",
+      "errorFamily": "CLASS_LEVEL_RUNTIME_REGRESSION",
+      "summary": "Class-scoped coverage validation is red because another generated test in the same class is failing, so coverage work must wait until runtime is green again.",
+      "containsAny": ["there were failing tests", "execution failed for task ':test'", "tests completed, 1 failed", "failures ("],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["handoff_runtime_regression", "repair_failing_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Do not spend coverage budget on extra READ_* loops while class-level validation is red; repair the failing sibling test execution first, then remeasure coverage. If runtime-repair handoff is unavailable, STOP instead of asking for more coverage context."
+    },
+    {
+      "id": "V005_MISSED_NULL_GUARD",
+      "stage": "COVERAGE",
+      "title": "Missed null or non-null guard",
+      "errorFamily": "MISSED_NULL_GUARD",
+      "summary": "Coverage is missing on a null-check branch or a nullable input guard.",
+      "containsAny": ["null guard", "null check", "non-null branch", "nullable path"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_null_guard", "add_null_guard_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer a bounded sibling-test recipe that reuses the current passing setup and flips one nullable input from null to a safe concrete value, or from a concrete value to null when that branch is still uncovered."
+    },
+    {
+      "id": "V006_MISSED_EMPTY_INPUT_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Missed empty or non-empty input branch",
+      "errorFamily": "MISSED_EMPTY_INPUT_BRANCH",
+      "summary": "Coverage is missing on an empty string, empty collection, or corresponding non-empty branch.",
+      "containsAny": ["empty input", "empty string", "empty list", "empty collection", "non-empty branch"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_empty_input_branch", "add_empty_input_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer a bounded sibling-test recipe that reuses the current setup and changes only the empty/non-empty driver. Keep the rest of the generated class stable."
+    },
+    {
+      "id": "V007_MISSED_THRESHOLD_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Missed threshold or numeric boundary branch",
+      "errorFamily": "MISSED_THRESHOLD_BRANCH",
+      "summary": "Coverage is missing around numeric threshold, boundary, or off-by-one style guards.",
+      "containsAny": ["threshold branch", "boundary value", "off-by-one", "numeric guard"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_numeric_boundary", "add_numeric_boundary_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer a bounded sibling-test recipe that nudges one existing numeric driver to a nearby boundary value rather than rewriting the whole test."
+    },
+    {
+      "id": "V008_CONSTRUCTOR_LOCAL_STATEFUL_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Missed constructor-local stateful branch",
+      "errorFamily": "CONSTRUCTOR_LOCAL_STATEFUL_BRANCH",
+      "summary": "Coverage is missing on a branch controlled inside a constructor-local helper where the real driver is collaborator state or a public domain-object mutator, not a simple literal flip.",
+      "containsAny": ["constructor-local branch", "rebound branch", "getter-driven branch", "public state mutator"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_constructor_local_branch_driver", "add_constructor_local_stateful_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "When constructorLocalContexts or prior generation retries already identified getter-driven branchDrivers and publicStateMutators, prefer a bounded recipe that mutates the real domain object through its public API and rewrites assertions to the actual constructor-local side effects. Do not reuse a generic boolean recipe if the uncovered branch also changes result assertions or collaborator interactions."
+    },
+    {
+      "id": "V009_TYPED_COLLECTION_EARLY_RETURN",
+      "stage": "COVERAGE",
+      "title": "Typed collection early-return branch",
+      "errorFamily": "TYPED_COLLECTION_EARLY_RETURN",
+      "summary": "Coverage is missing on an empty-collection early return where the baseline test already uses typed domain objects and the assertion must be rewritten to the real empty-case result.",
+      "containsAny": ["UserService.averageLoginAttempts", "averageLoginAttempts"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_typed_collection_branch", "add_typed_collection_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer a deterministic recipe that keeps the same repository stub flow but switches a non-empty collaborator collection to java.util.List.of() and rewrites the assertion to the actual empty-case value. If the baseline already returns an empty collection, prefer the typed non-empty aggregation recipe instead of adding another empty sibling. Do not use an exception recipe when the source method returns a normal early value for an empty collection."
+    },
+    {
+      "id": "V009A_TYPED_DOMAIN_COLLECTION_AGGREGATION",
+      "stage": "COVERAGE",
+      "title": "Typed domain collection aggregation branch",
+      "errorFamily": "TYPED_DOMAIN_COLLECTION_AGGREGATION",
+      "summary": "Coverage is missing on a collection aggregation branch where the sibling test must preserve List<User> element type and avoid guard/exception rewrites.",
+      "containsAny": ["List<User>", "repository.findAll()", "mapToInt", "averageLoginAttempts"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_collection_element_type", "add_type_safe_collection_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "When the target method aggregates List<User>, keep repository.findAll() typed as List<User>; drive empty/non-empty branches by changing the returned collection and assert the normal numeric result, not an exception. If the existing generated method already covers the empty return, add a non-empty User with public incrementAttempts() calls and assert the computed average."
+    },
+    {
+      "id": "V010_REBOUND_FACTOR_ASSERTION_REWRITE",
+      "stage": "COVERAGE",
+      "title": "Rebound factor assertion rewrite branch",
+      "errorFamily": "REBOUND_FACTOR_ASSERTION_REWRITE",
+      "summary": "Coverage is missing on LegacyScoreRules.reboundFactor where flipping the branch driver also changes the expected numeric result.",
+      "containsAny": ["LegacyScoreRules.reboundFactor", "reboundFactor"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_rebound_driver", "add_rebound_factor_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer a deterministic recipe that flips the activeUser driver and rewrites the numeric expectation to the recalculated rebound factor. Do not reuse a generic boolean or numeric recipe that leaves the old expected assertion in place."
+    },
+    {
+      "id": "V011_LEGACY_UPGRADE_PROMOTION_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Legacy upgrade promotion branch",
+      "errorFamily": "LEGACY_UPGRADE_PROMOTION_BRANCH",
+      "summary": "Coverage is missing on a legacy-upgrade constructor-local promotion path where enabling the feature toggle changes both the boolean outcome and collaborator verifications.",
+      "containsAny": ["LegacyUpgradeSession.process", "LegacyWorkflowService.synchronizeLegacyUpgrade", "synchronizeLegacyUpgrade", "testProcessWithFeatureDisabled"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_legacy_upgrade_branch", "add_constructor_local_promotion_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer a deterministic constructor-local promotion recipe that enables the legacy-upgrade toggle, keeps the existing domain object, rewrites the result assertion to true, and updates collaborator verification to the promotion flow. If an enclosing workflow method verifies the disabled outer branch, also align outer collaborator verification such as connect/load style calls to the enabled-path collaborator call. Do not keep the skipped-branch verification after toggling the feature on."
+    },
+    {
+      "id": "V011A_FEATURE_TOGGLE_THRESHOLD_REJECTION_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Feature-toggle threshold rejection branch",
+      "errorFamily": "FEATURE_TOGGLE_THRESHOLD_REJECTION_BRANCH",
+      "summary": "Coverage is missing on a method where a feature flag enables a second threshold branch, so the sibling test must lower the numeric input and rewrite assertions to the rejection side effects.",
+      "containsAny": ["inherited-shadow", "normalized", "with score", "upgrade"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_threshold_branch", "add_rejection_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer the deterministic legacy boolean branch recipe that keeps the feature flag enabled, lowers the numeric input below the source threshold, rewrites the boolean assertion to false, and verifies the rejection collaborator side effects. Do not use a generic boolean literal flip that leaves promotion assertions in place."
+    },
+    {
+      "id": "V011C_INHERITED_SHADOW_PROMOTION_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Inherited shadow promotion branch",
+      "errorFamily": "INHERITED_SHADOW_PROMOTION_BRANCH",
+      "summary": "Coverage is missing on direct inherited-shadow upgrade after a disabled-feature baseline; the sibling must enable the feature, raise the numeric input above the normalized threshold, and rewrite AssertJ/JUnit result plus collaborator assertions to the promotion path.",
+      "containsAny": ["InheritedShadowUpgradeSession.upgrade", "Inherited shadow skipped", "inherited-shadow", "assertThat(result).isFalse"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_inherited_shadow_promotion_branch", "add_inherited_shadow_promotion_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer the deterministic promotion recipe: preserve the fixture, enable inherited-shadow even when the stub uses eq(\"inherited-shadow\"), set rawSignal to a promotion value, rewrite the result assertion to true, verify sendWelcome(user), and replace skipped audit verification with the promoted prefix."
+    },
+    {
+      "id": "V011B_INHERITED_SHADOW_WORKFLOW_PROMOTION_BRANCH",
+      "stage": "COVERAGE",
+      "title": "Inherited shadow workflow promotion branch",
+      "errorFamily": "INHERITED_SHADOW_WORKFLOW_PROMOTION_BRANCH",
+      "summary": "Coverage is missing on a workflow wrapper around an inherited-shadow constructor-local upgrade where enabling the feature flag changes the outer result, library side effect, notification, and audit verification.",
+      "containsAny": ["executeInheritedShadowUpgrade", "Inherited shadow upgrade completed", "LegacyConnectionGateway.openRequiredChannel", "inherited-shadow"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_wrapper_branch", "add_inherited_shadow_workflow_promotion_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer the deterministic constructor-local promotion recipe for inherited-shadow workflow wrappers: keep the parent static mock, enable inherited-shadow, assert true, verify reload/sendWelcome, and replace skipped audit expectations with the completed-audit prefix. Do not use a generic boolean literal flip that leaves skipped-branch assertions in place."
+    },
+    {
+      "id": "V012_SHADOW_ROLLBACK_REBOUND_ASSERTIONS",
+      "stage": "COVERAGE",
+      "title": "Shadow rollback rebound assertion cleanup",
+      "errorFamily": "SHADOW_ROLLBACK_REBOUND_ASSERTIONS",
+      "summary": "Coverage is missing on direct or constructor-local shadow rollback rebound paths, and the rebound recipe must drive enough public User login-attempt state before expecting the high-rebound notification branch.",
+      "containsAny": ["ShadowRollbackSession.rollback", "LegacyWorkflowService.coordinateShadowRollback", "coordinateShadowRollback", "shadow rollback rebound"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_shadow_rollback_rebound", "add_rebound_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer the deterministic rebound recipe: enable shadow-rollback, call public incrementAttempts() enough times before act, assert the high-rebound result, verify sendDeactivationNotice(user), and replace skipped-branch audit expectations with the rebound prefix."
+    },
+    {
+      "id": "V013_COVERAGE_FIX_RUNTIME_REGRESSION",
+      "stage": "COVERAGE",
+      "title": "Coverage fix regressed runtime behavior",
+      "errorFamily": "COVERAGE_FIX_RUNTIME_REGRESSION",
+      "summary": "A coverage sibling test compiled but changed branch drivers without updating assertions or Mockito verifications, causing runtime failure after coverage repair.",
+      "containsAny": ["coverage fix regressed runtime behavior", "coverage fix broke test execution", "coverage validation detected failing tests"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["handoff_deterministic_runtime_repair", "apply_source_derived_coverage_recipe", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Do not add another generic sibling test after a coverage fix breaks runtime. Prefer the exact deterministic recipe for the source-derived branch family, or let execution repair align stale assertions before remeasuring coverage."
+    },
+    {
+      "id": "V014_SOURCE_DERIVED_NORMAL_GUARD_RETURN",
+      "stage": "COVERAGE",
+      "title": "Source-derived normal guard return branch",
+      "errorFamily": "SOURCE_DERIVED_NORMAL_GUARD_RETURN",
+      "summary": "Coverage is missing on a guard branch where the source returns a normal value instead of throwing an exception.",
+      "containsAny": ["return 0", "return false", "normal early return", "guard returns", "source returns"],
+      "allowedTools": ["READ_METHOD", "READ_CLASS", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_guard_return_contract", "add_source_derived_return_branch_sibling_test", "recompile_test", "rerun_test"],
+      "llmHeuristic": "If the source guard returns a normal value such as 0, false, an empty collection, or null, do not use assertThrows for that branch. Prefer a deterministic sibling recipe that flips only the guard driver and rewrites the expected assertion to the source return contract."
+    }
+  ]
+}

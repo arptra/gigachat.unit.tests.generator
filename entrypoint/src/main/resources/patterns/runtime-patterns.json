@@ -1,0 +1,147 @@
+{
+  "patterns": [
+    {
+      "id": "R001_NOT_A_MOCK",
+      "stage": "EXECUTION",
+      "title": "Mockito NotAMockException",
+      "errorFamily": "NOT_A_MOCK",
+      "summary": "The test is trying to stub or verify a real object instead of an allowed Mockito mock.",
+      "containsAny": ["notamockexception", "argument passed to when() is not a mock"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_mock_boundary", "replace_real_object_stubbing", "apply_recipe_or_patch", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Never stub constructor-local real objects. Move stubbing and verification to collaborators from shouldMock."
+    },
+    {
+      "id": "R001A_NULL_INSTEAD_OF_MOCK",
+      "stage": "EXECUTION",
+      "title": "Mockito NullInsteadOfMockException",
+      "errorFamily": "NULL_INSTEAD_OF_MOCK",
+      "summary": "The test tries to verify or stub a collaborator reference that is null because the declared mock was never opened or never injected into the class under test.",
+      "containsAny": ["nullinsteadofmockexception", "argument passed to verify() should be a mock but is null", "argument passed to when() should be a mock but is null"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "SHOW_FILE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_mock_initialization", "align_mock_injection", "patch_setup_or_constructor_binding", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Open or initialize the declared mock and inject that same mock instance into the class under test; do not keep a second unused real collaborator alongside the mock."
+    },
+    {
+      "id": "R002_MISSING_METHOD_INVOCATION",
+      "stage": "EXECUTION",
+      "title": "Mockito MissingMethodInvocationException",
+      "errorFamily": "MISSING_METHOD_INVOCATION",
+      "summary": "The stubbing expression is malformed or points at something Mockito cannot intercept.",
+      "containsAny": ["missingmethodinvocationexception"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_stubbing_target", "patch_when_expression", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Patch only the invalid stubbing expression. Ensure the call inside when(...) is a real mock invocation."
+    },
+    {
+      "id": "R003_WANTED_BUT_NOT_INVOKED",
+      "stage": "EXECUTION",
+      "title": "Verification target not invoked",
+      "errorFamily": "WANTED_BUT_NOT_INVOKED",
+      "summary": "The test is verifying the wrong collaborator, wrong branch, or wrong arguments for the real control flow.",
+      "containsAny": ["wanted but not invoked"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_real_control_flow", "apply_runtime_recipe", "patch_verify_target_or_branch_setup", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Preserve the compilable test and align verification with actual collaborator calls or branch conditions from source."
+    },
+    {
+      "id": "R004_ARGUMENTS_ARE_DIFFERENT",
+      "stage": "EXECUTION",
+      "title": "Verification arguments differ",
+      "errorFamily": "ARGUMENTS_DIFFER",
+      "summary": "The collaborator is invoked, but the literal, prefix, or matcher in the test does not match the real runtime payload.",
+      "containsAny": ["arguments are different", "actual invocations have different arguments"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_source_literals", "apply_literal_alignment_recipe", "patch_matchers_or_literals", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Prefer source-derived prefixes and deterministic recipes over hand-written literal guesses."
+    },
+    {
+      "id": "R004A_SOURCE_DERIVED_COMPUTED_PAYLOAD",
+      "stage": "EXECUTION",
+      "title": "Computed source payload verified with guessed exact literal",
+      "errorFamily": "SOURCE_DERIVED_COMPUTED_PAYLOAD",
+      "summary": "The generated test verifies an exact collaborator string that includes a source-computed value, such as a normalized score, so sibling tests fail when the real computed suffix differs from the guessed literal.",
+      "containsAny": ["arguments are different", "actual invocations have different arguments", "with score"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_source_payload_prefix", "apply_source_derived_runtime_alignment_recipe", "recompile_test", "rerun_test"],
+      "llmHeuristic": "When the source builds a collaborator string as a literal prefix plus computed expression, use the provided deterministic recipe to align verifications to startsWith(sourcePrefix) instead of guessing the computed suffix."
+    },
+    {
+      "id": "R005_NULL_POINTER",
+      "stage": "EXECUTION",
+      "title": "NullPointerException in generated test path",
+      "errorFamily": "NULL_POINTER",
+      "summary": "A collaborator, fixture, or constructor path was left uninitialized for the exercised branch.",
+      "containsAny": ["nullpointerexception"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_constructor_and_setup", "patch_fixture_initialization", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Initialize only the missing collaborator or branch dependency. Do not regenerate the full test."
+    },
+    {
+      "id": "R006B_TEMPORAL_NOW_ASSERTION_WINDOW",
+      "stage": "EXECUTION",
+      "title": "Current-time assertion window too narrow",
+      "errorFamily": "TEMPORAL_NOW_ASSERTION",
+      "summary": "The generated test asserts a value derived from Instant.now() against a timestamp captured outside the act window, making the runtime assertion unstable.",
+      "containsAny": ["time did not match the expected value", "temporal now assertion", "current-time assertion"],
+      "allowedTools": ["READ_METHOD", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_current_time_side_effect", "apply_temporal_now_window_recipe", "recompile_test", "rerun_test"],
+      "llmHeuristic": "For source code that assigns Instant.now() during the act phase, assert the observed timestamp is between Instant values captured immediately before and after the target call."
+    },
+    {
+      "id": "R006C_REBOUND_THRESHOLD_ATTEMPTS_TOO_LOW",
+      "stage": "EXECUTION",
+      "title": "Rebound threshold attempts too low",
+      "errorFamily": "ASSERTION_FAILURE",
+      "summary": "The generated test expects the high-rebound branch but under-drives the public login-attempt state, so reboundFactor stays at or below the real threshold.",
+      "containsAny": ["expected: <true> but was: <false>", "rebound", "senddeactivationnotice"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_rebound_driver", "apply_rebound_attempts_recipe", "recompile_test", "rerun_test"],
+      "llmHeuristic": "When source branches on LegacyScoreRules.reboundFactor(user.getLoginAttempts(), user.isActive()), prefer the deterministic recipe that raises login attempts through public incrementAttempts() calls before the act phase."
+    },
+    {
+      "id": "R006_ASSERTION_FAILURE",
+      "stage": "EXECUTION",
+      "title": "Assertion or comparison failure",
+      "errorFamily": "ASSERTION_FAILURE",
+      "summary": "The test executes, but the asserted value or side effect does not match the real behavior.",
+      "containsAny": ["assertionfailederror", "comparisonfailure", "expected:", "but was:"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_real_behavior", "apply_runtime_recipe", "patch_assertion_or_branch_driver", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Keep setup stable and patch only the assertion or the immediately related branch-driving stub; when a deterministic threshold/rejection recipe is present, prefer it over changing only the assertion."
+    },
+    {
+      "id": "R006A_THRESHOLD_BRANCH_INPUT_TOO_HIGH",
+      "stage": "EXECUTION",
+      "title": "Threshold branch input too high",
+      "errorFamily": "ASSERTION_FAILURE",
+      "summary": "The generated test expects a low-score rejection branch but uses a numeric act argument that crosses the real promotion threshold.",
+      "containsAny": ["expected: <false> but was: <true>", "senddeactivationnotice", "sendwelcome", "with score"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "APPLY_RECIPE", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_threshold_driver", "apply_threshold_rejection_recipe", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Do not flip only the assertion when rejection side effects are expected. Lower the concrete numeric branch input through the supplied deterministic recipe and keep rejection verifications aligned with source prefixes."
+    },
+    {
+      "id": "R007_UNNECESSARY_STUBBING",
+      "stage": "EXECUTION",
+      "title": "Mockito unnecessary stubbing",
+      "errorFamily": "UNNECESSARY_STUBBING",
+      "summary": "The test contains stubs that are never consumed by the exercised path.",
+      "containsAny": ["unnecessarystubbingexception", "unnecessary stubbings detected"],
+      "allowedTools": ["SHOW_FILE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["remove_unused_stubs", "recompile_test", "rerun_test"],
+      "llmHeuristic": "Delete or narrow unused stubs. Do not add lenient() unless the source path truly requires a flexible fixture."
+    },
+    {
+      "id": "R008_PARENT_STATIC_VOID_BLOCKER",
+      "stage": "EXECUTION",
+      "title": "Inherited static void blocker",
+      "errorFamily": "PARENT_STATIC_VOID",
+      "summary": "The tested method reaches a parent/helper method that invokes a static void side effect which throws unless the test scopes a static mock around the call.",
+      "containsAny": ["real db connection attempt", "legacyconnectiongateway", "openrequiredchannel"],
+      "allowedTools": ["READ_CLASS", "READ_METHOD", "SHOW_FILE", "APPLY_PATCH", "RECOMPILE", "RUN_TEST"],
+      "executorActions": ["inspect_parent_call_chain", "patch_mock_static_scope", "recompile_test", "rerun_test"],
+      "llmHeuristic": "If the parent/helper path calls a throwing static void, patch the generated test to use scoped Mockito.mockStatic around the act phase and keep the rest of the setup stable."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "compileBeforeMerge": true,
+  "executeBeforeMerge": true,
+  "executeOnlyWhenTargetClassAlreadyPopulated": true,
+  "validateAgainstMergedClassWhenTargetClassAlreadyPopulated": true,
+  "executeWholeScratchSuiteWhenSnippetContainsSiblingTests": true,
+  "cleanupScratchSource": true,
+  "cleanupCompiledArtifacts": true,
+  "scratchClassSuffix": "PreMergeScratch"
+}

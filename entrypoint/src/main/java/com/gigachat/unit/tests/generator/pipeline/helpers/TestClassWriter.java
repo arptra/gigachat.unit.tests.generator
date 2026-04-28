@@ -2,6 +2,8 @@ package com.gigachat.unit.tests.generator.pipeline.helpers;
 
 import com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
+import com.gigachat.unit.tests.generator.resources.MergePolicy;
+import com.gigachat.unit.tests.generator.resources.MergePolicyCatalog;
 import com.github.javaparser.ParseProblemException;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
@@ -10,6 +12,7 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.AnnotationExpr;
+import com.github.javaparser.ast.nodeTypes.NodeWithAnnotations;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -32,6 +35,7 @@ public class TestClassWriter {
 
     private final PipelineLogger logger;
     private final Map<Path, Object> locks = new ConcurrentHashMap<>();
+    private final MergePolicy mergePolicy;
 
     private static final List<String> REQUIRED_TEST_DEPENDENCIES = List.of(
             "implementation 'org.mockito:mockito-core:5.12.0'",
@@ -47,6 +51,7 @@ public class TestClassWriter {
 
     public TestClassWriter(PipelineLogger logger) {
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.mergePolicy = new MergePolicyCatalog().policy();
     }
 
     public void ensureTestClassExists(TestClassInfo info) {
@@ -270,7 +275,7 @@ public class TestClassWriter {
         boolean hasAnnotations = snippet.classAnnotations() != null && !snippet.classAnnotations().isEmpty();
         boolean hasFields = snippet.fieldDeclarations() != null && !snippet.fieldDeclarations().isEmpty();
         boolean hasHelpers = snippet.helperMethods() != null && !snippet.helperMethods().isEmpty();
-        if (!(hasAnnotations || hasFields || hasHelpers)) {
+        if (!(hasAnnotations || hasFields || hasHelpers || mergePolicy.dedupeDuplicateAnnotations())) {
             return source;
         }
         try {
@@ -289,6 +294,12 @@ public class TestClassWriter {
             if (hasHelpers) {
                 changed |= ensureHelperMethods(declaration, snippet.helperMethods());
             }
+            if (mergePolicy.dedupeDuplicateAnnotations()) {
+                changed |= dedupeAnnotations(declaration);
+                for (MethodDeclaration method : declaration.getMethods()) {
+                    changed |= dedupeAnnotations(method);
+                }
+            }
             return changed ? unit.toString() : source;
         } catch (ParseProblemException exception) {
             logger.warn("Unable to parse existing test class for structure merge: " + exception.getMessage());
@@ -297,16 +308,19 @@ public class TestClassWriter {
     }
 
     public String ensureImports(String source, List<String> newImports) {
-        if (newImports == null || newImports.isEmpty()) {
+        List<String> requestedImports = newImports == null ? List.of() : newImports;
+        if (requestedImports.isEmpty() && !mergePolicy.normalizeImports()) {
             return source;
         }
         LinkedHashSet<String> imports = new LinkedHashSet<>();
-        source.lines()
+        List<String> existingImportLines = source.lines()
                 .map(String::trim)
                 .filter(line -> line.startsWith("import ") && line.endsWith(";"))
-                .forEach(imports::add);
+                .toList();
+        existingImportLines.forEach(imports::add);
         boolean changed = false;
-        for (String rawImport : newImports) {
+        boolean hadDuplicateImports = existingImportLines.size() != imports.size();
+        for (String rawImport : requestedImports) {
             if (rawImport == null) {
                 continue;
             }
@@ -322,42 +336,28 @@ public class TestClassWriter {
             imports.add(TEST_ANNOTATION_IMPORT);
             changed = true;
         }
-        if (!changed) {
+        if (!changed && !(mergePolicy.normalizeImports() && hadDuplicateImports)) {
             return source;
         }
         List<String> lines = new ArrayList<>(Arrays.asList(source.split("\\R", -1)));
+        lines.removeIf(line -> line.trim().startsWith("import ") && line.trim().endsWith(";"));
         int packageIndex = findPackageIndex(lines);
-        int lastImportIndex = findLastImportIndex(lines);
-        int insertIndex;
-        if (lastImportIndex >= 0) {
-            insertIndex = lastImportIndex + 1;
-        } else if (packageIndex >= 0) {
-            insertIndex = packageIndex + 1;
+        int insertIndex = packageIndex >= 0 ? packageIndex + 1 : 0;
+        while (insertIndex < lines.size() && lines.get(insertIndex).isBlank()) {
+            lines.remove(insertIndex);
+        }
+        if (!imports.isEmpty()) {
+            if (insertIndex > 0 && !lines.get(insertIndex - 1).isBlank()) {
+                lines.add(insertIndex++, "");
+            }
+            for (String importLine : imports) {
+                lines.add(insertIndex++, importLine);
+            }
             if (insertIndex < lines.size() && !lines.get(insertIndex).isBlank()) {
                 lines.add(insertIndex, "");
+            } else if (insertIndex == lines.size()) {
+                lines.add("");
             }
-        } else {
-            insertIndex = 0;
-        }
-        if (lastImportIndex < 0) {
-            // ensure a blank line between imports and class body
-            if (insertIndex < lines.size() && !lines.get(insertIndex).isBlank()) {
-                lines.add(insertIndex, "");
-            }
-        }
-        for (String importLine : imports) {
-            if (lastImportIndex >= 0) {
-                if (!containsImport(lines, importLine)) {
-                    lines.add(insertIndex, importLine);
-                    insertIndex++;
-                }
-            } else {
-                lines.add(insertIndex, importLine);
-                insertIndex++;
-            }
-        }
-        if (insertIndex < lines.size() && !lines.get(insertIndex).isBlank()) {
-            lines.add(insertIndex, "");
         }
         return joinLines(lines);
     }
@@ -426,9 +426,18 @@ public class TestClassWriter {
                     continue;
                 }
                 MethodDeclaration method = body.asMethodDeclaration();
-                boolean exists = declaration.getMethods().stream()
-                        .anyMatch(existing -> existing.getSignature().equals(method.getSignature()));
-                if (exists) {
+                if (mergePolicy.dedupeDuplicateAnnotations()) {
+                    dedupeAnnotations(method);
+                }
+                MethodDeclaration existing = declaration.getMethods().stream()
+                        .filter(candidate -> candidate.getSignature().equals(method.getSignature()))
+                        .findFirst()
+                        .orElse(null);
+                if (existing != null) {
+                    if (shouldReplaceHelperMethod(existing, method)) {
+                        existing.replace(method);
+                        changed = true;
+                    }
                     continue;
                 }
                 declaration.addMember(method);
@@ -438,6 +447,59 @@ public class TestClassWriter {
             }
         }
         return changed;
+    }
+
+    private boolean shouldReplaceHelperMethod(MethodDeclaration existing, MethodDeclaration incoming) {
+        if (existing == null || incoming == null) {
+            return false;
+        }
+        if (existing.toString().equals(incoming.toString())) {
+            return false;
+        }
+        if (!isLifecycleHelper(existing) || !isLifecycleHelper(incoming)) {
+            return false;
+        }
+        return helperStrengthScore(incoming) > helperStrengthScore(existing);
+    }
+
+    private boolean isLifecycleHelper(MethodDeclaration method) {
+        if (method == null) {
+            return false;
+        }
+        return method.getAnnotationByName("BeforeEach").isPresent()
+                || method.getAnnotationByName("BeforeAll").isPresent()
+                || method.getAnnotationByName("AfterEach").isPresent()
+                || method.getAnnotationByName("AfterAll").isPresent();
+    }
+
+    private int helperStrengthScore(MethodDeclaration method) {
+        if (method == null) {
+            return 0;
+        }
+        String source = method.toString();
+        int score = countOccurrences(source, "mock(") * 10;
+        score += countOccurrences(source, "Mockito.mock(") * 10;
+        if (source.contains("new Application(")) {
+            score += 3;
+        }
+        if (source.contains("new ")) {
+            score += 1;
+        }
+        score += method.getBody().map(body -> body.getStatements().size()).orElse(0);
+        return score;
+    }
+
+    private int countOccurrences(String source, String token) {
+        if (source == null || source.isEmpty() || token == null || token.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        int index = 0;
+        while ((index = source.indexOf(token, index)) >= 0) {
+            count++;
+            index += token.length();
+        }
+        return count;
     }
 
     private boolean containsField(ClassOrInterfaceDeclaration declaration, FieldDeclaration candidate) {
@@ -459,24 +521,20 @@ public class TestClassWriter {
         return lines.stream().anyMatch(line -> line.trim().equals(importLine));
     }
 
-    public String appendMethod(String source, GeneratedTestSnippet snippet) {
+    public AppendResult appendMethod(String source, GeneratedTestSnippet snippet) {
         Objects.requireNonNull(snippet, "snippet");
-        String methodBody = snippet.methodBody() == null ? "" : snippet.methodBody().trim();
-        if (methodBody.isEmpty()) {
-            throw new IllegalArgumentException("Snippet method body is empty for " + snippet.methodName());
-        }
-        if (source.contains(snippet.methodName() + "(")) {
-            logger.warn("Test method " + snippet.methodName() + " already exists. Skipping append.");
-            return source;
+        PreparedSnippet prepared = prepareSnippetForAppend(source, snippet);
+        if (!prepared.shouldAppend()) {
+            logger.warn("Test method " + prepared.snippet().methodName() + " already exists with the same body. Skipping append.");
+            return new AppendResult(source, prepared.snippet(), false, prepared.diagnostic());
         }
         int insertionPoint = source.lastIndexOf('}');
         if (insertionPoint < 0) {
             throw new IllegalStateException("Unable to find class closing brace when appending method");
         }
-        String normalisedMethod = ensureMethodFormatting(methodBody);
         StringBuilder builder = new StringBuilder(source);
-        builder.insert(insertionPoint, System.lineSeparator() + normalisedMethod + System.lineSeparator());
-        return builder.toString();
+        builder.insert(insertionPoint, System.lineSeparator() + prepared.snippet().methodBody() + System.lineSeparator());
+        return new AppendResult(builder.toString(), prepared.snippet(), true, prepared.diagnostic());
     }
 
     public String removeMethod(String source, String methodBody) {
@@ -492,8 +550,13 @@ public class TestClassWriter {
     }
 
     private String ensureMethodFormatting(String methodBody) {
+        MethodDeclaration declaration = parseMethodDeclaration(methodBody);
+        if (declaration != null) {
+            normaliseMethodDeclaration(declaration);
+            return renderMethodDeclaration(declaration);
+        }
         String trimmed = methodBody.trim();
-        if (!trimmed.startsWith("@")) {
+        if (mergePolicy.autoAddTestAnnotationWhenMissing() && !trimmed.startsWith("@")) {
             trimmed = "@Test" + System.lineSeparator() + trimmed;
         }
         String indent = "    ";
@@ -516,6 +579,153 @@ public class TestClassWriter {
             builder.append(System.lineSeparator()).append(indent).append("}");
         }
         return builder.toString().stripTrailing();
+    }
+
+    private PreparedSnippet prepareSnippetForAppend(String source, GeneratedTestSnippet snippet) {
+        MethodDeclaration incomingMethod = parseMethodDeclaration(snippet.methodBody());
+        if (incomingMethod == null) {
+            String formatted = ensureMethodFormatting(snippet.methodBody());
+            GeneratedTestSnippet rewritten = rewriteSnippet(snippet, snippet.methodName(), formatted);
+            if (source.contains(rewritten.methodName() + "(")) {
+                return new PreparedSnippet(rewritten, false, "METHOD_ALREADY_PRESENT_UNPARSED");
+            }
+            return new PreparedSnippet(rewritten, true, "APPEND_UNPARSED_METHOD");
+        }
+
+        normaliseMethodDeclaration(incomingMethod);
+        String originalName = incomingMethod.getNameAsString();
+        List<MethodDeclaration> existingMethods = existingMethods(source);
+        for (MethodDeclaration existingMethod : existingMethods) {
+            if (methodsEquivalent(existingMethod, incomingMethod)) {
+                String rendered = renderMethodDeclaration(incomingMethod);
+                GeneratedTestSnippet rewritten = rewriteSnippet(snippet, originalName, rendered);
+                return new PreparedSnippet(rewritten, false, "IDENTICAL_METHOD_ALREADY_PRESENT");
+            }
+        }
+        boolean collision = existingMethods.stream()
+                .anyMatch(existingMethod -> existingMethod.getNameAsString().equals(originalName))
+                || source.contains(" " + originalName + "(");
+        String finalName = originalName;
+        String diagnostic = "APPEND_METHOD";
+        if (collision && mergePolicy.renameMethodOnCollision()) {
+            finalName = resolveUniqueMethodName(existingMethods, originalName);
+            incomingMethod.setName(finalName);
+            diagnostic = "RENAMED_METHOD_COLLISION";
+        }
+        String rendered = renderMethodDeclaration(incomingMethod);
+        GeneratedTestSnippet rewritten = rewriteSnippet(snippet, finalName, rendered);
+        return new PreparedSnippet(rewritten, true, diagnostic);
+    }
+
+    private GeneratedTestSnippet rewriteSnippet(GeneratedTestSnippet snippet, String methodName, String methodBody) {
+        return new GeneratedTestSnippet(
+                snippet.className(),
+                methodName,
+                methodBody,
+                snippet.imports(),
+                snippet.classAnnotations(),
+                snippet.fieldDeclarations(),
+                snippet.helperMethods(),
+                snippet.fullClassSource()
+        );
+    }
+
+    private List<MethodDeclaration> existingMethods(String source) {
+        try {
+            CompilationUnit unit = StaticJavaParser.parse(source);
+            ClassOrInterfaceDeclaration declaration = unit.getPrimaryType()
+                    .flatMap(type -> type.toClassOrInterfaceDeclaration())
+                    .orElse(null);
+            if (declaration == null) {
+                return List.of();
+            }
+            return declaration.getMethods();
+        } catch (ParseProblemException exception) {
+            logger.warn("Unable to parse existing class while preparing append: " + exception.getMessage());
+            return List.of();
+        }
+    }
+
+    private String resolveUniqueMethodName(List<MethodDeclaration> existingMethods, String originalName) {
+        LinkedHashSet<String> usedNames = new LinkedHashSet<>();
+        for (MethodDeclaration method : existingMethods) {
+            usedNames.add(method.getNameAsString());
+        }
+        usedNames.add(originalName);
+        for (int index = 2; index <= mergePolicy.maxCollisionAttempts() + 1; index++) {
+            String candidate = originalName + mergePolicy.collisionSuffixStem() + index;
+            if (!usedNames.contains(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("Unable to derive unique generated test method name for collision: " + originalName);
+    }
+
+    private MethodDeclaration parseMethodDeclaration(String methodBody) {
+        String trimmed = methodBody == null ? "" : methodBody.trim();
+        if (trimmed.isBlank()) {
+            throw new IllegalArgumentException("Snippet method body is empty");
+        }
+        try {
+            BodyDeclaration<?> body = StaticJavaParser.parseBodyDeclaration(trimmed);
+            return body.isMethodDeclaration() ? body.asMethodDeclaration() : null;
+        } catch (ParseProblemException exception) {
+            logger.warn("Unable to parse generated test method for structural merge: " + exception.getMessage());
+            return null;
+        }
+    }
+
+    private void normaliseMethodDeclaration(MethodDeclaration declaration) {
+        if (mergePolicy.autoAddTestAnnotationWhenMissing() && declaration.getAnnotationByName("Test").isEmpty()) {
+            declaration.addAnnotation("Test");
+        }
+        if (mergePolicy.dedupeDuplicateAnnotations()) {
+            dedupeAnnotations(declaration);
+        }
+    }
+
+    private String renderMethodDeclaration(MethodDeclaration declaration) {
+        String indent = "    ";
+        String[] lines = declaration.toString().stripTrailing().split("\\R");
+        StringBuilder builder = new StringBuilder();
+        boolean firstLine = true;
+        for (String line : lines) {
+            String candidate = line.startsWith(indent) ? line : indent + line.stripLeading();
+            if (firstLine) {
+                builder.append(candidate);
+                firstLine = false;
+            } else {
+                builder.append(System.lineSeparator()).append(candidate);
+            }
+        }
+        return builder.toString().stripTrailing();
+    }
+
+    private boolean methodsEquivalent(MethodDeclaration existing, MethodDeclaration incoming) {
+        if (existing == null || incoming == null) {
+            return false;
+        }
+        MethodDeclaration existingCopy = existing.clone();
+        MethodDeclaration incomingCopy = incoming.clone();
+        normaliseMethodDeclaration(existingCopy);
+        normaliseMethodDeclaration(incomingCopy);
+        return existingCopy.toString().equals(incomingCopy.toString());
+    }
+
+    private boolean dedupeAnnotations(NodeWithAnnotations<?> node) {
+        if (node == null) {
+            return false;
+        }
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        List<AnnotationExpr> duplicates = new ArrayList<>();
+        for (AnnotationExpr annotation : node.getAnnotations()) {
+            String key = annotation.toString().trim();
+            if (!seen.add(key)) {
+                duplicates.add(annotation);
+            }
+        }
+        duplicates.forEach(AnnotationExpr::remove);
+        return !duplicates.isEmpty();
     }
 
     private Object lockFor(Path path) {
@@ -572,5 +782,14 @@ public class TestClassWriter {
             trimmed = "import " + trimmed;
         }
         return trimmed;
+    }
+
+    public record AppendResult(String source,
+                               GeneratedTestSnippet mergedSnippet,
+                               boolean changed,
+                               String diagnostic) {
+    }
+
+    private record PreparedSnippet(GeneratedTestSnippet snippet, boolean shouldAppend, String diagnostic) {
     }
 }

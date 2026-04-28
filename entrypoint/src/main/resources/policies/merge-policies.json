@@ -1,0 +1,8 @@
+{
+  "renameMethodOnCollision": true,
+  "collisionSuffixStem": "Variant",
+  "maxCollisionAttempts": 25,
+  "dedupeDuplicateAnnotations": true,
+  "normalizeImports": true,
+  "autoAddTestAnnotationWhenMissing": true
+}

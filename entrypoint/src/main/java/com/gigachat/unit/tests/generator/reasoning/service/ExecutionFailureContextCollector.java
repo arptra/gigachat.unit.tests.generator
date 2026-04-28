@@ -9,6 +9,8 @@ import com.gigachat.unit.tests.generator.execute.ExecuteResult;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
 import com.gigachat.unit.tests.generator.reasoning.model.ActionExecutionResult;
 import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
+import com.testagent.entrypoint.pipeline.helpers.analyze.DependencyInfo;
+import com.testagent.entrypoint.pipeline.helpers.analyze.MockType;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -34,8 +36,12 @@ public class ExecutionFailureContextCollector {
 
     private static final Pattern STACKTRACE_CLASS_PATTERN = Pattern.compile("\\bat\\s+([\\w$]+(?:\\.[\\w$]+)+)\\.[\\w$<>]+\\(");
     private static final Pattern FQCN_PATTERN = Pattern.compile("\\b([a-zA-Z_]\\w*(?:\\.[a-zA-Z_]\\w*){2,})\\b");
+    private static final Pattern OBJECT_IDENTITY_ASSERTION_PATTERN = Pattern.compile(
+            "expected:\\s*<([a-zA-Z_]\\w*(?:\\.[a-zA-Z_]\\w*)+)@[0-9a-f]+>\\s*but was:\\s*<\\1@[0-9a-f]+>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final int MAX_RELATED_CLASSES = 4;
     private static final int MAX_SOURCE_CHARS = 2400;
+    private final DeterministicExecutionRecipeBuilder deterministicExecutionRecipeBuilder = new DeterministicExecutionRecipeBuilder();
 
     public ActionExecutionResult collect(Path projectRoot,
                                          TestClassInfo classInfo,
@@ -69,6 +75,16 @@ public class ExecutionFailureContextCollector {
         if (!relatedClassSources.isEmpty()) {
             information.put("relatedClassSources", relatedClassSources);
             information.put("contextCacheUpdates", toContextCacheUpdates(relatedClassSources));
+        }
+
+        List<Map<String, Object>> deterministicRecipes = deterministicExecutionRecipeBuilder.build(projectRoot,
+                classInfo,
+                methodInfo,
+                analysisSummary,
+                executeResult,
+                reportFailures);
+        if (!deterministicRecipes.isEmpty()) {
+            information.put("deterministicRepairRecipes", deterministicRecipes);
         }
 
         return new ActionExecutionResult(information);
@@ -187,6 +203,9 @@ public class ExecutionFailureContextCollector {
         if (!suspectedProblems.isEmpty()) {
             reasoningHints.add("If Mockito is involved, inspect the failing collaborator class and constructor/setup path before patching assertions.");
         }
+        if (looksLikeObjectIdentityAssertionMismatch(combinedText)) {
+            reasoningHints.add("The failure looks like object identity mismatch on a real project type; compare public getters or observable side effects instead of assertEquals(expectedObject, actualObject).");
+        }
         List<String> mentionedCollaborators = mockPlan.shouldMock().stream()
                 .filter(candidate -> combinedText.contains(candidate.toLowerCase(Locale.ROOT)))
                 .collect(Collectors.toList());
@@ -198,6 +217,13 @@ public class ExecutionFailureContextCollector {
         return mockContext;
     }
 
+    private boolean looksLikeObjectIdentityAssertionMismatch(String combinedText) {
+        if (combinedText == null || combinedText.isBlank()) {
+            return false;
+        }
+        return OBJECT_IDENTITY_ASSERTION_PATTERN.matcher(combinedText).find();
+    }
+
     private List<String> collectRelatedClasses(Path projectRoot,
                                                TestClassInfo classInfo,
                                                Analyze.AnalysisSummary analysisSummary,
@@ -207,6 +233,7 @@ public class ExecutionFailureContextCollector {
         if (classInfo != null && classInfo.getClassName() != null && !classInfo.getClassName().isBlank()) {
             relatedClasses.add(classInfo.getClassName());
         }
+        addConstructorDependencyCandidates(projectRoot, analysisSummary, relatedClasses);
 
         String combinedText = buildCombinedFailureText(executeResult, reportFailures);
         extractFqcnsFromStackTrace(combinedText).stream()
@@ -220,6 +247,23 @@ public class ExecutionFailureContextCollector {
         }
 
         return relatedClasses.stream().limit(MAX_RELATED_CLASSES).toList();
+    }
+
+    private void addConstructorDependencyCandidates(Path projectRoot,
+                                                    Analyze.AnalysisSummary analysisSummary,
+                                                    Set<String> relatedClasses) {
+        if (analysisSummary == null || analysisSummary.methodAnalysis() == null || relatedClasses == null) {
+            return;
+        }
+        for (DependencyInfo dependency : analysisSummary.methodAnalysis().dependencies()) {
+            if (dependency == null || dependency.mockType() != MockType.CONSTRUCTOR) {
+                continue;
+            }
+            String resolved = resolveCandidateClass(projectRoot, dependency.className());
+            if (resolved != null && !resolved.isBlank()) {
+                relatedClasses.add(resolved);
+            }
+        }
     }
 
     private void addPlanCandidates(Path projectRoot,

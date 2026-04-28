@@ -1,0 +1,235 @@
+{
+  "E102": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "INVENTED_API_USAGE",
+    "allowedActions": [
+      "REMOVE_INVENTED_METHOD_CALL",
+      "ALIGN_WITH_AVAILABLE_METHODS",
+      "ALLOW_CURRENT_TARGET_STATIC_METHOD",
+      "KEEP_TEST_INTENT",
+      "KEEP_VALID_SETUP"
+    ],
+    "forbiddenActions": [
+      "INVENT_NEW_METHOD_NAME",
+      "GUESS_UNLISTED_SETTER",
+      "ADD_UNLISTED_HELPER_API",
+      "REJECT_EXACT_METHODSIGNATURE_TARGET_CALL"
+    ]
+  },
+  "E103": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "INTERNAL_FIELD_ACCESS",
+    "allowedActions": [
+      "REPLACE_INTERNAL_FIELD_SETUP",
+      "USE_PUBLIC_API_FOR_STATE",
+      "USE_COLLABORATOR_STUBS",
+      "SKIP_UNEXPRESSIBLE_CASE"
+    ],
+    "forbiddenActions": [
+      "READ_PRIVATE_FIELD",
+      "ASSIGN_INTERNAL_COLLECTION",
+      "BYPASS_VISIBILITY_WITH_TEST_CODE"
+    ]
+  },
+  "E104": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "MISSING_CONSTRUCTOR_METADATA",
+    "allowedActions": [
+      "USE_LISTED_CONSTRUCTOR_ONLY",
+      "USE_PUBLIC_METHODS_TO_REACH_STATE",
+      "KEEP_VALID_FIXTURE_PARTS",
+      "SKIP_UNSUPPORTED_FIXTURE"
+    ],
+    "forbiddenActions": [
+      "INVENT_CONSTRUCTOR_OVERLOAD",
+      "ADD_UNLISTED_CTOR_ARGUMENT",
+      "GUESS_HIDDEN_FACTORY_METHOD"
+    ]
+  },
+  "E105": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "MOCKITO_DISABLED_FOR_THIS_TEST",
+    "allowedActions": [
+      "REMOVE_MOCKITO_USAGE",
+      "USE_REAL_OBJECTS_ONLY",
+      "ASSERT_PUBLIC_BEHAVIOR"
+    ],
+    "forbiddenActions": [
+      "ADD_NEW_MOCKITO_STUBS",
+      "ADD_NEW_MOCKITO_VERIFICATION"
+    ]
+  },
+  "E106": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "FORBIDDEN_CONSTRUCTOR_LOCAL_MOCK_USAGE",
+    "allowedActions": [
+      "REPLACE_DIRECT_LOCAL_OBJECT_MOCKING",
+      "STUB_CONSTRUCTOR_ARGUMENT_COLLABORATOR",
+      "VERIFY_COLLABORATOR_SIDE_EFFECT",
+      "KEEP_EXISTING_TEST_SHAPE"
+    ],
+    "forbiddenActions": [
+      "MOCK_CONSTRUCTOR_LOCAL_OBJECT",
+      "SPY_CONSTRUCTOR_LOCAL_OBJECT",
+      "VERIFY_CONSTRUCTOR_LOCAL_OBJECT"
+    ]
+  },
+  "E107": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "DEFAULT_CTOR_BYPASSES_MOCKS",
+    "allowedActions": [
+      "REPLACE_SUT_CONSTRUCTION",
+      "BIND_SHOULDMOCK_COLLABORATORS_TO_SUT",
+      "KEEP_ASSERTIONS_STABLE",
+      "KEEP_SETUP_MINIMAL"
+    ],
+    "forbiddenActions": [
+      "USE_NO_ARG_SUT_CONSTRUCTOR",
+      "CREATE_FRESH_REAL_COLLABORATOR_FOR_SHOULDMOCK"
+    ]
+  },
+  "E108": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "TARGET_METHOD_NOT_EXERCISED",
+    "allowedActions": [
+      "ADD_DIRECT_SUT_INVOCATION",
+      "REPLACE_PLACEHOLDER_ASSERTION",
+      "ASSERT_REAL_BEHAVIOR",
+      "KEEP_EXISTING_VALID_SETUP"
+    ],
+    "forbiddenActions": [
+      "RETURN_TODO_STUB",
+      "USE_TAUTOLOGICAL_ASSERTION_WITHOUT_SUT_CALL"
+    ]
+  },
+  "E109": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "VOID_METHOD_STUBBED_AS_RETURNING",
+    "allowedActions": [
+      "REMOVE_RETURN_STYLE_VOID_STUB",
+      "USE_DONOTHING_OR_DOTHROW_FOR_VOID",
+      "VERIFY_VOID_SIDE_EFFECT_AFTER_ACT",
+      "KEEP_EXISTING_VALID_BRANCH_SETUP"
+    ],
+    "forbiddenActions": [
+      "PLACE_VOID_METHOD_INSIDE_MOCKITO_WHEN",
+      "INVENT_BOOLEAN_RETURN_FOR_VOID_COLLABORATOR"
+    ]
+  },
+  "E110": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "REQUIRED_SUT_CONSTRUCTOR_ARG_IS_NULL",
+    "allowedActions": [
+      "REPLACE_NULL_SUT_CONSTRUCTOR_ARGUMENT",
+      "BIND_REQUIRED_MOCK_TO_SUT",
+      "CREATE_MINIMAL_REAL_COLLABORATOR",
+      "KEEP_VALID_ASSERTIONS_AND_BRANCH_SETUP"
+    ],
+    "forbiddenActions": [
+      "PASS_NULL_LITERAL_TO_REQUIRED_SUT_ARGUMENT",
+      "DROP_REQUIRED_CONSTRUCTOR_PARAMETER",
+      "BYPASS_REQUIRED_COLLABORATOR_WITH_DIFFERENT_SUT_CONSTRUCTOR"
+    ]
+  },
+  "E111": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "WRONG_PROJECT_IMPORT_PACKAGE",
+    "allowedActions": [
+      "REPLACE_WRONG_PROJECT_IMPORT",
+      "KEEP_TEST_LOGIC_STABLE",
+      "USE_SOURCE_OF_TRUTH_PACKAGE",
+      "PATCH_ONLY_IMPORT_AND_TYPE_REFERENCE"
+    ],
+    "forbiddenActions": [
+      "INVENT_NEW_PROJECT_PACKAGE",
+      "RELOCATE_EXISTING_PROJECT_TYPE",
+      "REWRITE_TEST_FROM_SCRATCH_FOR_IMPORT_ONLY_FAILURE"
+    ]
+  },
+  "E112": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "CONFLICTING_LIFECYCLE_FIXTURE_REDEFINITION",
+    "allowedActions": [
+      "REUSE_EXISTING_FIXTURE",
+      "REUSE_EQUIVALENT_FIXTURE_WIRING",
+      "DROP_CONFLICTING_LIFECYCLE_HELPER_AND_REUSE_EXISTING_FIXTURE",
+      "REMOVE_DUPLICATE_LIFECYCLE_HELPER",
+      "MOVE_SCENARIO_SETUP_INTO_TEST_METHOD",
+      "KEEP_EXISTING_SUT_WIRING_STABLE"
+    ],
+    "forbiddenActions": [
+      "ADD_SECOND_LIFECYCLE_METHOD_FOR_SAME_SUT",
+      "REINITIALIZE_SUT_UNDER_DIFFERENT_WIRING",
+      "REPLACE_EXISTING_FIXTURE_WITH_FREEFORM_SETUP"
+    ]
+  },
+  "E113": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "VOID_STATE_MUTATOR_USED_AS_VALUE",
+    "allowedActions": [
+      "SPLIT_OBJECT_CREATION_AND_VOID_MUTATION",
+      "KEEP_MUTATED_OBJECT_REFERENCE_STABLE",
+      "USE_VOID_MUTATOR_AS_STANDALONE_STATEMENT",
+      "KEEP_TEST_INTENT"
+    ],
+    "forbiddenActions": [
+      "CHAIN_VOID_MUTATOR_INTO_COLLECTION_ADD",
+      "USE_VOID_MUTATOR_AS_ARGUMENT_EXPRESSION",
+      "ASSERT_ON_VOID_MUTATOR_RETURN_VALUE"
+    ]
+  },
+  "E114": {
+    "mode": "bounded-action",
+    "currentState": "S1_TESTS_GENERATED",
+    "stage": "GENERATION_VALIDATION_RETRY",
+    "nextExpectedState": "S1_TESTS_GENERATED",
+    "failurePattern": "NON_MOCK_STATIC_BRANCH_DRIVER_STUBBED",
+    "allowedActions": [
+      "REMOVE_STATIC_BRANCH_DRIVER_STUB",
+      "DRIVE_BRANCH_WITH_REAL_INPUTS",
+      "USE_CONSTRUCTOR_LOCAL_BRANCH_DRIVERS",
+      "KEEP_VALID_FEATURE_TOGGLE_AND_ASSERTIONS"
+    ],
+    "forbiddenActions": [
+      "STUB_STATIC_UTILITY_WITH_MOCKITO_WHEN",
+      "MOCK_NON_MOCK_BRANCH_DRIVER",
+      "INVENT_RETURN_STYLE_STUB_FOR_REAL_STATIC_METHOD"
+    ]
+  }
+}

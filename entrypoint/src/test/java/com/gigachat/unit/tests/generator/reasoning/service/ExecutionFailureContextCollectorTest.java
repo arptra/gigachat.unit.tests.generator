@@ -135,4 +135,56 @@ class ExecutionFailureContextCollectorTest {
         assertTrue(relatedSources.stream().anyMatch(item -> item.get("className").toString().contains("UserService")));
         assertTrue(relatedSources.stream().anyMatch(item -> item.get("className").toString().contains("NotificationService")));
     }
+
+    @Test
+    void shouldAddIdentityMismatchHintForRealDomainObjectAssertions() throws Exception {
+        Path mainRoot = tempDir.resolve("src/main/java/com/example/app/model");
+        Path testRoot = tempDir.resolve("src/test/java/com/example/app/service");
+        Files.createDirectories(mainRoot);
+        Files.createDirectories(testRoot);
+        Files.writeString(mainRoot.resolve("User.java"), "package com.example.app.model; public class User { String getUsername(){ return \"x\"; } }");
+        Path testFile = testRoot.resolve("UserServiceTest.java");
+        Files.writeString(testFile, "package com.example.app.service; class UserServiceTest {}");
+
+        ExecutionFailureContextCollector collector = new ExecutionFailureContextCollector();
+        Map<String, Object> information = collector.collect(
+                tempDir,
+                new TestClassInfo(
+                        "com.example.app.service.UserService",
+                        "com.example.app.service.UserServiceTest",
+                        testFile,
+                        List.of(),
+                        List.of(),
+                        new ClassMetadata("com.example.app.service.UserService", List.of())),
+                new TestMethodInfo("createUser()", "User", ""),
+                new Analyze.AnalysisSummary(
+                        new MockPlan(List.of(), MockStrategy.MOCKITO, List.of("repository"), List.of("User")),
+                        new MethodAnalysisResult(new MethodMetadata("createUser", "createUser()", "User"), List.of(), List.of(), List.of(), List.of()),
+                        "{}",
+                        Map.of(),
+                        new Analyze.TestTargetContext("com.example.app.service.UserService", "service", true, false),
+                        true,
+                        List.of(),
+                        Set.of(),
+                        Set.of(),
+                        Map.of(),
+                        Map.of(),
+                        Set.of(),
+                        Set.of()),
+                new ExecuteResult(false,
+                        List.of("com.example.app.service.UserServiceTest.createUser"),
+                        "",
+                        "AssertionFailedError: expected: <com.example.app.model.User@abc123> but was: <com.example.app.model.User@def456>"),
+                new ExecutionFailureParseResult(List.of(), Optional.empty()),
+                List.of(new TestReportFailure(
+                        "com.example.app.service.UserServiceTest",
+                        "createUser",
+                        "AssertionFailedError: expected: <com.example.app.model.User@abc123> but was: <com.example.app.model.User@def456>",
+                        List.of("AssertionFailedError: expected: <com.example.app.model.User@abc123> but was: <com.example.app.model.User@def456>"))))
+                .getInformation();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mockContext = (Map<String, Object>) information.get("mockContext");
+        assertTrue(mockContext.toString().contains("object identity mismatch"));
+    }
 }

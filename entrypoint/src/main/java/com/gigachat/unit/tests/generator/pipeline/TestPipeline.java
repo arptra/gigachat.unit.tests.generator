@@ -21,11 +21,9 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
 import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.scanner.JavaProjectScanner;
-import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationReasoningOrchestrator;
 import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
 import com.gigachat.unit.tests.generator.reasoning.service.CompilationReasoningService;
 import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
-import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -84,9 +82,10 @@ public class TestPipeline {
 
     private void logReport(ErrorsReport report) {
         if (report.hasErrors()) {
-            System.out.printf("Generation completed with %d compilation errors and %d execution errors.%n",
+            System.out.printf("Generation completed with %d compilation errors, %d execution errors and %d coverage errors.%n",
                     report.getCompileErrors().size(),
-                    report.getExecuteErrors().size());
+                    report.getExecuteErrors().size(),
+                    report.getCoverageErrors().size());
         } else {
             System.out.println("Generation completed without errors.");
         }
@@ -110,8 +109,6 @@ public class TestPipeline {
                 llmClient,
                 reasoningPromptBuilder,
                 reasoningResponseParser);
-        ReasoningWorkflow reasoningWorkflow = new ReasoningWorkflow(
-                new CompilationReasoningOrchestrator(reasoningService));
         return new InitialGenerationStep(logger,
                 testClassWriter,
                 skeletonPromptBuilder,
@@ -123,7 +120,7 @@ public class TestPipeline {
                 executionInvoker,
                 snapshotStorage,
                 methodRegistry,
-                reasoningWorkflow);
+                reasoningService);
     }
 
     private LlmClient createLlmClient(AgentConfig config, PipelineLogger logger) {

@@ -1,0 +1,99 @@
+{
+  "stages": [
+    {
+      "stage": "COMPILATION",
+      "objective": "Make the generated test compile again without touching production code.",
+      "protocol": [
+        "Use compiler output as the primary source of truth.",
+        "If a symbol or import is missing, prefer SEARCH_SYMBOL or READ_CLASS before editing imports.",
+        "If SEARCH_SYMBOL resolves one importable candidate for the same simple name, align or remove the wrong import directly instead of keeping the bad package path.",
+        "Once CONTEXT_CACHE_KEYS already contains the relevant class, imports, or the same missing symbol has repeated, stop requesting the same context and apply the smallest direct import or symbol fix.",
+        "If a bounded deterministic compile recipe catalog is attached for the current failure family, prefer APPLY_RECIPE before inventing a free-form patch.",
+        "Apply the smallest possible test-only fix and then RECOMPILE.",
+        "Do not RUN_TEST while compilation is still failing."
+      ],
+      "allowedDecisions": [
+        "REQUEST_CONTEXT",
+        "APPLY_FIX",
+        "MARK_FALSE_DEPENDENCY",
+        "STOP"
+      ],
+      "allowedToolActions": [
+        "SHOW_FILE",
+        "SHOW_IMPORTS",
+        "SEARCH_SYMBOL",
+        "READ_METHOD",
+        "READ_CLASS",
+        "LIST_METHODS",
+        "APPLY_PATCH",
+        "APPLY_RECIPE",
+        "ADD_IMPORT",
+        "RECOMPILE"
+      ]
+    },
+    {
+      "stage": "EXECUTION",
+      "objective": "Keep compilation green and fix runtime test failures through deterministic test-side edits.",
+      "protocol": [
+        "Inspect runtime failure details before editing assertions, mocks, or setup.",
+        "If project classes appear in the stacktrace, request context for those classes before patching.",
+        "Once CONTEXT_CACHE_KEYS already contains the relevant class or method, do not request the same source again; switch to APPLY_FIX, APPLY_RECIPE, or STOP.",
+        "For assertion failures on branch outcomes, prefer patching branch-driving stubs, concrete act arguments, or expected results from cached source before asking for more context.",
+        "Preserve the last compilable test shape and prefer incremental fixes over full regeneration.",
+        "After a fix, RECOMPILE first and RUN_TEST only when compilation succeeds."
+      ],
+      "allowedDecisions": [
+        "REQUEST_CONTEXT",
+        "APPLY_FIX",
+        "MARK_FALSE_DEPENDENCY",
+        "STOP"
+      ],
+      "allowedToolActions": [
+        "SHOW_FILE",
+        "SHOW_IMPORTS",
+        "SEARCH_SYMBOL",
+        "READ_METHOD",
+        "READ_CLASS",
+        "LIST_METHODS",
+        "APPLY_PATCH",
+        "APPLY_RECIPE",
+        "ADD_IMPORT",
+        "RECOMPILE",
+        "RUN_TEST"
+      ]
+    },
+    {
+      "stage": "COVERAGE",
+      "objective": "Increase coverage using the current compilable and executable test as the baseline.",
+      "protocol": [
+        "Use coverage feedback to target missed branches or lines instead of rewriting the whole test.",
+        "Prefer extending existing setup and assertions over introducing unrelated scenarios.",
+        "Coverage validation runs the generated test class that owns the current method, so keep fixes inside that class and ensure every added sibling test or helper in that class compiles and passes.",
+        "Treat APPLIED_FIXES as authoritative: do not repeat a sibling test or patch whose signature already appears there; choose a different uncovered branch or STOP.",
+        "Once CONTEXT_CACHE_KEYS already contains the target class or method, do not request the same source again; switch to APPLY_FIX or STOP.",
+        "If a bounded deterministic coverage recipe catalog is attached for the current missed-branch family, prefer APPLY_RECIPE before inventing a free-form patch.",
+        "After edits, RECOMPILE and RUN_TEST before trusting coverage improvements.",
+        "If coverage validation reports failing tests in the generated test class, treat that as an execution regression and hand it back into the execution repair loop before spending coverage context budget.",
+        "If a coverage fix regresses runtime behavior, hand the failure back into the execution repair loop before giving up.",
+        "If class-level validation is already blocked by failing sibling tests and no runtime-repair handoff is available, STOP early instead of spending coverage context budget."
+      ],
+      "allowedDecisions": [
+        "REQUEST_CONTEXT",
+        "APPLY_FIX",
+        "STOP"
+      ],
+      "allowedToolActions": [
+        "SHOW_FILE",
+        "SEARCH_SYMBOL",
+        "READ_METHOD",
+        "READ_CLASS",
+        "LIST_METHODS",
+        "APPLY_PATCH",
+        "APPLY_RECIPE",
+        "ADD_IMPORT",
+        "RECOMPILE",
+        "RUN_TEST"
+      ]
+    }
+  ]
+}

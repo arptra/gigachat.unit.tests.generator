@@ -1,0 +1,31 @@
+{
+  "COLLAPSE_CONSECUTIVE_JUNIT_ANNOTATION": {
+    "id": "COLLAPSE_CONSECUTIVE_${annotationUpper}_ANNOTATIONS",
+    "kind": "COLLAPSE_CONSECUTIVE_JUNIT_ANNOTATION",
+    "state": "S2_COMPILATION_FAILED",
+    "summary": "Collapse duplicate consecutive @${annotationSimpleName} annotations introduced by generated-test merge noise.",
+    "operations": [
+      {
+        "type": "collapse_consecutive_annotation",
+        "annotation": "@${annotationSimpleName}"
+      }
+    ],
+    "requiredImports": [
+      "${annotationFqcn}"
+    ]
+  },
+  "NORMALIZE_USER_CONSTRUCTOR_STATE_VARIANTS": {
+    "id": "NORMALIZE_USER_CONSTRUCTOR_STATE_VARIANTS",
+    "kind": "NORMALIZE_USER_CONSTRUCTOR_STATE_VARIANTS",
+    "state": "S2_COMPILATION_FAILED",
+    "summary": "Rewrite invented User constructor overloads or no-arg constructor paths into User(String, String) plus legal state mutators.",
+    "operations": [
+      {
+        "type": "normalize_user_constructor_state_variants"
+      }
+    ],
+    "requiredImports": [
+      "com.example.app.model.User"
+    ]
+  }
+}

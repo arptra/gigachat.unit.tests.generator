@@ -1,38 +1,21 @@
 package com.acme.agent.validation;
 
 import com.gigachat.unit.tests.generator.analyzer.MethodSignatureRegistry;
-import com.gigachat.unit.tests.generator.compile.CompileResult;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
 import com.gigachat.unit.tests.generator.dto.MockStrategy;
-import com.gigachat.unit.tests.generator.execute.ExecuteResult;
-import com.gigachat.unit.tests.generator.llm.LlmClient;
-import com.gigachat.unit.tests.generator.pipeline.InitialGenerationStep;
 import com.gigachat.unit.tests.generator.pipeline.InvalidLLMResponseException;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze;
-import com.gigachat.unit.tests.generator.pipeline.helpers.DiffEngine;
 import com.gigachat.unit.tests.generator.pipeline.helpers.PipelineLogger;
-import com.gigachat.unit.tests.generator.pipeline.helpers.PromptBuilder;
-import com.gigachat.unit.tests.generator.pipeline.helpers.SkeletonPromptBuilder;
-import com.gigachat.unit.tests.generator.pipeline.helpers.SnapshotStorage;
-import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
-import com.gigachat.unit.tests.generator.compile.CompilerInvoker;
-import com.gigachat.unit.tests.generator.execute.ExecutionInvoker;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze.AnalysisSummary;
 import com.gigachat.unit.tests.generator.pipeline.helpers.Analyze.TestTargetContext;
+import com.gigachat.unit.tests.generator.pipeline.helpers.validation.GeneratedSnippetValidator;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodAnalysisResult;
 import com.testagent.entrypoint.pipeline.helpers.analyze.MethodMetadata;
-import com.gigachat.unit.tests.generator.reasoning.orchestrator.CompilationReasoningOrchestrator;
-import com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder;
-import com.gigachat.unit.tests.generator.reasoning.service.CompilationReasoningService;
-import com.gigachat.unit.tests.generator.reasoning.service.ReasoningResponseParser;
-import com.gigachat.unit.tests.generator.reasoning.workflow.ReasoningWorkflow;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -46,41 +29,15 @@ class InternalFieldAccessValidationTest {
     @TempDir
     Path tempDir;
 
-    private InitialGenerationStep generationStep;
+    private GeneratedSnippetValidator validator;
     private AnalysisSummary analysisSummary;
-    private Method validator;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         MethodSignatureRegistry registry = new MethodSignatureRegistry();
         PipelineLogger logger = new PipelineLogger(tempDir);
-        TestClassWriter writer = new TestClassWriter(logger);
-        SkeletonPromptBuilder skeletonPromptBuilder = new SkeletonPromptBuilder();
         Analyze analyze = new Analyze(registry);
-        PromptBuilder promptBuilder = new PromptBuilder();
-        LlmClient llmClient = (prompt, classInfo, methodInfo, plan) -> null;
-        DiffEngine diffEngine = new DiffEngine(writer, logger);
-        CompilerInvoker compilerInvoker = (projectRoot, testClassFile, methodName) -> new CompileResult(true, List.of(), "", "");
-        ExecutionInvoker executionInvoker = (projectRoot, testClassFile, methodName) -> new ExecuteResult(true, List.of(), "", "");
-        SnapshotStorage snapshotStorage = new SnapshotStorage(tempDir, logger);
-        ReasoningWorkflow reasoningWorkflow = new ReasoningWorkflow(
-                new CompilationReasoningOrchestrator(new CompilationReasoningService(
-                        llmClient,
-                        new CompilationReasoningPromptBuilder(),
-                        new ReasoningResponseParser())));
-
-        generationStep = new InitialGenerationStep(logger,
-                writer,
-                skeletonPromptBuilder,
-                analyze,
-                promptBuilder,
-                llmClient,
-                diffEngine,
-                compilerInvoker,
-                executionInvoker,
-                snapshotStorage,
-                registry,
-                reasoningWorkflow);
+        validator = new GeneratedSnippetValidator(logger, analyze, registry);
 
         MethodAnalysisResult methodAnalysis = new MethodAnalysisResult(new MethodMetadata("method", "method()", "void"),
                 List.of(),
@@ -88,24 +45,7 @@ class InternalFieldAccessValidationTest {
                 List.of(),
                 List.of());
 
-        analysisSummary = new AnalysisSummary(new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of()),
-                methodAnalysis,
-                "{}",
-                Map.of(),
-                new TestTargetContext("LibraryComponent", "component", true, false),
-                false,
-                List.of(),
-                Set.of(),
-                Set.of("configuration", "users"),
-                Map.of(),
-                Map.of("LibraryComponent", List.of("configuration()")),
-                Set.of(),
-                Set.of());
-
-        validator = InitialGenerationStep.class.getDeclaredMethod("ensureNoInternalFieldAccess",
-                String.class,
-                AnalysisSummary.class);
-        validator.setAccessible(true);
+        analysisSummary = createSummary(methodAnalysis, Set.of("configuration", "users"));
     }
 
     @Test
@@ -122,17 +62,44 @@ class InternalFieldAccessValidationTest {
                 () -> invokeValidator("component.users.clear();"));
     }
 
+    @Test
+    void importPathContainingInternalFieldNameDoesNotTriggerE103() {
+        AnalysisSummary importSummary = createSummary(
+                new MethodAnalysisResult(new MethodMetadata("method", "method()", "void"),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of()),
+                Set.of("repository"));
+
+        assertDoesNotThrow(() -> validator.ensureNoInternalFieldAccess("""
+                package com.example.app.service;
+
+                import com.example.app.repository.UserRepository;
+
+                class SampleTest {
+                    private UserRepository repository;
+                }
+                """, importSummary));
+    }
+
     private void invokeValidator(String code) {
-        try {
-            validator.invoke(generationStep, code, analysisSummary);
-        } catch (InvocationTargetException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof RuntimeException runtime) {
-                throw runtime;
-            }
-            throw new RuntimeException(cause);
-        } catch (IllegalAccessException exception) {
-            throw new RuntimeException(exception);
-        }
+        validator.ensureNoInternalFieldAccess(code, analysisSummary);
+    }
+
+    private AnalysisSummary createSummary(MethodAnalysisResult methodAnalysis, Set<String> internalFields) {
+        return new AnalysisSummary(new MockPlan(List.of(), MockStrategy.NONE, List.of(), List.of()),
+                methodAnalysis,
+                "{}",
+                Map.of(),
+                new TestTargetContext("LibraryComponent", "component", true, false),
+                false,
+                List.of(),
+                Set.of(),
+                internalFields,
+                Map.of(),
+                Map.of("LibraryComponent", List.of("configuration()")),
+                Set.of(),
+                Set.of());
     }
 }
