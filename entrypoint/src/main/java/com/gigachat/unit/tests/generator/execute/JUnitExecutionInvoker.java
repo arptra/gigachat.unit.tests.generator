@@ -78,6 +78,7 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
                                          String failurePrefix) {
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.directory(workingDirectory.toFile());
+        configureJavaHome(processBuilder);
         logger.info("[EXECUTION] Starting test execution for " + executionLabel + " in " + testClassFile);
         logger.trace("EXECUTION", executionLabel, "RUN_TEST", "starting test execution");
         logger.info("[EXECUTION] Command: " + String.join(" ", command));
@@ -134,12 +135,11 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
                                             String methodName,
                                             boolean executeWholeSuite) {
         List<String> command = new ArrayList<>();
-        Path gradleExecutable = resolveGradleExecutable(buildRoot);
-        if (gradleExecutable != null) {
-            command.add(gradleExecutable.toAbsolutePath().normalize().toString());
-        } else {
-            command.add("gradle");
+        String gradleCommand = GradleBuildLocator.resolveGradleCommand(buildRoot);
+        if (gradleCommand == null) {
+            return List.of();
         }
+        command.add(gradleCommand);
         command.add("--no-daemon");
         command.add("--console=plain");
         if (executionTarget.settingsFile() != null) {
@@ -286,6 +286,14 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         return ":" + relative + ":test";
     }
 
+    private void configureJavaHome(ProcessBuilder processBuilder) {
+        String javaHome = System.getProperty("java.home");
+        if (javaHome == null || javaHome.isBlank()) {
+            return;
+        }
+        processBuilder.environment().put("JAVA_HOME", javaHome);
+    }
+
     private ExecutionTarget resolveExecutionTarget(Path buildRoot, Path projectRoot, Path testClassFile) {
         Path normalizedBuildRoot = buildRoot.toAbsolutePath().normalize();
         Path normalizedProjectRoot = projectRoot.toAbsolutePath().normalize();
@@ -413,18 +421,6 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         }
         String trimmed = value.trim();
         return trimmed.startsWith(":") ? trimmed : ":" + trimmed;
-    }
-
-    private Path resolveGradleExecutable(Path projectRoot) {
-        Path gradlew = projectRoot.resolve("gradlew");
-        if (Files.exists(gradlew)) {
-            return gradlew;
-        }
-        Path gradlewBat = projectRoot.resolve("gradlew.bat");
-        if (Files.exists(gradlewBat)) {
-            return gradlewBat;
-        }
-        return null;
     }
 
     private Optional<String> readPackage(Path testClassFile) {

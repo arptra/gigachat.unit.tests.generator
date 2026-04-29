@@ -59,6 +59,20 @@ class GradleBuildLocatorTest {
         Files.writeString(project.resolve("gradlew"), "#!/bin/sh");
 
         assertTrue(GradleBuildLocator.hasGradleWrapper(project));
-        assertEquals("./gradlew", GradleBuildLocator.resolveGradleCommand(project));
+        assertEquals(project.resolve("gradlew").toAbsolutePath().normalize().toString(),
+                GradleBuildLocator.resolveGradleCommand(project));
+    }
+
+    @Test
+    void resolvesAncestorWrapperForNestedStandaloneBuild() throws Exception {
+        Files.writeString(tempDir.resolve("gradlew"), "#!/bin/sh");
+
+        Path nestedProject = tempDir.resolve("nested/example-project");
+        Files.createDirectories(nestedProject);
+        Files.writeString(nestedProject.resolve("settings.gradle"), "rootProject.name = 'example-project'");
+        Files.writeString(nestedProject.resolve("build.gradle"), "plugins { id 'java' }");
+
+        assertEquals(tempDir.resolve("gradlew").toAbsolutePath().normalize().toString(),
+                GradleBuildLocator.resolveGradleCommand(nestedProject));
     }
 }

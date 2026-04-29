@@ -54,6 +54,7 @@ public class JaCoCoCoverageInvoker implements CoverageInvoker {
             logger.info("[COVERAGE] Working directory: " + workingDirectory);
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.directory(workingDirectory.toFile());
+            configureJavaHome(processBuilder);
             Process process = processBuilder.start();
             CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(() -> readStream(process.getInputStream()));
             CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(() -> readStream(process.getErrorStream()));
@@ -551,6 +552,14 @@ public class JaCoCoCoverageInvoker implements CoverageInvoker {
             logger.warn("Unable to delete temporary coverage init script " + coverageScope.initScript()
                     + ": " + exception.getMessage());
         }
+    }
+
+    private void configureJavaHome(ProcessBuilder processBuilder) {
+        String javaHome = System.getProperty("java.home");
+        if (javaHome == null || javaHome.isBlank()) {
+            return;
+        }
+        processBuilder.environment().put("JAVA_HOME", javaHome);
     }
 
     private record CoverageTarget(String testTaskName,

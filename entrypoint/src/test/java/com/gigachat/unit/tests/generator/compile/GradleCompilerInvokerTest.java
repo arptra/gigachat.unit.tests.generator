@@ -68,6 +68,37 @@ class GradleCompilerInvokerTest {
     }
 
     @Test
+    void compilesAgainstMainSourcesWhenMainOutputsDoNotExist(@TempDir Path projectRoot) throws IOException {
+        Path mainDir = projectRoot.resolve("src/main/java/bd");
+        Files.createDirectories(mainDir);
+        Files.writeString(mainDir.resolve("Abonent.java"),
+                "package bd;\n" +
+                        "public class Abonent {\n" +
+                        "    public static final class Ref {\n" +
+                        "        public String value() { return \"ok\"; }\n" +
+                        "    }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+        Path testFile = testsDir.resolve("UsesMainSourceTest.java");
+        Files.writeString(testFile,
+                "package sample;\n" +
+                        "import bd.Abonent;\n" +
+                        "public class UsesMainSourceTest {\n" +
+                        "    public void ok() { new Abonent.Ref().value(); }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        CompileResult result = invoker.compile(projectRoot, testFile, "ok");
+
+        assertTrue(result.success(), result.stderr());
+        assertTrue(Files.exists(projectRoot.resolve("build/classes/java/test/sample/UsesMainSourceTest.class")));
+    }
+
+    @Test
     void returnsCachedResultWhenSourceIsUnchanged(@TempDir Path projectRoot) throws IOException {
         Path testsDir = projectRoot.resolve("src/test/java/sample");
         Files.createDirectories(testsDir);
@@ -252,6 +283,55 @@ class GradleCompilerInvokerTest {
                 .collect(Collectors.toSet());
 
         assertEquals(2, pids.size());
+    }
+
+    @Test
+    void compileParallelUsesMainSourcesWhenOutputsAreMissing(@TempDir Path projectRoot) throws IOException {
+        Path mainDir = projectRoot.resolve("src/main/java/bd");
+        Files.createDirectories(mainDir);
+        Files.writeString(mainDir.resolve("FirstType.java"),
+                "package bd;\n" +
+                        "public class FirstType {\n" +
+                        "    public String value() { return \"ok\"; }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(mainDir.resolve("SecondType.java"),
+                "package bd;\n" +
+                        "public class SecondType {\n" +
+                        "    public String value() { return \"ok\"; }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path testsDir = projectRoot.resolve("src/test/java/sample");
+        Files.createDirectories(testsDir);
+
+        Path firstTest = testsDir.resolve("FirstUsesMainSourceTest.java");
+        Files.writeString(firstTest,
+                "package sample;\n" +
+                        "import bd.FirstType;\n" +
+                        "public class FirstUsesMainSourceTest {\n" +
+                        "    public void ok() { new FirstType().value(); }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        Path secondTest = testsDir.resolve("SecondUsesMainSourceTest.java");
+        Files.writeString(secondTest,
+                "package sample;\n" +
+                        "import bd.SecondType;\n" +
+                        "public class SecondUsesMainSourceTest {\n" +
+                        "    public void ok() { new SecondType().value(); }\n" +
+                        "}\n",
+                StandardCharsets.UTF_8);
+
+        GradleCompilerInvoker invoker = new GradleCompilerInvoker(new PipelineLogger(projectRoot));
+        List<CompileResult> results = invoker.compileParallel(projectRoot, List.of(firstTest, secondTest), "parallel-main-source");
+
+        assertEquals(2, results.size());
+        assertTrue(results.stream().allMatch(CompileResult::success),
+                results.stream().map(CompileResult::stderr).collect(Collectors.joining(System.lineSeparator())));
+        Path outputDir = projectRoot.resolve("build/classes/java/test/sample");
+        assertTrue(Files.exists(outputDir.resolve("FirstUsesMainSourceTest.class")));
+        assertTrue(Files.exists(outputDir.resolve("SecondUsesMainSourceTest.class")));
     }
 
     @Test

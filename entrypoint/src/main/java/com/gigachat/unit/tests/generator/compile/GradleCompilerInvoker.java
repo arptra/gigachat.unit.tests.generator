@@ -229,12 +229,16 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             List<Path> existingClasspath = classpathEntries.stream()
                     .filter(Files::exists)
                     .collect(Collectors.toCollection(ArrayList::new));
+            List<Path> sourceRoots = resolveCompilationSourceRoots(moduleRoot);
 
             DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
             StringWriter compilerOutput = new StringWriter();
             try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.getDefault(), StandardCharsets.UTF_8)) {
                 if (!existingClasspath.isEmpty()) {
                     fileManager.setLocationFromPaths(StandardLocation.CLASS_PATH, existingClasspath);
+                }
+                if (!sourceRoots.isEmpty()) {
+                    fileManager.setLocationFromPaths(StandardLocation.SOURCE_PATH, sourceRoots);
                 }
                 fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(outputDir));
 
@@ -306,12 +310,16 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             List<Path> existingClasspath = classpathEntries.stream()
                     .filter(Files::exists)
                     .collect(Collectors.toCollection(ArrayList::new));
+            List<Path> sourceRoots = resolveCompilationSourceRoots(moduleRoot);
 
             DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
             StringWriter compilerOutput = new StringWriter();
             try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.getDefault(), StandardCharsets.UTF_8)) {
                 if (!existingClasspath.isEmpty()) {
                     fileManager.setLocationFromPaths(StandardLocation.CLASS_PATH, existingClasspath);
+                }
+                if (!sourceRoots.isEmpty()) {
+                    fileManager.setLocationFromPaths(StandardLocation.SOURCE_PATH, sourceRoots);
                 }
                 fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(outputDir));
 
@@ -428,8 +436,12 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             List<Path> existingClasspath = classpathEntries.stream()
                     .filter(Files::exists)
                     .collect(Collectors.toCollection(ArrayList::new));
+            List<Path> sourceRoots = resolveCompilationSourceRoots(moduleRoot);
 
             String classpath = existingClasspath.stream()
+                    .map(Path::toString)
+                    .collect(Collectors.joining(java.io.File.pathSeparator));
+            String sourcepath = sourceRoots.stream()
                     .map(Path::toString)
                     .collect(Collectors.joining(java.io.File.pathSeparator));
 
@@ -442,10 +454,15 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 command.add("-cp");
                 command.add(classpath);
             }
+            if (!sourcepath.isBlank()) {
+                command.add("-sourcepath");
+                command.add(sourcepath);
+            }
             compilationTargets.forEach(path -> command.add(path.toString()));
 
             ProcessBuilder builder = new ProcessBuilder(command);
             builder.directory(moduleRoot.toFile());
+            configureJavaHome(builder);
             try {
                 Process process = builder.start();
                 logger.info("Forking javac process (pid=" + process.pid() + ") for " + testClassFile);
@@ -543,6 +560,17 @@ public class GradleCompilerInvoker implements CompilerInvoker {
             }
         }
         return List.of(testClassFile);
+    }
+
+    private List<Path> resolveCompilationSourceRoots(Path moduleRoot) {
+        List<Path> sourceRoots = List.of(
+                moduleRoot.resolve("src/main/java"),
+                moduleRoot.resolve("src/test/java")
+        );
+        return sourceRoots.stream()
+                .filter(Files::isDirectory)
+                .distinct()
+                .collect(Collectors.toCollection(ArrayList::new));
     }
 
     private List<Path> findJavaTestSources(Path projectRoot) throws IOException {
@@ -822,6 +850,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
         ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
         builder.directory(projectRoot.toFile());
         builder.redirectErrorStream(true);
+        configureJavaHome(builder);
         Process process = builder.start();
         String stdout;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -872,6 +901,7 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                 ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
                 builder.directory(projectRoot.toFile());
                 builder.redirectErrorStream(true);
+                configureJavaHome(builder);
                 Process process = builder.start();
                 String stdout;
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -1021,6 +1051,14 @@ public class GradleCompilerInvoker implements CompilerInvoker {
                         }
                     });
         }
+    }
+
+    private void configureJavaHome(ProcessBuilder processBuilder) {
+        String javaHome = System.getProperty("java.home");
+        if (javaHome == null || javaHome.isBlank()) {
+            return;
+        }
+        processBuilder.environment().put("JAVA_HOME", javaHome);
     }
 
     private static String formatDiagnostic(Diagnostic<? extends JavaFileObject> diagnostic) {

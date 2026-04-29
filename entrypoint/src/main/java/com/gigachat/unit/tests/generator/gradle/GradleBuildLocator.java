@@ -59,16 +59,26 @@ public final class GradleBuildLocator {
         if (directory == null) {
             return null;
         }
-        Path gradlew = directory.resolve("gradlew");
-        if (Files.exists(gradlew)) {
-            return "./gradlew";
+        Path wrapper = findNearestWrapper(directory, "gradlew");
+        if (wrapper != null) {
+            return wrapper.toAbsolutePath().normalize().toString();
         }
-        Path gradlewBat = directory.resolve("gradlew.bat");
-        if (Files.exists(gradlewBat)) {
-            return ".\\gradlew.bat";
+        Path wrapperBat = findNearestWrapper(directory, "gradlew.bat");
+        if (wrapperBat != null) {
+            return wrapperBat.toAbsolutePath().normalize().toString();
         }
         if (hasGradleBuildDefinition(directory)) {
             return "gradle";
+        }
+        return null;
+    }
+
+    private static Path findNearestWrapper(Path directory, String fileName) {
+        for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
+            Path candidate = current.resolve(fileName);
+            if (Files.exists(candidate)) {
+                return candidate;
+            }
         }
         return null;
     }

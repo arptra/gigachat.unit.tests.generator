@@ -30,7 +30,7 @@ class GeneratorTaskProperties {
 
     void loadFromProjectProperties(Project projectRef, String defaultMode) {
         mode = text(mode) ?: defaultMode
-        path = text(path) ?: text(projectRef.findProperty('gigachat.path'))
+        path = text(path) ?: text(projectRef.findProperty('gigachat.path')) ?: projectRef.projectDir.absolutePath
         includeModules = includeModules ?: splitCsv(projectRef.findProperty('gigachat.includeModules'))
         includeClasses = includeClasses ?: splitCsv(projectRef.findProperty('gigachat.includeClasses'))
         targetClasses = targetClasses ?: splitCsv(projectRef.findProperty('gigachat.class'))

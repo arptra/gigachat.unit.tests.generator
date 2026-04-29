@@ -9,12 +9,10 @@ class GigaChatGeneratorPlugin implements Plugin<Project> {
         project.tasks.register('genAiTest', GenAiTask) {
             group = 'verification'
             description = 'Groovy DefaultTask wrapper running scan generation through entrypoint API.'
-            dependsOn(':entrypoint:classes')
         }
         project.tasks.register('diffGenUnitTest', DiffGenUnitTestTask) {
             group = 'verification'
             description = 'Groovy DefaultTask wrapper running diff generation through entrypoint API.'
-            dependsOn(':entrypoint:classes')
         }
         project.defaultTasks('genAiTest')
     }

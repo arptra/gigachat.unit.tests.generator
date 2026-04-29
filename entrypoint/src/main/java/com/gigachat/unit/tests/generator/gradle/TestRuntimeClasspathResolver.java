@@ -230,6 +230,7 @@ public final class TestRuntimeClasspathResolver {
         ProcessBuilder builder = new ProcessBuilder("bash", "-lc", command);
         builder.directory(projectRoot.toFile());
         builder.redirectErrorStream(true);
+        configureJavaHome(builder);
         Process process = builder.start();
         String stdout;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -237,6 +238,14 @@ public final class TestRuntimeClasspathResolver {
         }
         int exitCode = process.waitFor();
         return new GradleTaskResult(exitCode == 0, exitCode, stdout);
+    }
+
+    private void configureJavaHome(ProcessBuilder processBuilder) {
+        String javaHome = System.getProperty("java.home");
+        if (javaHome == null || javaHome.isBlank()) {
+            return;
+        }
+        processBuilder.environment().put("JAVA_HOME", javaHome);
     }
 
     private Path createClasspathInitScript() throws IOException {
