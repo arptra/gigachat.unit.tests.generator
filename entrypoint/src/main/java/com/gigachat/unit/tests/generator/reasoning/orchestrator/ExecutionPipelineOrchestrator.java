@@ -91,6 +91,7 @@ public class ExecutionPipelineOrchestrator {
                                                CompileResult compileResult,
                                                ExecuteResult executeResult,
                                                String generatedMethodName,
+                                               String executionMethodName,
                                                ExecutionFailureParseResult failureParseResult,
                                                List<TestReportFailure> reportFailures) {
         StateGraphController controller = new StateGraphController(
@@ -113,6 +114,7 @@ public class ExecutionPipelineOrchestrator {
         ExecuteResult currentExecuteResult = executeResult;
         ExecutionFailureParseResult currentFailureParseResult = failureParseResult;
         List<TestReportFailure> currentReportFailures = reportFailures == null ? List.of() : List.copyOf(reportFailures);
+        int repeatedSignatureGraceRounds = 0;
 
         for (int iteration = 0; iteration < loopPolicy.maxIterations(); iteration++) {
             controller.incrementAttempt();
@@ -131,10 +133,18 @@ public class ExecutionPipelineOrchestrator {
                     + "; signature="
                     + signature);
             if (controller.countOccurrences(signature) >= loopPolicy.repeatedSignatureThreshold()) {
-                logger.warn("[EXECUTION_REASONING] Repeated runtime failure signature detected for method "
-                        + generatedMethodName
-                        + ". Stopping execution reasoning without regeneration.");
-                break;
+                if (repeatedSignatureGraceRounds > 0) {
+                    repeatedSignatureGraceRounds--;
+                    logger.info("[EXECUTION_REASONING] Allowing repeated runtime signature after REQUEST_CONTEXT for method "
+                            + generatedMethodName
+                            + "; remainingGraceRounds="
+                            + repeatedSignatureGraceRounds);
+                } else {
+                    logger.warn("[EXECUTION_REASONING] Repeated runtime failure signature detected for method "
+                            + generatedMethodName
+                            + ". Stopping execution reasoning without regeneration.");
+                    break;
+                }
             }
 
             ReasoningResponse response = triggerReasoningWorkflow(config,
@@ -183,6 +193,15 @@ public class ExecutionPipelineOrchestrator {
                         AgentState.S2_1_NEED_MORE_CONTEXT,
                         "context requested during execution reasoning");
                 logExecutionReasoningActionResult("REQUEST_CONTEXT", generatedMethodName, iterationResult);
+                if (producedUsefulContext(iterationResult)) {
+                    repeatedSignatureGraceRounds++;
+                    logger.info("[EXECUTION_REASONING] Allowing follow-up reasoning after REQUEST_CONTEXT for method "
+                            + generatedMethodName
+                            + "; graceRounds="
+                            + repeatedSignatureGraceRounds
+                            + " infoKeys="
+                            + iterationResult.getInformation().keySet());
+                }
                 controller.decrementContextBudget();
                 if (controller.contextBudgetRemaining() <= 0) {
                     logger.warn("[EXECUTION_REASONING] Context budget exhausted for method "
@@ -263,7 +282,7 @@ public class ExecutionPipelineOrchestrator {
 
             currentExecuteResult = executionInvoker.execute(config.getProjectPath(),
                     classInfo.getTargetPath(),
-                    generatedMethodName);
+                    executionMethodName);
             logger.info("[EXECUTION_REASONING] Reran test after fix for "
                     + generatedMethodName
                     + " -> success="
@@ -524,6 +543,13 @@ public class ExecutionPipelineOrchestrator {
             return converted;
         }
         return Map.of();
+    }
+
+    private boolean producedUsefulContext(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return false;
+        }
+        return result.getInformation().keySet().stream().anyMatch(key -> !"errors".equals(key));
     }
 
     @SuppressWarnings("unchecked")

@@ -193,6 +193,48 @@ class ToolActionExecutorTest {
     }
 
     @Test
+    void readClassShouldResolveNestedProjectTypeFromOwningSourceFile() throws IOException {
+        Path sourceFile = tempDir.resolve("src/main/java/bd/Abonent.java");
+        Files.createDirectories(sourceFile.getParent());
+        Files.writeString(sourceFile, """
+                package bd;
+
+                public class Abonent {
+                    public static class Ref {
+                    }
+                }
+                """);
+        Path testFile = tempDir.resolve("src/test/java/mtd/abonent/NEW_AUTOTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, "package mtd.abonent; class NEW_AUTOTest {}");
+
+        ToolActionExecutor executor = new ToolActionExecutor(
+                new SourceFileEditor(),
+                new CompilerInvoker() {
+                    @Override
+                    public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+                        return new CompileResult(false, List.of(), "", "");
+                    }
+                },
+                null,
+                tempDir,
+                testFile,
+                "mtd.abonent.NEW_AUTOTest",
+                "test"
+        );
+
+        Map<String, Object> info = executor.executeStep(new ToolActionStep(
+                ToolActionType.READ_CLASS,
+                Map.of("fqcn", "bd.Abonent.Ref"))).getInformation();
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> cache = (Map<String, String>) info.get("contextCacheUpdates");
+        assertEquals(1, cache.size());
+        assertTrue(cache.keySet().iterator().next().endsWith("/src/main/java/bd/Abonent.java"));
+        assertTrue(cache.values().iterator().next().contains("public static class Ref"));
+    }
+
+    @Test
     void readMethodShouldResolveSimpleProjectClassName() throws IOException {
         Path mainDir = tempDir.resolve("src/main/java/com/example/app/service");
         Files.createDirectories(mainDir);
@@ -477,6 +519,66 @@ class ToolActionExecutorTest {
         assertTrue(executor.symbolExistsInProjectOrClasspath("ArrayList"));
         assertTrue(result.getPerformedActions().stream().anyMatch(action -> action.contains("java.util.ArrayList")));
         assertTrue(updated.contains("import java.util.ArrayList;"));
+    }
+
+    @Test
+    void alignImportShouldPreferNestedProjectTypeWhenOwnerTypeIsAlreadyImported() throws IOException {
+        Path abonentFile = tempDir.resolve("src/main/java/bd/Abonent.java");
+        Files.createDirectories(abonentFile.getParent());
+        Files.writeString(abonentFile, """
+                package bd;
+
+                public class Abonent {
+                    public static class Ref {
+                    }
+                }
+                """);
+        Path objectFile = tempDir.resolve("src/main/java/cls/Object.java");
+        Files.createDirectories(objectFile.getParent());
+        Files.writeString(objectFile, """
+                package cls;
+
+                public class Object {
+                    public static class Ref {
+                    }
+                }
+                """);
+        Path testFile = tempDir.resolve("src/test/java/mtd/abonent/NEW_AUTOTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package mtd.abonent;
+
+                import bd.Abonent;
+
+                class NEW_AUTOTest {
+                    void test() {
+                        Abonent abonent = new Abonent();
+                        Ref ref = new Ref();
+                    }
+                }
+                """);
+
+        ToolActionExecutor executor = new ToolActionExecutor(
+                new SourceFileEditor(),
+                new CompilerInvoker() {
+                    @Override
+                    public CompileResult compile(Path projectRoot, Path testClassFile, String methodName) {
+                        return new CompileResult(false, List.of(), "", "");
+                    }
+                },
+                null,
+                tempDir,
+                testFile,
+                "mtd.abonent.NEW_AUTOTest",
+                "test"
+        );
+
+        ActionExecutionResult result = executor.alignImportWithUniqueProjectSymbol(testFile, "Ref");
+        String updated = Files.readString(testFile);
+
+        assertTrue(result.getPerformedActions().stream().anyMatch(action -> action.contains("bd.Abonent.Ref")));
+        assertTrue(updated.contains("import bd.Abonent.Ref;"));
+        assertFalse(updated.contains("import java.sql.Ref;"));
     }
 
     @Test

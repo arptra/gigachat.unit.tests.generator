@@ -246,6 +246,79 @@ class DeterministicExecutionRecipeBuilderTest {
     }
 
     @Test
+    void shouldBuildBadClassIdRefRecipeFromFailedTestsWhenReportFailuresAreMissing() throws IOException {
+        Path testFile = tempDir.resolve("src/test/java/mtd/abonent/NEW_AUTOTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package mtd.abonent;
+
+                import bd.Abonent.Ref;
+                import rt.Varchar2;
+
+                class NEW_AUTOTest {
+                    void NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr() {
+                        Ref ref = new Ref();
+                        Varchar2 plpClass = new Varchar2("TEST_CLASS");
+                        NEW_AUTO o = new NEW_AUTO();
+                        Ref result = o.NEW_AUTO_EXECUTE(ref, plpClass);
+                    }
+                }
+                """);
+
+        TestMethodInfo methodInfo = new TestMethodInfo(
+                "public bd.Abonent.Ref NEW_AUTO_EXECUTE(final bd.Abonent.Ref THIS, final Varchar2 PLP$CLASS)",
+                "bd.Abonent.Ref",
+                """
+                        final Resolution resolution = resolveRef(THIS, PLP$CLASS);
+                        cache_mgr.reg_obj_change(resolution.classId, resolution.ref.getClassId(), Boolean.FALSE);
+                        return resolution.ref;
+                        """
+        );
+        TestClassInfo classInfo = new TestClassInfo(
+                "mtd.abonent.NEW_AUTO",
+                "NEW_AUTOTest",
+                testFile,
+                List.of(),
+                List.of(methodInfo)
+        );
+        Analyze.AnalysisSummary summary = new Analyze.AnalysisSummary(
+                new MockPlan(List.of(), MockStrategy.MOCKITO, List.of(), List.of()),
+                null,
+                "{}",
+                Map.of(),
+                null,
+                true,
+                List.of(),
+                java.util.Set.of(),
+                java.util.Set.of(),
+                Map.of(),
+                Map.of(),
+                java.util.Set.of(),
+                java.util.Set.of()
+        );
+
+        List<Map<String, Object>> recipes = new DeterministicExecutionRecipeBuilder().build(tempDir,
+                classInfo,
+                methodInfo,
+                summary,
+                new com.gigachat.unit.tests.generator.execute.ExecuteResult(false,
+                        List.of("mtd.abonent.NEW_AUTOTest.NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr"),
+                        "",
+                        "rt.exception.TransactionException: EXEC:BAD_CLASS_ID:TEST_CLASS"),
+                List.of());
+
+        assertFalse(recipes.isEmpty());
+        assertEquals("REF_NULL_GUARD_RUNTIME_ALIGNMENT", recipes.get(0).get("kind"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>) recipes.get(0).get("operations");
+        assertEquals("promote_ref_initializer_to_created_object", operations.get(0).get("type"));
+        assertEquals("NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr", operations.get(0).get("testMethodName"));
+        assertEquals("ref", operations.get(0).get("refVariable"));
+        assertEquals("Ref", operations.get(0).get("refTypeExpression"));
+        assertEquals("bd.Abonent", operations.get(0).get("objectTypeFqcn"));
+    }
+
+    @Test
     void shouldBuildSourceDerivedRuntimeAlignmentRecipeForComputedAuditPayloads() {
         TestMethodInfo methodInfo = new TestMethodInfo(
                 "public boolean upgrade(User user, int rawSignal)",

@@ -557,6 +557,66 @@ class DeterministicCoverageRecipeBuilderTest {
     }
 
     @Test
+    void shouldBuildNewAutoValidateReturnBranchRecipeForRealAbonentFlow() throws Exception {
+        Path testFile = tempDir.resolve("src/test/java/mtd/abonent/NEW_AUTOTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package mtd.abonent;
+
+                import org.junit.jupiter.api.BeforeEach;
+                import org.junit.jupiter.api.Test;
+                import rt.Varchar2;
+                import bd.Abonent.Ref;
+                import static org.assertj.core.api.Assertions.assertThat;
+
+                class NEW_AUTOTest {
+                    private NEW_AUTO o;
+
+                    @BeforeEach
+                    void setUp() {
+                        o = new NEW_AUTO();
+                    }
+
+                    @Test
+                    void NEW_AUTO_VALIDATE_assignsMessagesWhenProvided() {
+                        Ref ref = new Ref();
+                        Varchar2 plpClass = new Varchar2("TEST_CLASS");
+                        Varchar2 message = new Varchar2();
+                        Varchar2 info = new Varchar2();
+
+                        o.NEW_AUTO_VALIDATE(ref, plpClass, message, info);
+
+                        assertThat(message.getValue()).isEqualTo("OK");
+                        assertThat(info.getValue()).contains("VALIDATED");
+                    }
+                }
+                """);
+
+        DeterministicCoverageRecipeBuilder builder = new DeterministicCoverageRecipeBuilder();
+        List<Map<String, Object>> recipes = builder.build(
+                testFile,
+                "NEW_AUTO_VALIDATE_assignsMessagesWhenProvided",
+                new CoverageResult(true,
+                        true,
+                        new CoverageSummary("NEW_AUTO", "NEW_AUTO_VALIDATE", 5, 0, 8, 6),
+                        tempDir.resolve("jacoco.xml"),
+                        "",
+                        ""),
+                80);
+
+        assertEquals(1, recipes.size());
+        assertEquals("ADD_SOURCE_DERIVED_RETURN_BRANCH_SIBLING_TEST_NEW_AUTO_VALIDATE", recipes.get(0).get("id"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>) recipes.get(0).get("operations");
+        String methodSource = operations.get(0).get("methodSource").toString();
+        assertTrue(methodSource.contains("Varchar2 validAbonentClass = new Varchar2(\"ABONENT\");"));
+        assertTrue(methodSource.contains("o.NEW_AUTO_VALIDATE(null, validAbonentClass, null, null);"));
+        assertTrue(methodSource.contains("assertThat(o.lastRef()).isNotNull();"));
+        assertTrue(methodSource.contains("assertThat(o.lastClass().toString()).isEqualTo(\"ABONENT\");"));
+        assertFalse(methodSource.contains("assertThrows"));
+    }
+
+    @Test
     void shouldBuildLegacyValidateNullBranchRecipeForVarchar2FactoryValues() throws Exception {
         Path testFile = tempDir.resolve("src/test/java/com/example/app/video/LegacyVideoAutoTest.java");
         Files.createDirectories(testFile.getParent());

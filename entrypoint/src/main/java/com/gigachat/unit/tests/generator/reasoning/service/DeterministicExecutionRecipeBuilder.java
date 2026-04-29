@@ -42,6 +42,8 @@ public class DeterministicExecutionRecipeBuilder {
             Pattern.CASE_INSENSITIVE);
     private static final Pattern STACK_FRAME = Pattern.compile(
             "(?m)^\\s*(?<owner>[a-zA-Z0-9_$.]+)\\.(?<method>[A-Za-z_][A-Za-z0-9_]*)\\([^\\n]*\\)$");
+    private static final Pattern ZERO_ARG_OBJECT_CREATION_ASSIGNMENT = Pattern.compile(
+            "(?m)(?:final\\s+)?(?:var|[\\w.$<>\\[\\]]+)\\s+(?<var>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*new\\s+(?<type>[A-Za-z_][A-Za-z0-9_$.]*)\\s*\\(\\s*\\)\\s*;");
     private static final RuntimeRecipeTemplateCatalog RECIPE_TEMPLATES = new RuntimeRecipeTemplateCatalog();
 
     public List<Map<String, Object>> build(Path projectRoot,
@@ -64,6 +66,7 @@ public class DeterministicExecutionRecipeBuilder {
                 methodInfo,
                 targetBody,
                 rawCombinedFailure,
+                executeResult,
                 reportFailures);
         if (thresholdRejectionRecipe != null && !thresholdRejectionRecipe.isEmpty()) {
             recipes.add(thresholdRejectionRecipe);
@@ -72,6 +75,7 @@ public class DeterministicExecutionRecipeBuilder {
                 methodInfo,
                 targetBody,
                 rawCombinedFailure,
+                executeResult,
                 reportFailures);
         if (temporalNowRecipe != null && !temporalNowRecipe.isEmpty()) {
             recipes.add(temporalNowRecipe);
@@ -80,9 +84,18 @@ public class DeterministicExecutionRecipeBuilder {
                 methodInfo,
                 targetBody,
                 rawCombinedFailure,
+                executeResult,
                 reportFailures);
         if (reboundThresholdAttemptsRecipe != null && !reboundThresholdAttemptsRecipe.isEmpty()) {
             recipes.add(reboundThresholdAttemptsRecipe);
+        }
+        Map<String, Object> badClassIdRefRecipe = buildBadClassIdRefRecipe(classInfo,
+                methodInfo,
+                rawCombinedFailure,
+                executeResult,
+                reportFailures);
+        if (badClassIdRefRecipe != null && !badClassIdRefRecipe.isEmpty()) {
+            recipes.add(badClassIdRefRecipe);
         }
         MockPlan mockPlan = analysisSummary.mockPlan();
         if (mockPlan == null || mockPlan.shouldMock().isEmpty()) {
@@ -247,6 +260,7 @@ public class DeterministicExecutionRecipeBuilder {
                                                                      TestMethodInfo methodInfo,
                                                                      String targetBody,
                                                                      String rawCombinedFailure,
+                                                                     ExecuteResult executeResult,
                                                                      List<TestReportFailure> reportFailures) {
         if (classInfo == null || methodInfo == null || targetBody == null || targetBody.isBlank()) {
             return null;
@@ -263,7 +277,7 @@ public class DeterministicExecutionRecipeBuilder {
             return null;
         }
 
-        String failingTestMethod = firstFailureMethodName(reportFailures);
+        String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
         String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
         if (!looksLikeRejectionExpectation(failingTestMethod, failingTestSource)) {
             return null;
@@ -318,6 +332,7 @@ public class DeterministicExecutionRecipeBuilder {
                                                                       TestMethodInfo methodInfo,
                                                                       String targetBody,
                                                                       String rawCombinedFailure,
+                                                                      ExecuteResult executeResult,
                                                                       List<TestReportFailure> reportFailures) {
         if (classInfo == null || methodInfo == null || targetBody == null || targetBody.isBlank()) {
             return null;
@@ -333,7 +348,7 @@ public class DeterministicExecutionRecipeBuilder {
             return null;
         }
 
-        String failingTestMethod = firstFailureMethodName(reportFailures);
+        String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
         String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
         if (!looksLikeTemporalNowAssertion(failingTestSource)) {
             return null;
@@ -370,6 +385,7 @@ public class DeterministicExecutionRecipeBuilder {
                                                                     TestMethodInfo methodInfo,
                                                                     String targetBody,
                                                                     String rawCombinedFailure,
+                                                                    ExecuteResult executeResult,
                                                                     List<TestReportFailure> reportFailures) {
         if (classInfo == null || methodInfo == null || targetBody == null || targetBody.isBlank()) {
             return null;
@@ -387,7 +403,7 @@ public class DeterministicExecutionRecipeBuilder {
             return null;
         }
 
-        String failingTestMethod = firstFailureMethodName(reportFailures);
+        String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
         String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
         if (!looksLikeHighReboundExpectation(failingTestMethod, failingTestSource, sutMethod)) {
             return null;
@@ -408,6 +424,42 @@ public class DeterministicExecutionRecipeBuilder {
                 "sutMethod", sutMethod,
                 "userVariable", userVariable,
                 "minimumAttempts", Integer.toString(minimumAttempts)
+        ));
+    }
+
+    private Map<String, Object> buildBadClassIdRefRecipe(TestClassInfo classInfo,
+                                                         TestMethodInfo methodInfo,
+                                                         String rawCombinedFailure,
+                                                         ExecuteResult executeResult,
+                                                         List<TestReportFailure> reportFailures) {
+        if (classInfo == null || methodInfo == null) {
+            return null;
+        }
+        String combinedFailure = rawCombinedFailure == null ? "" : rawCombinedFailure.toLowerCase(Locale.ROOT);
+        if (!combinedFailure.contains("bad_class_id") || !combinedFailure.contains("transactionexception")) {
+            return null;
+        }
+        String sutMethod = extractMethodNameFromSignature(methodInfo.getSignature());
+        if (!"NEW_AUTO_EXECUTE".equals(sutMethod)) {
+            return null;
+        }
+        String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
+        String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
+        RefInitializerDetails refInitializer = findZeroArgumentRefInitializer(failingTestSource);
+        if (refInitializer == null) {
+            return null;
+        }
+        String sourceClass = simpleName(classInfo.getClassName());
+        if (sourceClass.isBlank()) {
+            return null;
+        }
+        return RECIPE_TEMPLATES.render("REF_NULL_GUARD_RUNTIME_ALIGNMENT", Map.of(
+                "sourceClassUpper", sourceClass.toUpperCase(Locale.ROOT),
+                "sourceClassSimple", sourceClass,
+                "testMethodName", failingTestMethod,
+                "refVariable", refInitializer.variableName(),
+                "refTypeExpression", refInitializer.typeExpression(),
+                "objectTypeFqcn", "bd.Abonent"
         ));
     }
 
@@ -435,6 +487,38 @@ public class DeterministicExecutionRecipeBuilder {
         return matcher.find() ? matcher.group(1) : "";
     }
 
+    private RefInitializerDetails findZeroArgumentRefInitializer(String methodSource) {
+        if (methodSource == null || methodSource.isBlank()) {
+            return null;
+        }
+        Matcher matcher = ZERO_ARG_OBJECT_CREATION_ASSIGNMENT.matcher(methodSource);
+        while (matcher.find()) {
+            String typeExpression = matcher.group("type");
+            if (!"Ref".equals(simpleName(typeExpression))) {
+                continue;
+            }
+            return new RefInitializerDetails(matcher.group("var"), typeExpression);
+        }
+        return null;
+    }
+
+    private String firstFailureMethodName(ExecuteResult executeResult, List<TestReportFailure> reportFailures) {
+        String reportMethod = firstFailureMethodName(reportFailures);
+        if (!reportMethod.isBlank()) {
+            return reportMethod;
+        }
+        if (executeResult == null || executeResult.failedTests() == null) {
+            return "";
+        }
+        for (String failedTest : executeResult.failedTests()) {
+            String parsed = extractFailureMethodName(failedTest);
+            if (!parsed.isBlank()) {
+                return parsed;
+            }
+        }
+        return "";
+    }
+
     private String firstFailureMethodName(List<TestReportFailure> reportFailures) {
         if (reportFailures == null) {
             return "";
@@ -445,6 +529,22 @@ public class DeterministicExecutionRecipeBuilder {
             }
         }
         return "";
+    }
+
+    private String extractFailureMethodName(String failedTest) {
+        if (failedTest == null || failedTest.isBlank()) {
+            return "";
+        }
+        String trimmed = failedTest.trim();
+        int hashIndex = trimmed.lastIndexOf('#');
+        if (hashIndex >= 0 && hashIndex + 1 < trimmed.length()) {
+            return trimmed.substring(hashIndex + 1);
+        }
+        int separator = trimmed.lastIndexOf('.');
+        if (separator >= 0 && separator + 1 < trimmed.length()) {
+            return trimmed.substring(separator + 1);
+        }
+        return trimmed;
     }
 
     private String readGeneratedTestMethod(Path testPath, String methodName) {
@@ -755,6 +855,9 @@ public class DeterministicExecutionRecipeBuilder {
 
     private String defaultString(String value) {
         return value == null ? "" : value;
+    }
+
+    private record RefInitializerDetails(String variableName, String typeExpression) {
     }
 
     private record StackFrame(String ownerFqcn, String methodName) {

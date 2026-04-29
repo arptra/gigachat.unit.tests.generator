@@ -508,4 +508,99 @@ class PreMergeScratchValidatorTest {
         assertTrue(compileSource.get().contains("public void setUp()"));
         assertEquals(null, executedMethodName.get());
     }
+
+    @Test
+    void shouldRepairScratchExecutionFailureAndCarryValidatedSnippet() throws Exception {
+        Path testFile = tempDir.resolve("src/test/java/com/example/SampleServiceTest.java");
+        TestClassInfo classInfo = new TestClassInfo(
+                "SampleService",
+                "SampleServiceTest",
+                testFile,
+                List.of(),
+                List.of()
+        );
+        GeneratedTestSnippet snippet = new GeneratedTestSnippet(
+                "SampleServiceTest",
+                "shouldExecutePrimarySnippet",
+                """
+                        @Test
+                        void shouldExecutePrimarySnippet() {
+                            org.junit.jupiter.api.Assertions.assertTrue(true);
+                        }
+                        """,
+                List.of("import org.junit.jupiter.api.Test;", "import org.junit.jupiter.api.Assertions;"),
+                List.of(),
+                List.of(),
+                List.of("""
+                        @Test
+                        void shouldExecuteSiblingSnippet() {
+                            org.junit.jupiter.api.Assertions.assertTrue(false);
+                        }
+                        """),
+                """
+                        package com.example;
+
+                        import org.junit.jupiter.api.Assertions;
+                        import org.junit.jupiter.api.Test;
+
+                        public class SampleServiceTest {
+
+                            @Test
+                            void shouldExecutePrimarySnippet() {
+                                org.junit.jupiter.api.Assertions.assertTrue(true);
+                            }
+
+                            @Test
+                            void shouldExecuteSiblingSnippet() {
+                                org.junit.jupiter.api.Assertions.assertTrue(false);
+                            }
+                        }
+                        """
+        );
+
+        PreMergeScratchValidator validator = new PreMergeScratchValidator(
+                new PipelineLogger(tempDir),
+                (projectRoot, scratchPath, methodName) -> new CompileResult(true, List.of(), "", ""),
+                (projectRoot, scratchPath, methodName) -> {
+                    try {
+                        String source = Files.readString(scratchPath);
+                        if (source.contains("assertTrue(false)")) {
+                            return new ExecuteResult(false,
+                                    List.of("com.example.SampleServiceTestPreMergeScratch.shouldExecuteSiblingSnippet"),
+                                    "",
+                                    "synthetic scratch execution failure");
+                        }
+                    } catch (Exception exception) {
+                        throw new IllegalStateException(exception);
+                    }
+                    return new ExecuteResult(true, List.of(), "", "");
+                },
+                new SiblingIsolationPolicy(true, true, true, false, true, true, true, true, "PreMergeScratch")
+        );
+
+        PreMergeScratchValidator.ValidationResult result = validator.validate(
+                tempDir,
+                classInfo,
+                snippet,
+                true,
+                true,
+                null,
+                failure -> {
+                    try {
+                        String repaired = Files.readString(failure.scratchFile()).replace(
+                                "org.junit.jupiter.api.Assertions.assertTrue(false);",
+                                "org.junit.jupiter.api.Assertions.assertTrue(true);");
+                        Files.writeString(failure.scratchFile(), repaired);
+                    } catch (Exception exception) {
+                        throw new IllegalStateException(exception);
+                    }
+                    return PreMergeScratchValidator.ScratchExecutionRepairOutcome.success(
+                            failure.compileResult(),
+                            new ExecuteResult(true, List.of(), "", ""));
+                });
+
+        assertTrue(result.success());
+        assertTrue(result.validatedSnippet().helperMethods().stream().anyMatch(method -> method.contains("assertTrue(true)")));
+        assertTrue(result.validatedSnippet().fullClassSource().contains("assertTrue(true);"));
+    }
 }

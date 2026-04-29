@@ -122,6 +122,7 @@ public class CoveragePipelineOrchestrator {
             }
 
             boolean goalReached = false;
+            int repeatedSignatureGraceRounds = 0;
             for (int iteration = 0; iteration < loopPolicy.maxIterations(); iteration++) {
                 controller.incrementAttempt();
                 if (isRuntimeFailureBlockingCoverage(coverageResult) && runtimeRegressionHandler == null) {
@@ -169,8 +170,16 @@ public class CoveragePipelineOrchestrator {
                 controller.addErrorSignature(signature);
                 controller.move("RESULT", AgentState.S8_COVERAGE_FAILED, signature);
                 if (controller.countOccurrences(signature) >= loopPolicy.repeatedSignatureThreshold()) {
-                    controller.move("RESULT", AgentState.S6_GIVE_UP, "repeated coverage failure signature=" + signature);
-                    return new CoverageStageResult(false, coverageResult);
+                    if (repeatedSignatureGraceRounds > 0) {
+                        repeatedSignatureGraceRounds--;
+                        logger.info("[COVERAGE_REASONING] Allowing repeated coverage signature after bounded follow-up for "
+                                + generatedMethodName
+                                + "; remainingGraceRounds="
+                                + repeatedSignatureGraceRounds);
+                    } else {
+                        controller.move("RESULT", AgentState.S6_GIVE_UP, "repeated coverage failure signature=" + signature);
+                        return new CoverageStageResult(false, coverageResult);
+                    }
                 }
 
                 List<Map<String, Object>> deterministicRecipes = coverageRecipeBuilder.build(
@@ -223,6 +232,15 @@ public class CoveragePipelineOrchestrator {
                             + iterationResult.getInformation().keySet()
                             + " contextKeys="
                             + extractContextCache(iterationResult).keySet());
+                    if (producedUsefulContext(iterationResult)) {
+                        repeatedSignatureGraceRounds++;
+                        logger.info("[COVERAGE_REASONING] Allowing follow-up reasoning after REQUEST_CONTEXT for "
+                                + generatedMethodName
+                                + "; graceRounds="
+                                + repeatedSignatureGraceRounds
+                                + " infoKeys="
+                                + iterationResult.getInformation().keySet());
+                    }
                     controller.moveForDecision("STATE", decision, AgentState.S2_1_NEED_MORE_CONTEXT, "coverage context requested");
                     controller.decrementContextBudget();
                     if (controller.contextBudgetRemaining() <= 0) {
@@ -308,6 +326,11 @@ public class CoveragePipelineOrchestrator {
                     compileResult = runtimeRepairResult.compileResult();
                     executeResult = runtimeRepairResult.executeResult();
                     controller.resetContextBudget();
+                    repeatedSignatureGraceRounds++;
+                    logger.info("[COVERAGE_REASONING] Allowing follow-up reasoning after runtime repair for "
+                            + generatedMethodName
+                            + "; graceRounds="
+                            + repeatedSignatureGraceRounds);
                     controller.move("TRANSITION",
                             AgentState.S4_FIX_APPLIED,
                             "runtime regression repaired during coverage loop");
@@ -493,6 +516,13 @@ public class CoveragePipelineOrchestrator {
             return converted;
         }
         return java.util.Collections.emptyMap();
+    }
+
+    private boolean producedUsefulContext(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return false;
+        }
+        return result.getInformation().keySet().stream().anyMatch(key -> !"errors".equals(key));
     }
 
     private String normaliseDecision(ReasoningResponse response) {

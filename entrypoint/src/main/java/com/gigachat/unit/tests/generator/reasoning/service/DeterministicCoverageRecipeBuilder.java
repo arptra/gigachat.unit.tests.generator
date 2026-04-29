@@ -176,6 +176,15 @@ public class DeterministicCoverageRecipeBuilder {
                 return List.of(sourceDerivedReturnBranchRecipe);
             }
 
+            Map<String, Object> newAutoValidateReturnBranchRecipe = buildNewAutoValidateReturnBranchRecipe(
+                    baselineMethod,
+                    usedNames,
+                    targetMethod,
+                    goalPercent);
+            if (newAutoValidateReturnBranchRecipe != null && !newAutoValidateReturnBranchRecipe.isEmpty()) {
+                return List.of(newAutoValidateReturnBranchRecipe);
+            }
+
             Map<String, Object> legacyValidateNullBranchRecipe = buildLegacyValidateNullBranchRecipe(
                     baselineMethod,
                     usedNames,
@@ -539,6 +548,56 @@ public class DeterministicCoverageRecipeBuilder {
                 List.of("static org.assertj.core.api.Assertions.assertThat"));
     }
 
+    private Map<String, Object> buildNewAutoValidateReturnBranchRecipe(MethodDeclaration baselineMethod,
+                                                                       LinkedHashSet<String> usedNames,
+                                                                       String targetMethod,
+                                                                       int goalPercent) {
+        if (!"NEW_AUTO_VALIDATE".equals(targetMethod) || baselineMethod == null || baselineMethod.getBody().isEmpty()) {
+            return null;
+        }
+        BlockStmt body = baselineMethod.getBody().orElse(null);
+        int actIndex = body == null ? -1 : findActStatementIndex(body, targetMethod);
+        if (actIndex < 0) {
+            return null;
+        }
+        MethodCallExpr targetCall = findTargetMethodCall(body.getStatement(actIndex), targetMethod);
+        if (targetCall == null || targetCall.getArguments().size() < 4 || targetCall.getScope().isEmpty()) {
+            return null;
+        }
+        String sutExpression = targetCall.getScope().map(Expression::toString).orElse("");
+        if (!isReceiverBoundToType(baselineMethod, sutExpression, "NEW_AUTO")) {
+            return null;
+        }
+        VariableDeclarator classVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(1));
+        if (classVariable == null) {
+            return null;
+        }
+        String validClassFactory = stringInitializerWithValue(classVariable, "ABONENT");
+        if (validClassFactory == null || validClassFactory.isBlank()) {
+            return null;
+        }
+        if (sutExpression.isBlank()) {
+            return null;
+        }
+        String methodName = resolveUniqueVariantName(usedNames, baselineMethod.getNameAsString());
+        String methodSource = String.join("\n",
+                "    @Test",
+                "    void " + methodName + "() {",
+                "        " + classVariable.getType() + " validAbonentClass = " + validClassFactory + ";",
+                "",
+                "        " + sutExpression + "." + targetMethod + "(null, validAbonentClass, null, null);",
+                "",
+                "        assertThat(" + sutExpression + ".lastRef()).isNotNull();",
+                "        assertThat(" + sutExpression + ".lastClass().toString()).isEqualTo(\"ABONENT\");",
+                "    }");
+        return renderRecipe(
+                "ADD_SOURCE_DERIVED_RETURN_BRANCH_SIBLING_TEST",
+                methodSource,
+                targetMethod,
+                goalPercent,
+                List.of("static org.assertj.core.api.Assertions.assertThat"));
+    }
+
     private Map<String, Object> buildNullGuardRecipe(MethodDeclaration baselineMethod,
                                                      LinkedHashSet<String> usedNames,
                                                      String targetMethod,
@@ -757,6 +816,28 @@ public class DeterministicCoverageRecipeBuilder {
                 .orElse(null);
     }
 
+    private boolean isReceiverBoundToType(MethodDeclaration method, String receiverExpression, String expectedType) {
+        if (method == null || receiverExpression == null || receiverExpression.isBlank()
+                || expectedType == null || expectedType.isBlank()) {
+            return false;
+        }
+        String receiverName = receiverExpression.startsWith("this.")
+                ? receiverExpression.substring("this.".length())
+                : receiverExpression;
+        boolean localMatch = method.findAll(VariableDeclarator.class).stream()
+                .anyMatch(variable -> receiverName.equals(variable.getNameAsString())
+                        && expectedType.equals(variable.getType().asString()));
+        if (localMatch) {
+            return true;
+        }
+        return method.findAncestor(ClassOrInterfaceDeclaration.class)
+                .stream()
+                .flatMap(declaration -> declaration.getFields().stream())
+                .flatMap(field -> field.getVariables().stream())
+                .anyMatch(variable -> receiverName.equals(variable.getNameAsString())
+                        && expectedType.equals(variable.getType().asString()));
+    }
+
     private String initializerSource(VariableDeclarator variable) {
         if (variable == null || variable.getInitializer().isEmpty()) {
             return null;
@@ -780,6 +861,26 @@ public class DeterministicCoverageRecipeBuilder {
         MethodCallExpr clone = callExpr.clone();
         clone.setArgument(0, new StringLiteralExpr(value));
         return clone.toString();
+    }
+
+    private String stringInitializerWithValue(VariableDeclarator variable, String value) {
+        if (variable == null || variable.getInitializer().isEmpty()) {
+            return null;
+        }
+        Expression initializer = variable.getInitializer().orElse(null);
+        if (initializer instanceof MethodCallExpr) {
+            return factoryExpressionWithString(variable, value);
+        }
+        if (initializer instanceof ObjectCreationExpr creationExpr && !creationExpr.getArguments().isEmpty()) {
+            Expression firstArgument = creationExpr.getArgument(0);
+            if (!(firstArgument instanceof StringLiteralExpr)) {
+                return null;
+            }
+            ObjectCreationExpr clone = creationExpr.clone();
+            clone.setArgument(0, new StringLiteralExpr(value));
+            return clone.toString();
+        }
+        return null;
     }
 
     private MethodCallExpr findEmptyCollectionDriver(MethodDeclaration method) {

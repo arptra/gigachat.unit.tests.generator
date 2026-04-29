@@ -3,8 +3,11 @@ package com.gigachat.unit.tests.generator.reasoning.service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -144,9 +147,10 @@ public class SymbolLookupService {
     }
 
     public String toSimpleName(String symbol) {
-        return symbol.contains(".")
-                ? symbol.substring(symbol.lastIndexOf('.') + 1)
-                : symbol;
+        String normalized = symbol == null ? "" : symbol.replace('$', '.');
+        return normalized.contains(".")
+                ? normalized.substring(normalized.lastIndexOf('.') + 1)
+                : normalized;
     }
 
     private Map<String, List<String>> buildProjectSymbolIndex() {
@@ -160,10 +164,10 @@ public class SymbolLookupService {
                 for (Path file : (Iterable<Path>) paths.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java"))::iterator) {
                     String content = sourceFileEditor.readFile(file);
                     String pkg = parsePackage(content);
-                    Set<String> types = parseTopLevelTypes(content);
+                    Set<String> types = parseImportableTypes(content);
                     for (String type : types) {
                         String fqn = pkg.isBlank() ? type : pkg + "." + type;
-                        index.computeIfAbsent(type, ignored -> new ArrayList<>()).add(fqn);
+                        index.computeIfAbsent(toSimpleName(type), ignored -> new ArrayList<>()).add(fqn);
                     }
                 }
             } catch (IOException ignored) {
@@ -211,8 +215,12 @@ public class SymbolLookupService {
                 if (rel.startsWith("META-INF") || rel.endsWith("module-info.class")) {
                     continue;
                 }
-                String fqn = rel.substring(0, rel.length() - ".class".length()).replace('/', '.');
-                String simple = fqn.contains(".") ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+                String binaryName = rel.substring(0, rel.length() - ".class".length()).replace('/', '.');
+                if (isSyntheticOrAnonymousBinaryName(binaryName)) {
+                    continue;
+                }
+                String fqn = normalizeBinaryClassName(binaryName);
+                String simple = toSimpleName(fqn);
                 index.computeIfAbsent(simple, ignored -> new ArrayList<>()).add(fqn);
             }
         } catch (IOException ignored) {
@@ -228,8 +236,12 @@ public class SymbolLookupService {
                     .filter(name -> name.endsWith(".class"))
                     .filter(name -> !name.startsWith("META-INF") && !name.endsWith("module-info.class"))
                     .forEach(name -> {
-                        String fqn = name.substring(0, name.length() - ".class".length()).replace('/', '.').replace('\\', '.');
-                        String simple = fqn.contains(".") ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+                        String binaryName = name.substring(0, name.length() - ".class".length()).replace('/', '.').replace('\\', '.');
+                        if (isSyntheticOrAnonymousBinaryName(binaryName)) {
+                            return;
+                        }
+                        String fqn = normalizeBinaryClassName(binaryName);
+                        String simple = toSimpleName(fqn);
                         index.computeIfAbsent(simple, ignored -> new ArrayList<>()).add(fqn);
                     });
         } catch (IOException ignored) {
@@ -275,12 +287,175 @@ public class SymbolLookupService {
         return "";
     }
 
-    private Set<String> parseTopLevelTypes(String content) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\b(class|interface|enum|record|@interface)\\s+([A-Za-z0-9_]+)\\b").matcher(content);
-        Set<String> types = new java.util.HashSet<>();
+    private Set<String> parseImportableTypes(String content) {
+        String sanitized = stripCommentsAndStrings(content);
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                        "@interface|\\bclass\\b|\\binterface\\b|\\benum\\b|\\brecord\\b|[A-Za-z_][A-Za-z0-9_]*|\\{|\\}")
+                .matcher(sanitized);
+        Set<String> types = new LinkedHashSet<>();
+        Deque<TypeContext> typeStack = new ArrayDeque<>();
+        boolean expectTypeName = false;
+        String pendingTypeName = null;
+        int pendingDeclarationDepth = -1;
+        int braceDepth = 0;
         while (matcher.find()) {
-            types.add(matcher.group(2));
+            String token = matcher.group();
+            if (isTypeKeyword(token)) {
+                expectTypeName = true;
+                pendingTypeName = null;
+                pendingDeclarationDepth = braceDepth;
+                continue;
+            }
+            if (expectTypeName) {
+                if (isIdentifier(token)) {
+                    pendingTypeName = token;
+                    pendingDeclarationDepth = braceDepth;
+                }
+                expectTypeName = false;
+                continue;
+            }
+            if ("{".equals(token)) {
+                braceDepth++;
+                if (pendingTypeName != null && isImportableTypeDeclaration(typeStack, pendingDeclarationDepth)) {
+                    String qualifiedName = typeStack.isEmpty()
+                            ? pendingTypeName
+                            : typeStack.peek().qualifiedName() + "." + pendingTypeName;
+                    types.add(qualifiedName);
+                    typeStack.push(new TypeContext(qualifiedName, braceDepth));
+                }
+                pendingTypeName = null;
+                pendingDeclarationDepth = -1;
+                continue;
+            }
+            if ("}".equals(token)) {
+                if (!typeStack.isEmpty() && typeStack.peek().bodyDepth() == braceDepth) {
+                    typeStack.pop();
+                }
+                if (braceDepth > 0) {
+                    braceDepth--;
+                }
+            }
         }
         return types;
+    }
+
+    private boolean isImportableTypeDeclaration(Deque<TypeContext> typeStack, int declarationDepth) {
+        int expectedDepth = typeStack.isEmpty() ? 0 : typeStack.peek().bodyDepth();
+        return declarationDepth == expectedDepth;
+    }
+
+    private boolean isTypeKeyword(String token) {
+        return "@interface".equals(token)
+                || "class".equals(token)
+                || "interface".equals(token)
+                || "enum".equals(token)
+                || "record".equals(token);
+    }
+
+    private boolean isIdentifier(String token) {
+        return token != null
+                && !token.isBlank()
+                && Character.isJavaIdentifierStart(token.charAt(0));
+    }
+
+    private String stripCommentsAndStrings(String content) {
+        StringBuilder sanitized = new StringBuilder(content.length());
+        boolean lineComment = false;
+        boolean blockComment = false;
+        boolean stringLiteral = false;
+        boolean charLiteral = false;
+        boolean escaped = false;
+        for (int index = 0; index < content.length(); index++) {
+            char current = content.charAt(index);
+            char next = index + 1 < content.length() ? content.charAt(index + 1) : '\0';
+            if (lineComment) {
+                if (current == '\n') {
+                    lineComment = false;
+                    sanitized.append('\n');
+                } else {
+                    sanitized.append(' ');
+                }
+                continue;
+            }
+            if (blockComment) {
+                if (current == '*' && next == '/') {
+                    blockComment = false;
+                    sanitized.append("  ");
+                    index++;
+                } else {
+                    sanitized.append(current == '\n' ? '\n' : ' ');
+                }
+                continue;
+            }
+            if (stringLiteral) {
+                if (escaped) {
+                    escaped = false;
+                    sanitized.append(' ');
+                    continue;
+                }
+                if (current == '\\') {
+                    escaped = true;
+                    sanitized.append(' ');
+                    continue;
+                }
+                if (current == '"') {
+                    stringLiteral = false;
+                }
+                sanitized.append(current == '\n' ? '\n' : ' ');
+                continue;
+            }
+            if (charLiteral) {
+                if (escaped) {
+                    escaped = false;
+                    sanitized.append(' ');
+                    continue;
+                }
+                if (current == '\\') {
+                    escaped = true;
+                    sanitized.append(' ');
+                    continue;
+                }
+                if (current == '\'') {
+                    charLiteral = false;
+                }
+                sanitized.append(current == '\n' ? '\n' : ' ');
+                continue;
+            }
+            if (current == '/' && next == '/') {
+                lineComment = true;
+                sanitized.append("  ");
+                index++;
+                continue;
+            }
+            if (current == '/' && next == '*') {
+                blockComment = true;
+                sanitized.append("  ");
+                index++;
+                continue;
+            }
+            if (current == '"') {
+                stringLiteral = true;
+                sanitized.append(' ');
+                continue;
+            }
+            if (current == '\'') {
+                charLiteral = true;
+                sanitized.append(' ');
+                continue;
+            }
+            sanitized.append(current);
+        }
+        return sanitized.toString();
+    }
+
+    private boolean isSyntheticOrAnonymousBinaryName(String binaryName) {
+        return binaryName != null && binaryName.matches(".*\\$\\d+.*");
+    }
+
+    private String normalizeBinaryClassName(String binaryName) {
+        return binaryName == null ? "" : binaryName.replace('$', '.');
+    }
+
+    private record TypeContext(String qualifiedName, int bodyDepth) {
     }
 }

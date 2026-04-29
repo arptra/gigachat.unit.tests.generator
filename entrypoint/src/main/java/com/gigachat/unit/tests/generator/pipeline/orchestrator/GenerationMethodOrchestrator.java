@@ -36,6 +36,9 @@ import com.gigachat.unit.tests.generator.report.parser.TestReportFailure;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
@@ -136,13 +139,120 @@ public class GenerationMethodOrchestrator {
                     classInfo,
                     snippet,
                     moduleConfig.compileEnabled(),
-                    moduleConfig.executeEnabled());
+                    moduleConfig.executeEnabled(),
+                    scratchFailure -> {
+                        logger.warn("[COMPILATION_REASONING] Pre-merge scratch compile errors for "
+                                + scratchFailure.generatedMethodName()
+                                + ": "
+                                + summariseCompileFailure(scratchFailure.compileResult()));
+                        logger.info("[COMPILATION_REASONING] action=START_PRE_MERGE_SCRATCH_COMPILE_REPAIR method="
+                                + scratchFailure.generatedMethodName()
+                                + " scratchFile="
+                                + scratchFailure.scratchFile().toAbsolutePath().normalize());
+                        PreMergeScratchValidator.ScratchRepairOutcome repairOutcome = support.repairPreMergeScratchCompilation(
+                                config,
+                                classInfo,
+                                projectContextCollector,
+                                scratchFailure);
+                        CompileResult repairCompileResult = repairOutcome == null
+                                ? scratchFailure.compileResult()
+                                : repairOutcome.compileResult();
+                        if (repairOutcome != null && repairOutcome.success() && repairCompileResult != null && repairCompileResult.success()) {
+                            logger.info("[COMPILATION_REASONING] action=KEEP_PRE_MERGE_SCRATCH_REPAIR method="
+                                    + scratchFailure.generatedMethodName()
+                                    + " result=COMPILE_SUCCESS");
+                            return repairOutcome;
+                        }
+                        logger.info("[COMPILATION_REASONING] action=REGENERATE_TEST method="
+                                + scratchFailure.generatedMethodName()
+                                + " reason=PRE_MERGE_SCRATCH_COMPILE_REPAIR_FAILED errors="
+                                + summariseCompileFailure(repairCompileResult));
+                        return repairOutcome == null
+                                ? PreMergeScratchValidator.ScratchRepairOutcome.failed(scratchFailure.compileResult())
+                                : repairOutcome;
+                    },
+                    scratchFailure -> {
+                        logger.warn("[EXECUTION_REASONING] Pre-merge scratch runtime failure for "
+                                + scratchFailure.generatedMethodName()
+                                + ": "
+                                + summariseExecutionFailure(scratchFailure.executeResult()));
+                        logger.info("[EXECUTION_REASONING] action=START_PRE_MERGE_SCRATCH_EXECUTION_REPAIR method="
+                                + scratchFailure.generatedMethodName()
+                                + " scratchFile="
+                                + scratchFailure.scratchFile().toAbsolutePath().normalize()
+                                + " executionScope="
+                                + (scratchFailure.executeWholeSuite() ? "WHOLE_SCRATCH_SUITE" : "GENERATED_METHOD_ONLY"));
+                        PreMergeScratchValidator.ScratchExecutionRepairOutcome repairOutcome = support.repairPreMergeScratchExecution(
+                                config,
+                                classInfo,
+                                methodInfo,
+                                analysisSummary,
+                                projectContextCollector,
+                                scratchFailure);
+                        CompileResult repairCompileResult = repairOutcome == null
+                                ? scratchFailure.compileResult()
+                                : repairOutcome.compileResult();
+                        ExecuteResult repairExecuteResult = repairOutcome == null
+                                ? scratchFailure.executeResult()
+                                : repairOutcome.executeResult();
+                        if (repairOutcome != null
+                                && repairOutcome.success()
+                                && (repairCompileResult == null || repairCompileResult.success())
+                                && repairExecuteResult != null
+                                && repairExecuteResult.success()) {
+                            logger.info("[EXECUTION_REASONING] action=KEEP_PRE_MERGE_SCRATCH_EXECUTION_REPAIR method="
+                                    + scratchFailure.generatedMethodName()
+                                    + " result=EXECUTION_SUCCESS");
+                            return repairOutcome;
+                        }
+                        logger.info("[EXECUTION_REASONING] action=REGENERATE_TEST method="
+                                + scratchFailure.generatedMethodName()
+                                + " reason=PRE_MERGE_SCRATCH_EXECUTION_REPAIR_FAILED runtime="
+                                + summariseExecutionFailure(repairExecuteResult));
+                        return repairOutcome == null
+                                ? PreMergeScratchValidator.ScratchExecutionRepairOutcome.failed(
+                                scratchFailure.compileResult(),
+                                scratchFailure.executeResult())
+                                : repairOutcome;
+                    });
             if (!scratchValidation.success()) {
                 logger.warn("Pre-merge sibling-isolation validation rejected method "
                         + snippet.methodName()
                         + " ["
                         + scratchValidation.failureReason()
                         + "]");
+                if (scratchValidation.compileResult() != null && !scratchValidation.compileResult().success()) {
+                    logger.warn("[COMPILATION_REASONING] Pre-merge scratch compile errors for "
+                            + snippet.methodName()
+                            + ": "
+                            + summariseCompileFailure(scratchValidation.compileResult()));
+                    logger.info("[COMPILATION_REASONING] action=REGENERATE_TEST method="
+                            + snippet.methodName()
+                            + " reason="
+                            + scratchValidation.failureReason()
+                            + " compileReasoning=FAILED_PRE_MERGE_SCRATCH_REPAIR");
+                    logger.trace("ACTION",
+                            snippet.methodName(),
+                            AgentState.S2_COMPILATION_FAILED.name(),
+                            "action=REGENERATE_TEST compileReasoning=FAILED_PRE_MERGE_SCRATCH_REPAIR reason="
+                                    + scratchValidation.failureReason());
+                }
+                if (scratchValidation.executeResult() != null && !scratchValidation.executeResult().success()) {
+                    logger.warn("[EXECUTION_REASONING] Pre-merge scratch runtime failure for "
+                            + snippet.methodName()
+                            + ": "
+                            + summariseExecutionFailure(scratchValidation.executeResult()));
+                    logger.info("[EXECUTION_REASONING] action=REGENERATE_TEST method="
+                            + snippet.methodName()
+                            + " reason="
+                            + scratchValidation.failureReason()
+                            + " executionReasoning=FAILED_PRE_MERGE_SCRATCH_REPAIR");
+                    logger.trace("ACTION",
+                            snippet.methodName(),
+                            AgentState.S2_2_EXECUTION_FAILED.name(),
+                            "action=REGENERATE_TEST executionReasoning=FAILED_PRE_MERGE_SCRATCH_REPAIR reason="
+                                    + scratchValidation.failureReason());
+                }
                 logger.trace("RESULT",
                         snippet.methodName(),
                         scratchValidation.executeResult() == null
@@ -176,8 +286,20 @@ public class GenerationMethodOrchestrator {
                 attempt++;
                 continue;
             }
+            if (scratchValidation.validatedSnippet() != null) {
+                snippet = scratchValidation.validatedSnippet();
+            }
             try {
-                mergeResult = diffEngine.merge(classInfo, snippet);
+                if (scratchValidation.replaceTargetClassSource()
+                        && scratchValidation.replacementSource() != null
+                        && !scratchValidation.replacementSource().isBlank()) {
+                    mergeResult = applyValidatedScratchSource(classInfo,
+                            snippet,
+                            scratchValidation.replacementSource(),
+                            scratchValidation.replacementDiagnostic());
+                } else {
+                    mergeResult = diffEngine.merge(classInfo, snippet);
+                }
             } catch (RuntimeException exception) {
                 String failure = "Merge failed before compilation: " + exception.getMessage();
                 logger.warn(failure);
@@ -240,6 +362,10 @@ public class GenerationMethodOrchestrator {
                 lastCompileResult = compilerInvoker.compile(config.getProjectPath(), classInfo.getTargetPath(), snippet.methodName());
                 if (!lastCompileResult.success()) {
                     logger.warn("Compilation failed for method " + snippet.methodName());
+                    logger.warn("[COMPILATION_REASONING] Primary compile errors for "
+                            + snippet.methodName()
+                            + ": "
+                            + summariseCompileFailure(lastCompileResult));
                     logger.trace("RESULT",
                             snippet.methodName(),
                             AgentState.S2_COMPILATION_FAILED.name(),
@@ -250,6 +376,8 @@ public class GenerationMethodOrchestrator {
                             lastCompileResult.stdout(),
                             lastCompileResult.stderr()));
                     try {
+                        logger.info("[COMPILATION_REASONING] action=START_COMPILE_FIX_LOOP method="
+                                + snippet.methodName());
                         logger.trace("TRANSITION", snippet.methodName(), AgentState.S2_COMPILATION_FAILED.name(), "starting compile-fix loop");
                         lastCompileResult = fixingOrchestrator.runFixingLoop();
                     } catch (FixingFailureException exception) {
@@ -257,6 +385,10 @@ public class GenerationMethodOrchestrator {
                         lastCompileResult = exception.getLastResult();
                     }
                     if (!lastCompileResult.success()) {
+                        logger.info("[COMPILATION_REASONING] action=REGENERATE_TEST method="
+                                + snippet.methodName()
+                                + " reason=COMPILE_REPAIR_FAILED errors="
+                                + summariseCompileFailure(lastCompileResult));
                         logger.trace("TRANSITION", snippet.methodName(), AgentState.S1_TESTS_GENERATED.name(), "compile repair failed, regenerating test");
                         support.handleFailure(classInfo, snippet, mergeResult, moduleConfig, "Compilation repair failed");
                         repairContext = support.buildRepairContext(repairContext,
@@ -282,6 +414,9 @@ public class GenerationMethodOrchestrator {
                         attempt++;
                         continue;
                     }
+                    logger.info("[COMPILATION_REASONING] action=KEEP_REPAIRED_TEST method="
+                            + snippet.methodName()
+                            + " result=COMPILE_SUCCESS");
                     logger.trace("RESULT", snippet.methodName(), AgentState.S5_COMPILATION_SUCCESS.name(), "compile repaired successfully");
                 }
             } else {
@@ -439,6 +574,44 @@ public class GenerationMethodOrchestrator {
         logger.info("Generation pipeline completed successfully for method " + snippet.methodName());
     }
 
+    private DiffEngine.MergeResult applyValidatedScratchSource(TestClassInfo classInfo,
+                                                               GeneratedTestSnippet snippet,
+                                                               String replacementSource,
+                                                               String diagnostic) {
+        Path file = classInfo.getTargetPath();
+        try {
+            Files.createDirectories(file.getParent());
+            String originalSource = Files.exists(file)
+                    ? Files.readString(file, StandardCharsets.UTF_8)
+                    : "";
+            Files.writeString(file, replacementSource, StandardCharsets.UTF_8);
+            boolean changed = !Objects.equals(originalSource, replacementSource);
+            if (changed) {
+                logger.info("Applied pre-validated scratch source for " + snippet.methodName()
+                        + " into "
+                        + file
+                        + " ["
+                        + diagnostic
+                        + "]");
+            } else {
+                logger.warn("Pre-validated scratch source did not change target class for "
+                        + snippet.methodName()
+                        + " ["
+                        + diagnostic
+                        + "]");
+            }
+            return new DiffEngine.MergeResult(changed,
+                    originalSource,
+                    replacementSource,
+                    snippet.methodBody(),
+                    diffEngine.diff(originalSource, replacementSource),
+                    snippet,
+                    diagnostic == null ? "PRE_VALIDATED_SCRATCH_SOURCE" : diagnostic);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Unable to apply pre-validated scratch source to " + file, exception);
+        }
+    }
+
     private JSONObject toJsonObject(String promptJson, TestMethodInfo methodInfo) {
         if (promptJson == null || promptJson.isBlank()) {
             logger.warn("Prompt JSON was empty for method " + methodInfo.getSignature());
@@ -457,12 +630,38 @@ public class GenerationMethodOrchestrator {
             return "unknown";
         }
         if (compileResult.stderr() != null && !compileResult.stderr().isBlank()) {
-            return compileResult.stderr().replaceAll("\\s+", " ").trim();
+            return abbreviate(compileResult.stderr().replaceAll("\\s+", " ").trim());
         }
         if (compileResult.messages() != null && !compileResult.messages().isEmpty()) {
-            return String.join(" | ", compileResult.messages()).replaceAll("\\s+", " ").trim();
+            return abbreviate(String.join(" | ", compileResult.messages()).replaceAll("\\s+", " ").trim());
+        }
+        if (compileResult.stdout() != null && !compileResult.stdout().isBlank()) {
+            return abbreviate(compileResult.stdout().replaceAll("\\s+", " ").trim());
         }
         return "unknown";
+    }
+
+    private String summariseExecutionFailure(ExecuteResult executeResult) {
+        if (executeResult == null) {
+            return "unknown";
+        }
+        if (executeResult.stderr() != null && !executeResult.stderr().isBlank()) {
+            return abbreviate(executeResult.stderr().replaceAll("\\s+", " ").trim());
+        }
+        if (executeResult.failedTests() != null && !executeResult.failedTests().isEmpty()) {
+            return abbreviate(String.join(" | ", executeResult.failedTests()).replaceAll("\\s+", " ").trim());
+        }
+        if (executeResult.stdout() != null && !executeResult.stdout().isBlank()) {
+            return abbreviate(executeResult.stdout().replaceAll("\\s+", " ").trim());
+        }
+        return "unknown";
+    }
+
+    private String abbreviate(String value) {
+        if (value == null || value.length() <= 1800) {
+            return value;
+        }
+        return value.substring(0, 1800) + "...";
     }
 
     public interface Support {
@@ -484,6 +683,18 @@ public class GenerationMethodOrchestrator {
                                                                  ProjectContextCollector projectContextCollector,
                                                                  ToolActionExecutor actionExecutor,
                                                                  GeneratedTestSnippet snippet);
+
+        PreMergeScratchValidator.ScratchRepairOutcome repairPreMergeScratchCompilation(AgentConfig config,
+                                                                                       TestClassInfo classInfo,
+                                                                                       ProjectContextCollector projectContextCollector,
+                                                                                       PreMergeScratchValidator.ScratchCompilationFailure scratchFailure);
+
+        PreMergeScratchValidator.ScratchExecutionRepairOutcome repairPreMergeScratchExecution(AgentConfig config,
+                                                                                              TestClassInfo classInfo,
+                                                                                              TestMethodInfo methodInfo,
+                                                                                              Analyze.AnalysisSummary analysisSummary,
+                                                                                              ProjectContextCollector projectContextCollector,
+                                                                                              PreMergeScratchValidator.ScratchExecutionFailure scratchFailure);
 
         JSONObject buildRepairContext(JSONObject baseContext,
                                       CompileResult compileResult,

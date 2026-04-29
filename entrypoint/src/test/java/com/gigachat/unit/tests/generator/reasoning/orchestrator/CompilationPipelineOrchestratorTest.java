@@ -277,7 +277,7 @@ class CompilationPipelineOrchestratorTest {
                 "testRollbackWhenFeatureEnabledAndReboundHigh");
 
         assertThrows(Exception.class, orchestrator::runFixingLoop);
-        assertEquals(2, compileCalls.get());
+        assertEquals(3, compileCalls.get());
         assertEquals(original, Files.readString(testFile));
     }
 
@@ -369,6 +369,113 @@ class CompilationPipelineOrchestratorTest {
         assertEquals(2, compileCalls.get());
         assertEquals(1, reasoningCalls.get());
         assertFalse(Files.readString(testFile).contains("@Test\n    @Test"));
+        String logs = Files.readString(projectRoot.resolve(".agent/logs/pipeline.log"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] Compile errors method=shouldReloadComponent"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] Stage=ASK_LLM method=shouldReloadComponent"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] action=APPLY_FIX method=shouldReloadComponent"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] actionResult=APPLY_FIX method=shouldReloadComponent"));
+    }
+
+    @Test
+    void shouldAllowSecondReasoningRoundAfterContextRequestOnSameCompileSignature() throws IOException {
+        Path projectRoot = tempDir;
+        Path mainDir = projectRoot.resolve("src/main/java/com/example/app/service");
+        Files.createDirectories(mainDir);
+        Files.writeString(mainDir.resolve("LibraryComponent.java"), """
+                package com.example.app.service;
+
+                class LibraryComponent {
+                }
+                """);
+
+        Path testFile = projectRoot.resolve("src/test/java/com/example/app/service/LibraryComponentTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package com.example.app.service;
+
+                import org.junit.jupiter.api.Test;
+
+                class LibraryComponentTest {
+                    @Test
+                    @Test
+                    void shouldReloadComponent() {
+                    }
+                }
+                """);
+
+        AtomicInteger compileCalls = new AtomicInteger();
+        CompilerInvoker compilerInvoker = (root, file, methodName) -> {
+            compileCalls.incrementAndGet();
+            String source;
+            try {
+                source = Files.readString(file);
+            } catch (IOException exception) {
+                throw new IllegalStateException("Unable to read test file in fake compiler", exception);
+            }
+            if (source.contains("@Test\n    @Test")) {
+                return new CompileResult(
+                        false,
+                        List.of(),
+                        "",
+                        file + ":6: error: org.junit.jupiter.api.Test is not a repeatable annotation interface\n"
+                );
+            }
+            return new CompileResult(true, List.of(), "", "");
+        };
+
+        AtomicInteger reasoningCalls = new AtomicInteger();
+        CompilationReasoningService reasoningService = new CompilationReasoningService(
+                new NoOpLlmClient(),
+                new CompilationReasoningPromptBuilder(),
+                new ReasoningResponseParser()) {
+            @Override
+            public ReasoningResponse reasonAboutError(ReasoningLoopContext loopContext) {
+                int call = reasoningCalls.incrementAndGet();
+                ReasoningResponse response = new ReasoningResponse();
+                if (call == 1) {
+                    response.setDecision("REQUEST_CONTEXT");
+                    ReasoningResponse.ReasoningAction action = new ReasoningResponse.ReasoningAction();
+                    action.setType("READ_CLASS");
+                    action.setArgs(Map.of("className", "LibraryComponent"));
+                    response.setActions(List.of(action));
+                    return response;
+                }
+                response.setDecision("APPLY_FIX");
+                ReasoningResponse.ReasoningAction action = new ReasoningResponse.ReasoningAction();
+                action.setType("APPLY_RECIPE");
+                action.setArgs(Map.of("recipeId", "COLLAPSE_CONSECUTIVE_TEST_ANNOTATIONS"));
+                response.setActions(List.of(action));
+                return response;
+            }
+        };
+
+        CompilationPipelineOrchestrator orchestrator = new CompilationPipelineOrchestrator(
+                compilerInvoker,
+                reasoningService,
+                new ProjectContextCollector(projectRoot),
+                new ToolActionExecutor(
+                        new SourceFileEditor(),
+                        compilerInvoker,
+                        null,
+                        projectRoot,
+                        testFile,
+                        "com.example.app.service.LibraryComponentTest",
+                        "shouldReloadComponent"),
+                null,
+                new PipelineLogger(projectRoot),
+                projectRoot,
+                testFile,
+                "com.example.app.service.LibraryComponentTest",
+                "shouldReloadComponent");
+
+        CompileResult result = orchestrator.runFixingLoop();
+
+        assertTrue(result.success());
+        assertEquals(3, compileCalls.get());
+        assertEquals(2, reasoningCalls.get());
+        String logs = Files.readString(projectRoot.resolve(".agent/logs/pipeline.log"));
+        assertTrue(logs.contains("action=ALLOW_FOLLOW_UP_AFTER_CONTEXT method=shouldReloadComponent"));
+        assertTrue(logs.contains("action=ALLOW_REPEATED_SIGNATURE_AFTER_CONTEXT method=shouldReloadComponent"));
     }
 
     @Test

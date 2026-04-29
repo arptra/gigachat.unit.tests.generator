@@ -887,7 +887,7 @@ class InitialGenerationStepExecutionReasoningTest {
     }
 
     @Test
-    void preMergeScratchCompilationFailureTriggersValidationRetryBeforeMerge() throws Exception {
+    void preMergeScratchCompilationFailureRunsCompileReasoningBeforeMerge() throws Exception {
         Files.writeString(tempDir.resolve("build.gradle"), """
                 plugins {
                     id 'java'
@@ -936,8 +936,7 @@ class InitialGenerationStepExecutionReasoningTest {
             }
         };
 
-        PreMergeRetryLlmClient llmClient = new PreMergeRetryLlmClient();
-        AtomicInteger scratchCompilations = new AtomicInteger();
+        PreMergeCompileRepairLlmClient llmClient = new PreMergeCompileRepairLlmClient();
         InitialGenerationStep generationStep = new InitialGenerationStep(
                 logger,
                 writer,
@@ -947,12 +946,17 @@ class InitialGenerationStepExecutionReasoningTest {
                 llmClient,
                 new DiffEngine(writer, logger),
                 (projectRoot, testClassFilePath, generatedMethodName) -> {
-                    if (testClassFilePath.getFileName().toString().contains("PreMergeScratch")
-                            && scratchCompilations.getAndIncrement() == 0) {
-                        return new CompileResult(false,
-                                List.of("synthetic scratch compilation failure"),
-                                "",
-                                "synthetic scratch compilation failure");
+                    try {
+                        String source = Files.readString(testClassFilePath);
+                        if (source.contains("@BeforeEach\n    @BeforeEach") || source.contains("@BeforeEach\r\n    @BeforeEach")) {
+                            return new CompileResult(false,
+                                    List.of("synthetic duplicate @BeforeEach annotation"),
+                                    "",
+                                    testClassFilePath
+                                            + ":6: error: org.junit.jupiter.api.BeforeEach is not a repeatable annotation interface\n");
+                        }
+                    } catch (Exception exception) {
+                        throw new IllegalStateException("Unable to read synthetic test source", exception);
                     }
                     return new CompileResult(true, List.of(), "", "");
                 },
@@ -969,20 +973,134 @@ class InitialGenerationStepExecutionReasoningTest {
                 .mode(AgentMode.SCAN)
                 .projectPath(tempDir)
                 .moduleOption("pipeline.compile.enabled", true)
-                .moduleOption("pipeline.execute.enabled", true)
+                .moduleOption("pipeline.execute.enabled", false)
                 .moduleOption("pipeline.snapshots.enabled", false)
                 .build();
 
         generationStep.run(config, List.of(classInfo));
 
-        assertEquals(2, llmClient.generationCalls.get(), "Expected failed scratch validation to force one regeneration");
+        assertEquals(1, llmClient.generationCalls.get(), "Expected scratch compile reasoning to repair without regeneration");
+        assertEquals(1, llmClient.reasoningCalls.get(), "Expected one compile reasoning decision for scratch repair");
         String generatedTest = Files.readString(testFile);
-        assertTrue(generatedTest.contains("SECOND-MERGED"));
-        assertFalse(generatedTest.contains("FIRST-SCRATCH-REJECT"));
+        assertTrue(generatedTest.contains("FIRST-SCRATCH-REPAIRED"));
+        assertFalse(generatedTest.contains("@BeforeEach\n    @BeforeEach"));
+        assertFalse(generatedTest.contains("@BeforeEach\r\n    @BeforeEach"));
 
         String logs = Files.readString(tempDir.resolve(".agent/logs/pipeline.log"));
-        assertTrue(logs.contains("Pre-merge sibling-isolation validation rejected method"));
-        assertTrue(logs.contains("SCRATCH_COMPILATION_FAILED"));
+        assertTrue(logs.contains("action=START_PRE_MERGE_SCRATCH_COMPILE_REPAIR"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] Pre-merge scratch compile errors"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] Stage=ASK_LLM method=shouldExecutePerform"));
+        assertTrue(logs.contains("[COMPILATION_REASONING] action=APPLY_FIX method=shouldExecutePerform"));
+        assertTrue(logs.contains("action=KEEP_PRE_MERGE_SCRATCH_REPAIR"));
+        assertFalse(logs.contains("compileReasoning=SKIPPED_PRE_MERGE_SCRATCH"));
+        assertFalse(logs.contains("Pre-merge sibling-isolation validation rejected method"));
+    }
+
+    @Test
+    void preMergeScratchExecutionFailureRunsExecutionReasoningBeforeMerge() throws Exception {
+        Path testFile = tempDir.resolve("src/test/java/com/example/SampleServiceTest.java");
+        Files.createDirectories(testFile.getParent());
+        Files.writeString(testFile, """
+                package com.example;
+
+                import org.junit.jupiter.api.Test;
+
+                public class SampleServiceTest {
+
+                    @Test
+                    void existingSiblingShouldStay() {
+                        org.junit.jupiter.api.Assertions.assertTrue(false);
+                    }
+                }
+                """);
+        TestMethodInfo methodInfo = new TestMethodInfo("perform()", "void", "return;");
+        TestClassInfo classInfo = new TestClassInfo(
+                "SampleService",
+                "SampleServiceTest",
+                testFile,
+                List.of(),
+                List.of(methodInfo)
+        );
+
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        PipelineLogger logger = new PipelineLogger(tempDir);
+        TestClassWriter writer = new TestClassWriter(logger);
+        Analyze analyze = new Analyze(registry) {
+            @Override
+            public AnalysisSummary analyze(AgentConfig config, TestClassInfo currentClassInfo, TestMethodInfo currentMethodInfo) {
+                return new AnalysisSummary(
+                        new MockPlan(List.of(), MockStrategy.MOCKITO, List.of(), List.of()),
+                        new MethodAnalysisResult(new MethodMetadata("perform", "perform()", "void"), List.of(), List.of(), List.of(), List.of()),
+                        "{}",
+                        Map.of(),
+                        new TestTargetContext("SampleService", "sampleService", true, false),
+                        true,
+                        List.of(),
+                        Set.of(),
+                        Set.of(),
+                        Map.of(),
+                        Map.of("SampleService", List.of("perform()")),
+                        Set.of(),
+                        Set.of()
+                );
+            }
+        };
+
+        PreMergeExecutionRepairLlmClient llmClient = new PreMergeExecutionRepairLlmClient();
+        AtomicInteger scratchExecutionCalls = new AtomicInteger();
+        InitialGenerationStep generationStep = new InitialGenerationStep(
+                logger,
+                writer,
+                new SkeletonPromptBuilder(),
+                analyze,
+                new PromptBuilder(),
+                llmClient,
+                new DiffEngine(writer, logger),
+                (projectRoot, testClassFilePath, generatedMethodName) -> new CompileResult(true, List.of(), "", ""),
+                (projectRoot, testClassFilePath, generatedMethodName) -> {
+                    if (testClassFilePath.getFileName().toString().contains("PreMergeScratch")) {
+                        assertEquals(null, generatedMethodName, "Expected whole scratch suite execution for sibling-isolation validation");
+                        if (scratchExecutionCalls.getAndIncrement() == 0) {
+                            return new ExecuteResult(false,
+                                    List.of("com.example.SampleServiceTestPreMergeScratch.existingSiblingShouldStay"),
+                                    "",
+                                    "synthetic scratch execution failure");
+                        }
+                    }
+                    return new ExecuteResult(true, List.of(), "", "");
+                },
+                new SnapshotStorage(tempDir, logger),
+                registry,
+                new CompilationReasoningService(
+                        llmClient,
+                        new CompilationReasoningPromptBuilder(),
+                        new ReasoningResponseParser())
+        );
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(tempDir)
+                .moduleOption("pipeline.compile.enabled", true)
+                .moduleOption("pipeline.execute.enabled", true)
+                .moduleOption("pipeline.coverage.enabled", false)
+                .moduleOption("pipeline.snapshots.enabled", false)
+                .build();
+
+        generationStep.run(config, List.of(classInfo));
+
+        assertEquals(1, llmClient.generationCalls.get(), "Expected scratch execution reasoning to repair without regeneration");
+        String generatedTest = Files.readString(testFile);
+        assertTrue(generatedTest.contains("SCRATCH-EXEC-REPAIRED"));
+        assertTrue(generatedTest.contains("shouldExecutePrimarySnippet"));
+        assertFalse(generatedTest.contains("assertTrue(false)"));
+
+        String logs = Files.readString(tempDir.resolve(".agent/logs/pipeline.log"));
+        assertTrue(logs.contains("action=START_PRE_MERGE_SCRATCH_EXECUTION_REPAIR"));
+        assertTrue(logs.contains("[EXECUTION_REASONING] Starting execution reasoning for method shouldExecutePrimarySnippet"));
+        assertTrue(logs.contains("[EXECUTION_REASONING] Decision for shouldExecutePrimarySnippet: APPLY_FIX"));
+        assertTrue(logs.contains("action=KEEP_PRE_MERGE_SCRATCH_EXECUTION_REPAIR"));
+        assertFalse(logs.contains("reason=PRE_MERGE_SCRATCH_EXECUTION_REPAIR_FAILED"));
+        assertFalse(logs.contains("Pre-merge sibling-isolation validation rejected method"));
     }
 
     @Test
@@ -2031,13 +2149,24 @@ class InitialGenerationStepExecutionReasoningTest {
         }
     }
 
-    private static class PreMergeRetryLlmClient implements LlmClient {
+    private static class PreMergeCompileRepairLlmClient implements LlmClient {
         private final AtomicInteger generationCalls = new AtomicInteger();
+        private final AtomicInteger reasoningCalls = new AtomicInteger();
 
         @Override
         public String requestStructuredResponse(String prompt) {
+            reasoningCalls.incrementAndGet();
             return """
-                    {"decision":"STOP","actions":[],"memory_updates":{}}
+                    {
+                          "decision":"APPLY_FIX",
+                          "actions":[
+                        {
+                          "type":"APPLY_RECIPE",
+                          "args":{"recipeId":"COLLAPSE_CONSECUTIVE_BEFOREEACH_ANNOTATIONS"}
+                        }
+                      ],
+                      "memory_updates":{"knownMissingSymbols":[],"appliedFixSignatures":[],"contextCache":{}}
+                    }
                     """;
         }
 
@@ -2053,27 +2182,82 @@ class InitialGenerationStepExecutionReasoningTest {
                         """
                                 @Test
                                 void shouldExecutePerform() {
-                                    SampleService sampleService = new SampleService();
                                     sampleService.perform();
-                                    org.junit.jupiter.api.Assertions.assertTrue(true); // FIRST-SCRATCH-REJECT
+                                    org.junit.jupiter.api.Assertions.assertTrue(true); // FIRST-SCRATCH-REPAIRED
                                 }
                                 """,
-                        List.of("import org.junit.jupiter.api.Test;", "import org.junit.jupiter.api.Assertions;")
+                        List.of(
+                                "import org.junit.jupiter.api.Test;",
+                                "import org.junit.jupiter.api.Assertions;",
+                                "import org.junit.jupiter.api.BeforeEach;"
+                        ),
+                        List.of(),
+                        List.of("private SampleService sampleService;"),
+                        List.of("""
+                                @BeforeEach
+                                @BeforeEach
+                                void setUp() {
+                                    sampleService = new SampleService();
+                                }
+                                """),
+                        ""
                 );
             }
-            return new GeneratedTestSnippet(
-                    classInfo.getTestClassName(),
-                    "shouldExecutePerform",
-                    """
-                            @Test
-                            void shouldExecutePerform() {
-                                SampleService sampleService = new SampleService();
-                                sampleService.perform();
-                                org.junit.jupiter.api.Assertions.assertTrue(sampleService != null); // SECOND-MERGED
-                            }
-                            """,
-                    List.of("import org.junit.jupiter.api.Test;", "import org.junit.jupiter.api.Assertions;")
-            );
+            throw new AssertionError("Generation retry should not be reached when scratch compile reasoning succeeds");
+        }
+    }
+
+    private static class PreMergeExecutionRepairLlmClient implements LlmClient {
+        private final AtomicInteger generationCalls = new AtomicInteger();
+        private final AtomicInteger reasoningCalls = new AtomicInteger();
+
+        @Override
+        public String requestStructuredResponse(String prompt) {
+            reasoningCalls.incrementAndGet();
+            return """
+                    {
+                      "decision":"APPLY_FIX",
+                      "actions":[
+                        {
+                          "type":"APPLY_PATCH",
+                          "args":{
+                            "path":"src/test/java/com/example/SampleServiceTestPreMergeScratch.java",
+                            "patch":"@@ -1,1 +1,1 @@\\n-        org.junit.jupiter.api.Assertions.assertTrue(false);\\n+        org.junit.jupiter.api.Assertions.assertTrue(true); // SCRATCH-EXEC-REPAIRED\\n"
+                          }
+                        }
+                      ],
+                      "memory_updates":{"knownMissingSymbols":[],"appliedFixSignatures":[],"contextCache":{}}
+                    }
+                    """;
+        }
+
+        @Override
+        public GeneratedTestSnippet generateTestSnippet(String prompt,
+                                                        TestClassInfo classInfo,
+                                                        TestMethodInfo methodInfo,
+                                                        MockPlan plan) {
+            if (generationCalls.getAndIncrement() == 0) {
+                return new GeneratedTestSnippet(
+                        classInfo.getTestClassName(),
+                        "shouldExecutePrimarySnippet",
+                        """
+                                @Test
+                                void shouldExecutePrimarySnippet() {
+                                    sampleService.perform();
+                                    org.junit.jupiter.api.Assertions.assertTrue(true);
+                                }
+                                """,
+                        List.of(
+                                "import org.junit.jupiter.api.Test;",
+                                "import org.junit.jupiter.api.Assertions;"
+                        ),
+                        List.of(),
+                        List.of("private SampleService sampleService;"),
+                        List.of(),
+                        ""
+                );
+            }
+            throw new AssertionError("Generation retry should not be reached when scratch execution reasoning succeeds");
         }
     }
 

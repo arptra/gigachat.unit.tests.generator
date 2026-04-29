@@ -109,5 +109,22 @@
       }
     ],
     "requiredImports": []
+  },
+  "REF_NULL_GUARD_RUNTIME_ALIGNMENT": {
+    "id": "ALIGN_${sourceClassUpper}_REF_NULL_GUARD",
+    "kind": "REF_NULL_GUARD_RUNTIME_ALIGNMENT",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Promote the zero-arg ${refTypeExpression} fixture to a created ${objectTypeFqcn} reference before rerunning ${sourceClassSimple}.",
+    "sourceClass": "${sourceClassSimple}",
+    "operations": [
+      {
+        "type": "promote_ref_initializer_to_created_object",
+        "testMethodName": "${testMethodName}",
+        "refVariable": "${refVariable}",
+        "refTypeExpression": "${refTypeExpression}",
+        "objectTypeFqcn": "${objectTypeFqcn}"
+      }
+    ],
+    "requiredImports": []
   }
 }

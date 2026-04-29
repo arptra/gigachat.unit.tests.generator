@@ -67,6 +67,34 @@ public class ExecutionFailureSupport {
                                                         ExecutionFailureParseResult failureParseResult,
                                                         List<TestReportFailure> reportFailures,
                                                         GeneratedTestSnippet snippet) {
+        return repairExecutionFailure(config,
+                classInfo,
+                methodInfo,
+                analysisSummary,
+                actionExecutor,
+                fixingOrchestrator,
+                compileResult,
+                executeResult,
+                generatedMethodName,
+                generatedMethodName,
+                failureParseResult,
+                reportFailures,
+                snippet);
+    }
+
+    public ExecutionRepairResult repairExecutionFailure(AgentConfig config,
+                                                        TestClassInfo classInfo,
+                                                        TestMethodInfo methodInfo,
+                                                        Analyze.AnalysisSummary analysisSummary,
+                                                        ToolActionExecutor actionExecutor,
+                                                        CompilationPipelineOrchestrator fixingOrchestrator,
+                                                        CompileResult compileResult,
+                                                        ExecuteResult executeResult,
+                                                        String generatedMethodName,
+                                                        String executionMethodName,
+                                                        ExecutionFailureParseResult failureParseResult,
+                                                        List<TestReportFailure> reportFailures,
+                                                        GeneratedTestSnippet snippet) {
         ExecutionPipelineOrchestrator orchestrator = new ExecutionPipelineOrchestrator(
                 logger,
                 compilerInvoker,
@@ -84,6 +112,7 @@ public class ExecutionFailureSupport {
                 compileResult,
                 executeResult,
                 generatedMethodName,
+                executionMethodName,
                 failureParseResult,
                 reportFailures);
     }

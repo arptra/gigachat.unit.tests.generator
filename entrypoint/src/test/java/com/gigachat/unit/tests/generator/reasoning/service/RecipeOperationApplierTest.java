@@ -231,6 +231,35 @@ class RecipeOperationApplierTest {
     }
 
     @Test
+    void shouldPromoteZeroArgRefInitializerOnlyInsideTargetMethod() {
+        String source = """
+                class NEW_AUTOTest {
+                    void anotherTest() {
+                        Ref ref = new Ref();
+                    }
+
+                    void NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr() {
+                        Ref ref = new Ref();
+                        Ref result = o.NEW_AUTO_EXECUTE(ref, plpClass);
+                    }
+                }
+                """;
+
+        RecipeOperationApplier applier = new RecipeOperationApplier("NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr");
+        String updated = applier.apply(source, Map.of(
+                "type", "promote_ref_initializer_to_created_object",
+                "testMethodName", "NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr",
+                "refVariable", "ref",
+                "refTypeExpression", "Ref",
+                "objectTypeFqcn", "bd.Abonent"
+        ));
+
+        assertTrue(updated.contains("void anotherTest() {\n        Ref ref = new Ref();"));
+        assertTrue(updated.contains("void NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr() {\n        Ref ref = new Ref(new bd.Abonent());"));
+        assertFalse(updated.contains("void NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr() {\n        Ref ref = new Ref();"));
+    }
+
+    @Test
     void shouldVerifyStaticVoidCallInsideMockScopeAndRemoveInstanceVerify() {
         String source = """
                 class ParentConnectionWorkflowTest {

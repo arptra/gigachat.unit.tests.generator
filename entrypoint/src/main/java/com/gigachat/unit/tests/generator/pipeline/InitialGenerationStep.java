@@ -33,6 +33,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.generation.GenerationS
 import com.gigachat.unit.tests.generator.pipeline.helpers.ExistingTestDetector;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestClassWriter;
 import com.gigachat.unit.tests.generator.pipeline.helpers.TestGenerationRegistry;
+import com.gigachat.unit.tests.generator.pipeline.helpers.PreMergeScratchValidator;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.AutoCorrectionStage;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.ExecutionFailureSupport;
 import com.gigachat.unit.tests.generator.pipeline.helpers.repair.GenerationRepairContextBuilder;
@@ -50,6 +51,7 @@ import com.gigachat.unit.tests.generator.reasoning.service.ExecutionFailureConte
 import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
 import com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor;
 import com.gigachat.unit.tests.generator.reasoning.service.ToolActionExecutor;
+import com.gigachat.unit.tests.generator.reasoning.workflow.exception.FixingFailureException;
 import com.gigachat.unit.tests.generator.resources.GenerationPatternCatalog;
 import com.gigachat.unit.tests.generator.resources.StateModelCatalog;
 import com.gigachat.unit.tests.generator.compile.classification.classify.CompilationErrorClassifier;
@@ -257,6 +259,115 @@ public class InitialGenerationStep {
                                 projectContextCollector,
                                 actionExecutor,
                                 snippet);
+                    }
+
+                    @Override
+                    public PreMergeScratchValidator.ScratchRepairOutcome repairPreMergeScratchCompilation(AgentConfig config,
+                                                                                                           TestClassInfo classInfo,
+                                                                                                           ProjectContextCollector projectContextCollector,
+                                                                                                           PreMergeScratchValidator.ScratchCompilationFailure scratchFailure) {
+                        ToolActionExecutor scratchActionExecutor = new ToolActionExecutor(
+                                new SourceFileEditor(),
+                                compilerInvoker,
+                                executionInvoker,
+                                config.getProjectPath(),
+                                scratchFailure.scratchFile(),
+                                scratchFailure.scratchClassFqcn(),
+                                scratchFailure.generatedMethodName());
+                        CompilationPipelineOrchestrator scratchFixingOrchestrator = new CompilationPipelineOrchestrator(
+                                compilerInvoker,
+                                reasoningService,
+                                projectContextCollector,
+                                scratchActionExecutor,
+                                new CompilationErrorClassifier(),
+                                logger,
+                                config.getProjectPath(),
+                                scratchFailure.scratchFile(),
+                                scratchFailure.scratchClassFqcn(),
+                                scratchFailure.generatedMethodName());
+                        try {
+                            return PreMergeScratchValidator.ScratchRepairOutcome.success(
+                                    scratchFixingOrchestrator.runFixingLoop());
+                        } catch (FixingFailureException exception) {
+                            logger.error("Pre-merge scratch compile reasoning failed for method "
+                                    + scratchFailure.generatedMethodName()
+                                    + ": "
+                                    + exception.getMessage(),
+                                    exception);
+                            return PreMergeScratchValidator.ScratchRepairOutcome.failed(exception.getLastResult());
+                        }
+                    }
+
+                    @Override
+                    public PreMergeScratchValidator.ScratchExecutionRepairOutcome repairPreMergeScratchExecution(AgentConfig config,
+                                                                                                                  TestClassInfo classInfo,
+                                                                                                                  TestMethodInfo methodInfo,
+                                                                                                                  Analyze.AnalysisSummary analysisSummary,
+                                                                                                                  ProjectContextCollector projectContextCollector,
+                                                                                                                  PreMergeScratchValidator.ScratchExecutionFailure scratchFailure) {
+                        ToolActionExecutor scratchActionExecutor = new ToolActionExecutor(
+                                new SourceFileEditor(),
+                                compilerInvoker,
+                                executionInvoker,
+                                config.getProjectPath(),
+                                scratchFailure.scratchFile(),
+                                scratchFailure.scratchClassFqcn(),
+                                scratchFailure.generatedMethodName());
+                        CompilationPipelineOrchestrator scratchFixingOrchestrator = new CompilationPipelineOrchestrator(
+                                compilerInvoker,
+                                reasoningService,
+                                projectContextCollector,
+                                scratchActionExecutor,
+                                new CompilationErrorClassifier(),
+                                logger,
+                                config.getProjectPath(),
+                                scratchFailure.scratchFile(),
+                                scratchFailure.scratchClassFqcn(),
+                                scratchFailure.generatedMethodName());
+                        TestClassInfo scratchClassInfo = new TestClassInfo(
+                                classInfo.getClassName(),
+                                scratchFailure.scratchClassName(),
+                                scratchFailure.scratchFile(),
+                                classInfo.getImports(),
+                                classInfo.getMethods(),
+                                classInfo.getClassMetadata());
+                        ExecutionFailureParseResult failureParseResult = executionFailureSupport.parseExecutionLog(
+                                scratchFailure.executeResult());
+                        List<TestReportFailure> reportFailures = executionFailureSupport.parseExecutionReport(
+                                config.getProjectPath(),
+                                failureParseResult);
+                        try {
+                            ExecutionRepairResult repairResult = executionFailureSupport.repairExecutionFailure(
+                                    config,
+                                    scratchClassInfo,
+                                    methodInfo,
+                                    analysisSummary,
+                                    scratchActionExecutor,
+                                    scratchFixingOrchestrator,
+                                    scratchFailure.compileResult(),
+                                    scratchFailure.executeResult(),
+                                    scratchFailure.generatedMethodName(),
+                                    scratchFailure.executeWholeSuite() ? null : scratchFailure.generatedMethodName(),
+                                    failureParseResult,
+                                    reportFailures,
+                                    scratchFailure.snippet());
+                            return repairResult.success()
+                                    ? PreMergeScratchValidator.ScratchExecutionRepairOutcome.success(
+                                    repairResult.compileResult(),
+                                    repairResult.executeResult())
+                                    : PreMergeScratchValidator.ScratchExecutionRepairOutcome.failed(
+                                    repairResult.compileResult(),
+                                    repairResult.executeResult());
+                        } catch (RuntimeException exception) {
+                            logger.error("Pre-merge scratch execution reasoning failed for method "
+                                    + scratchFailure.generatedMethodName()
+                                    + ": "
+                                    + exception.getMessage(),
+                                    exception);
+                            return PreMergeScratchValidator.ScratchExecutionRepairOutcome.failed(
+                                    scratchFailure.compileResult(),
+                                    scratchFailure.executeResult());
+                        }
                     }
 
                     @Override

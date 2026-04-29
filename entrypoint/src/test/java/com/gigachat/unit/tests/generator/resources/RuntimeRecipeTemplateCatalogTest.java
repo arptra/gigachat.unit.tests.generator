@@ -126,4 +126,25 @@ class RuntimeRecipeTemplateCatalogTest {
         List<Map<String, Object>> operations = (List<Map<String, Object>>) recipe.get("operations");
         assertEquals("ensure_minimum_rebound_attempts", operations.get(0).get("type"));
     }
+
+    @Test
+    void shouldRenderRefNullGuardRuntimeRecipeTemplate() {
+        RuntimeRecipeTemplateCatalog catalog = new RuntimeRecipeTemplateCatalog();
+
+        Map<String, Object> recipe = catalog.render("REF_NULL_GUARD_RUNTIME_ALIGNMENT", Map.of(
+                "sourceClassUpper", "NEW_AUTO",
+                "sourceClassSimple", "NEW_AUTO",
+                "testMethodName", "NEW_AUTO_EXECUTE_shouldReturnResolutionRefAndUpdateCacheMgr",
+                "refVariable", "ref",
+                "refTypeExpression", "Ref",
+                "objectTypeFqcn", "bd.Abonent"
+        ));
+
+        assertEquals("ALIGN_NEW_AUTO_REF_NULL_GUARD", recipe.get("id"));
+        assertEquals("REF_NULL_GUARD_RUNTIME_ALIGNMENT", recipe.get("kind"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>) recipe.get("operations");
+        assertEquals("promote_ref_initializer_to_created_object", operations.get(0).get("type"));
+        assertEquals("ref", operations.get(0).get("refVariable"));
+    }
 }

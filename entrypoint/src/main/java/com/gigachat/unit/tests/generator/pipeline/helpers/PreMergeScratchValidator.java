@@ -71,6 +71,25 @@ public class PreMergeScratchValidator {
                                      GeneratedTestSnippet snippet,
                                      boolean compileEnabled,
                                      boolean executeEnabled) {
+        return validate(projectRoot, classInfo, snippet, compileEnabled, executeEnabled, null, null);
+    }
+
+    public ValidationResult validate(Path projectRoot,
+                                     TestClassInfo classInfo,
+                                     GeneratedTestSnippet snippet,
+                                     boolean compileEnabled,
+                                     boolean executeEnabled,
+                                     ScratchCompilationRepair compileRepair) {
+        return validate(projectRoot, classInfo, snippet, compileEnabled, executeEnabled, compileRepair, null);
+    }
+
+    public ValidationResult validate(Path projectRoot,
+                                     TestClassInfo classInfo,
+                                     GeneratedTestSnippet snippet,
+                                     boolean compileEnabled,
+                                     boolean executeEnabled,
+                                     ScratchCompilationRepair compileRepair,
+                                     ScratchExecutionRepair executionRepair) {
         Objects.requireNonNull(projectRoot, "projectRoot");
         Objects.requireNonNull(classInfo, "classInfo");
         Objects.requireNonNull(snippet, "snippet");
@@ -100,7 +119,13 @@ public class PreMergeScratchValidator {
                     targetClassPopulated,
                     shouldExecute,
                     snippetContainsSiblingTests);
-            String executionMethodName = scratchPlan.executeWholeSuite() ? null : scratchPlan.effectiveMethodName();
+            GeneratedTestSnippet validatedSnippet = scratchPlan.preparedSnippet();
+            String replacementSource = "";
+            boolean replaceTargetClassSource = false;
+            String replacementDiagnostic = scratchPlan.validatesMergedClass()
+                    ? "PRE_VALIDATED_MERGED_SCRATCH_SOURCE"
+                    : "PRE_VALIDATED_SCRATCH_SNIPPET";
+            String scratchClassFqcn = resolveQualifiedClassName(classInfo.getTargetPath(), scratchClassName);
             Files.createDirectories(scratchFile.getParent());
             Files.writeString(scratchFile,
                     scratchPlan.scratchSource(),
@@ -114,31 +139,166 @@ public class PreMergeScratchValidator {
             if (shouldCompile) {
                 compileResult = compilerInvoker.compileWithoutCache(projectRoot, scratchFile, snippet.methodName());
                 if (!compileResult.success()) {
-                    return ValidationResult.failed("SCRATCH_COMPILATION_FAILED", compileResult, null);
+                    logger.warn("[SIBLING_ISOLATION] Scratch compilation failed for "
+                            + snippet.methodName()
+                            + " in "
+                            + scratchClassName
+                            + ": "
+                            + summariseCompileFailure(compileResult));
+                    boolean repairAttempted = false;
+                    if (compileRepair != null) {
+                        repairAttempted = true;
+                        ScratchRepairOutcome repairOutcome = compileRepair.repair(new ScratchCompilationFailure(
+                                projectRoot,
+                                classInfo,
+                                scratchPlan.preparedSnippet(),
+                                scratchFile,
+                                scratchClassName,
+                                scratchClassFqcn,
+                                scratchPlan.effectiveMethodName(),
+                                scratchPlan.validatesMergedClass(),
+                                compileResult));
+                        if (repairOutcome != null && repairOutcome.compileResult() != null) {
+                            compileResult = repairOutcome.compileResult();
+                        }
+                        if (repairOutcome != null && repairOutcome.success() && compileResult != null && compileResult.success()) {
+                            ScratchCarryover carryover = buildScratchCarryover(scratchFile,
+                                    classInfo,
+                                    scratchPlan,
+                                    scratchClassName);
+                            if (carryover != null) {
+                                validatedSnippet = carryover.validatedSnippet();
+                                replacementSource = carryover.replacementSource();
+                                replaceTargetClassSource = carryover.replaceTargetClassSource();
+                                replacementDiagnostic = carryover.replacementDiagnostic();
+                            }
+                        }
+                    }
+                    if (!compileResult.success()) {
+                        logger.trace("ACTION",
+                                snippet.methodName(),
+                                "SCRATCH_COMPILATION_FAILED",
+                                "action=RETURN_TO_GENERATION_RETRY compileReasoning="
+                                        + (repairAttempted ? "FAILED_PRE_MERGE_SCRATCH_REPAIR" : "SKIPPED")
+                                        + " reason=pre-merge scratch compilation failed");
+                        return ValidationResult.failed("SCRATCH_COMPILATION_FAILED",
+                                compileResult,
+                                null,
+                                validatedSnippet,
+                                replacementSource,
+                                replaceTargetClassSource,
+                                replacementDiagnostic);
+                    }
                 }
             }
 
+            String executionMethodName = scratchPlan.executeWholeSuite() ? null : validatedSnippet.methodName();
             if (shouldExecute) {
                 ExecuteResult executeResult = executionInvoker.execute(projectRoot, scratchFile, executionMethodName);
                 if (!executeResult.success()) {
-                    return ValidationResult.failed("SCRATCH_EXECUTION_FAILED", compileResult, executeResult);
+                    logger.warn("[SIBLING_ISOLATION] Scratch execution failed for "
+                            + scratchPlan.effectiveMethodName()
+                            + " in "
+                            + scratchClassName
+                            + ": "
+                            + summariseExecutionFailure(executeResult));
+                    boolean repairAttempted = false;
+                    if (executionRepair != null) {
+                        repairAttempted = true;
+                        ScratchExecutionRepairOutcome repairOutcome = executionRepair.repair(new ScratchExecutionFailure(
+                                projectRoot,
+                                classInfo,
+                                scratchPlan.preparedSnippet(),
+                                scratchFile,
+                                scratchClassName,
+                                scratchClassFqcn,
+                                scratchPlan.effectiveMethodName(),
+                                scratchPlan.validatesMergedClass(),
+                                scratchPlan.executeWholeSuite(),
+                                compileResult,
+                                executeResult));
+                        if (repairOutcome != null && repairOutcome.compileResult() != null) {
+                            compileResult = repairOutcome.compileResult();
+                        }
+                        if (repairOutcome != null && repairOutcome.executeResult() != null) {
+                            executeResult = repairOutcome.executeResult();
+                        }
+                        if (repairOutcome != null
+                                && repairOutcome.success()
+                                && (compileResult == null || compileResult.success())
+                                && executeResult != null
+                                && executeResult.success()) {
+                            ScratchCarryover carryover = buildScratchCarryover(scratchFile,
+                                    classInfo,
+                                    scratchPlan,
+                                    scratchClassName);
+                            if (carryover != null) {
+                                validatedSnippet = carryover.validatedSnippet();
+                                replacementSource = carryover.replacementSource();
+                                replaceTargetClassSource = carryover.replaceTargetClassSource();
+                                replacementDiagnostic = carryover.replacementDiagnostic();
+                            }
+                        }
+                    }
+                    if (!executeResult.success()) {
+                        logger.trace("ACTION",
+                                snippet.methodName(),
+                                "SCRATCH_EXECUTION_FAILED",
+                                "action=RETURN_TO_GENERATION_RETRY executionReasoning="
+                                        + (repairAttempted ? "FAILED_PRE_MERGE_SCRATCH_REPAIR" : "SKIPPED")
+                                        + " reason=pre-merge scratch execution failed");
+                        return ValidationResult.failed("SCRATCH_EXECUTION_FAILED",
+                                compileResult,
+                                executeResult,
+                                validatedSnippet,
+                                replacementSource,
+                                replaceTargetClassSource,
+                                replacementDiagnostic);
+                    }
                 }
-                return ValidationResult.passed(compileResult, executeResult);
+                if (compileResult != null && !compileResult.success()) {
+                    return ValidationResult.failed("SCRATCH_EXECUTION_FAILED",
+                            compileResult,
+                            executeResult,
+                            validatedSnippet,
+                            replacementSource,
+                            replaceTargetClassSource,
+                            replacementDiagnostic);
+                }
+                return ValidationResult.passed(validatedSnippet,
+                        compileResult,
+                        executeResult,
+                        replacementSource,
+                        replaceTargetClassSource,
+                        replacementDiagnostic);
             }
 
-            return ValidationResult.passed(compileResult, null);
+            return ValidationResult.passed(validatedSnippet,
+                    compileResult,
+                    null,
+                    replacementSource,
+                    replaceTargetClassSource,
+                    replacementDiagnostic);
         } catch (IOException exception) {
             String message = "Unable to write scratch validation class " + scratchFile + ": " + exception.getMessage();
             logger.warn("[SIBLING_ISOLATION] " + message);
             return ValidationResult.failed(message,
                     new CompileResult(false, List.of(message), "", exception.getMessage()),
-                    null);
+                    null,
+                    snippet,
+                    "",
+                    false,
+                    "");
         } catch (RuntimeException exception) {
             String message = "Unable to prepare scratch validation class " + scratchFile + ": " + exception.getMessage();
             logger.warn("[SIBLING_ISOLATION] " + message);
             return ValidationResult.failed("SCRATCH_PREPARATION_FAILED",
                     new CompileResult(false, List.of(message), "", exception.toString()),
-                    null);
+                    null,
+                    snippet,
+                    "",
+                    false,
+                    "");
         } finally {
             cleanupScratchArtifacts(classInfo.getTargetPath(), scratchFile, scratchClassName);
         }
@@ -162,6 +322,7 @@ public class PreMergeScratchValidator {
         boolean executeWholeScratchSuite = shouldExecute && snippetContainsSiblingTests;
         return new ScratchValidationPlan(
                 renderScratchSource(classInfo, snippet, scratchClassName),
+                snippet,
                 snippet.methodName(),
                 executeWholeScratchSuite,
                 false
@@ -191,6 +352,7 @@ public class PreMergeScratchValidator {
             boolean executeWholeSuite = shouldExecute && countTestMethods(scratchSource) > 1;
             return new ScratchValidationPlan(
                     scratchSource,
+                    appendResult.mergedSnippet(),
                     appendResult.mergedSnippet().methodName(),
                     executeWholeSuite,
                     true
@@ -284,6 +446,164 @@ public class PreMergeScratchValidator {
                     + exception.getMessage());
             return "";
         }
+    }
+
+    private ScratchCarryover buildScratchCarryover(Path scratchFile,
+                                                   TestClassInfo classInfo,
+                                                   ScratchValidationPlan scratchPlan,
+                                                   String scratchClassName) {
+        try {
+            String scratchSource = Files.readString(scratchFile, StandardCharsets.UTF_8);
+            String rewrittenSource = rewriteScratchSourceClassName(scratchSource,
+                    classInfo,
+                    scratchClassName);
+            if (scratchPlan.validatesMergedClass()) {
+                return new ScratchCarryover(scratchPlan.preparedSnippet(),
+                        rewrittenSource,
+                        true,
+                        "PRE_VALIDATED_MERGED_SCRATCH_SOURCE");
+            }
+            return extractSnippetFromClassSource(rewrittenSource,
+                    classInfo.getTestClassName(),
+                    scratchPlan.preparedSnippet().methodName())
+                    .map(snippet -> new ScratchCarryover(snippet, "", false, "PRE_VALIDATED_SCRATCH_SNIPPET"))
+                    .orElseGet(() -> new ScratchCarryover(
+                            new GeneratedTestSnippet(classInfo.getTestClassName(),
+                                    scratchPlan.preparedSnippet().methodName(),
+                                    scratchPlan.preparedSnippet().methodBody(),
+                                    scratchPlan.preparedSnippet().imports(),
+                                    scratchPlan.preparedSnippet().classAnnotations(),
+                                    scratchPlan.preparedSnippet().fieldDeclarations(),
+                                    scratchPlan.preparedSnippet().helperMethods(),
+                                    rewrittenSource),
+                            "",
+                            false,
+                            "PRE_VALIDATED_SCRATCH_FULL_SOURCE"));
+        } catch (IOException exception) {
+            logger.warn("[SIBLING_ISOLATION] Unable to capture repaired scratch source: " + exception.getMessage());
+            return null;
+        }
+    }
+
+    private String rewriteScratchSourceClassName(String source,
+                                                 TestClassInfo classInfo,
+                                                 String scratchClassName) {
+        if (source == null || source.isBlank()) {
+            return "";
+        }
+        try {
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(source));
+            ClassOrInterfaceDeclaration declaration = locateClass(unit, scratchClassName);
+            if (declaration != null) {
+                declaration.setName(classInfo.getTestClassName());
+            }
+            String packageName = determinePackage(classInfo.getTargetPath());
+            if (!packageName.isBlank() && unit.getPackageDeclaration().isEmpty()) {
+                unit.setPackageDeclaration(packageName);
+            }
+            return normaliseLineEndings(unit.toString());
+        } catch (ParseProblemException exception) {
+            return normaliseLineEndings(source.replace("class " + scratchClassName,
+                    "class " + classInfo.getTestClassName()));
+        }
+    }
+
+    private Optional<GeneratedTestSnippet> extractSnippetFromClassSource(String source,
+                                                                         String expectedClassName,
+                                                                         String preferredMethodName) {
+        if (source == null || source.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            CompilationUnit unit = StaticJavaParser.parse(JavaImportSanitizer.sanitizeSourceImports(source));
+            ClassOrInterfaceDeclaration classDeclaration = locateClass(unit, expectedClassName);
+            if (classDeclaration == null) {
+                return Optional.empty();
+            }
+            MethodDeclaration method = locatePreferredMethod(classDeclaration, preferredMethodName);
+            if (method == null) {
+                return Optional.empty();
+            }
+            MethodDeclaration copy = method.clone();
+            ensureTestAnnotation(copy);
+            List<String> imports = new ArrayList<>();
+            for (ImportDeclaration declaration : unit.getImports()) {
+                String line = declaration.toString().trim();
+                if (!line.isEmpty()) {
+                    imports.add(line);
+                }
+            }
+            imports = new ArrayList<>(JavaImportSanitizer.sanitizeImports(imports));
+            return Optional.of(new GeneratedTestSnippet(expectedClassName,
+                    copy.getNameAsString(),
+                    normaliseLineEndings(copy.toString()),
+                    imports,
+                    collectClassAnnotations(classDeclaration),
+                    collectFieldDeclarations(classDeclaration),
+                    collectHelperMethods(classDeclaration, method),
+                    normaliseLineEndings(JavaImportSanitizer.sanitizeSourceImports(unit.toString()))));
+        } catch (ParseProblemException exception) {
+            logger.warn("[SIBLING_ISOLATION] Unable to extract repaired snippet from scratch source: "
+                    + exception.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private MethodDeclaration locatePreferredMethod(ClassOrInterfaceDeclaration declaration, String preferredMethodName) {
+        if (declaration == null) {
+            return null;
+        }
+        if (preferredMethodName != null && !preferredMethodName.isBlank()) {
+            MethodDeclaration preferred = declaration.getMethodsByName(preferredMethodName).stream()
+                    .findFirst()
+                    .orElse(null);
+            if (preferred != null) {
+                return preferred;
+            }
+        }
+        return declaration.getMethods().stream()
+                .filter(this::hasTestAnnotation)
+                .findFirst()
+                .orElseGet(() -> declaration.getMethods().stream().findFirst().orElse(null));
+    }
+
+    private List<String> collectClassAnnotations(ClassOrInterfaceDeclaration declaration) {
+        List<String> annotations = new ArrayList<>();
+        declaration.getAnnotations().forEach(annotation -> {
+            String value = normaliseLineEndings(annotation.toString()).trim();
+            if (!value.isEmpty() && !annotations.contains(value)) {
+                annotations.add(value);
+            }
+        });
+        return annotations;
+    }
+
+    private List<String> collectFieldDeclarations(ClassOrInterfaceDeclaration declaration) {
+        List<String> fields = new ArrayList<>();
+        for (BodyDeclaration<?> member : declaration.getMembers()) {
+            if (!member.isFieldDeclaration()) {
+                continue;
+            }
+            String value = normaliseLineEndings(member.asFieldDeclaration().toString()).trim();
+            if (!value.isEmpty() && !fields.contains(value)) {
+                fields.add(value);
+            }
+        }
+        return fields;
+    }
+
+    private List<String> collectHelperMethods(ClassOrInterfaceDeclaration declaration, MethodDeclaration primaryMethod) {
+        List<String> helpers = new ArrayList<>();
+        for (MethodDeclaration candidate : declaration.getMethods()) {
+            if (candidate.equals(primaryMethod)) {
+                continue;
+            }
+            String value = normaliseLineEndings(candidate.toString()).trim();
+            if (!value.isEmpty() && !helpers.contains(value)) {
+                helpers.add(value);
+            }
+        }
+        return helpers;
     }
 
     private void ensureGeneratedMethodAnnotated(CompilationUnit unit, String methodName) {
@@ -512,6 +832,14 @@ public class PreMergeScratchValidator {
         return separator >= 0 ? fqcn.substring(0, separator) : "";
     }
 
+    private String resolveQualifiedClassName(Path targetFile, String className) {
+        String packageName = determinePackage(targetFile);
+        if (packageName == null || packageName.isBlank()) {
+            return className;
+        }
+        return packageName + "." + className;
+    }
+
     private void cleanupScratchArtifacts(Path targetTestFile, Path scratchFile, String scratchClassName) {
         if (policy.cleanupScratchSource()) {
             try {
@@ -576,6 +904,61 @@ public class PreMergeScratchValidator {
             return "";
         }
         return remainder.substring(0, lastSlash).replace('/', '.');
+    }
+
+    private String summariseCompileFailure(CompileResult compileResult) {
+        if (compileResult == null) {
+            return "unknown";
+        }
+        String stderr = compileResult.stderr();
+        if (stderr != null && !stderr.isBlank()) {
+            return abbreviate(stderr.replaceAll("\\s+", " ").trim());
+        }
+        if (compileResult.messages() != null && !compileResult.messages().isEmpty()) {
+            return abbreviate(String.join(" | ", compileResult.messages()).replaceAll("\\s+", " ").trim());
+        }
+        String stdout = compileResult.stdout();
+        if (stdout != null && !stdout.isBlank()) {
+            return abbreviate(stdout.replaceAll("\\s+", " ").trim());
+        }
+        return "unknown";
+    }
+
+    private String summariseExecutionFailure(ExecuteResult executeResult) {
+        if (executeResult == null) {
+            return "unknown";
+        }
+        String stderr = executeResult.stderr();
+        if (stderr != null && !stderr.isBlank()) {
+            return abbreviate(stderr.replaceAll("\\s+", " ").trim());
+        }
+        List<String> failedTests = executeResult.failedTests();
+        if (failedTests != null && !failedTests.isEmpty()) {
+            return abbreviate(String.join(" | ", failedTests).replaceAll("\\s+", " ").trim());
+        }
+        String stdout = executeResult.stdout();
+        if (stdout != null && !stdout.isBlank()) {
+            return abbreviate(stdout.replaceAll("\\s+", " ").trim());
+        }
+        return "unknown";
+    }
+
+    private String abbreviate(String value) {
+        if (value == null || value.length() <= 1800) {
+            return value;
+        }
+        return value.substring(0, 1800) + "...";
+    }
+
+    private String normaliseLineEndings(String source) {
+        if (source == null) {
+            return "";
+        }
+        String unix = source.replace("\r\n", "\n").replace('\r', '\n');
+        if ("\n".equals(System.lineSeparator())) {
+            return unix;
+        }
+        return unix.replace("\n", System.lineSeparator());
     }
 
     private ClassOrInterfaceDeclaration locateClass(CompilationUnit unit, String className) {
@@ -680,24 +1063,118 @@ public class PreMergeScratchValidator {
     public record ValidationResult(boolean success,
                                    CompileResult compileResult,
                                    ExecuteResult executeResult,
-                                   String failureReason) {
+                                   String failureReason,
+                                   GeneratedTestSnippet validatedSnippet,
+                                   String replacementSource,
+                                   boolean replaceTargetClassSource,
+                                   String replacementDiagnostic) {
 
         public static ValidationResult passed() {
-            return new ValidationResult(true, null, null, "");
+            return new ValidationResult(true, null, null, "", null, "", false, "");
         }
 
-        public static ValidationResult passed(CompileResult compileResult, ExecuteResult executeResult) {
-            return new ValidationResult(true, compileResult, executeResult, "");
+        public static ValidationResult passed(GeneratedTestSnippet validatedSnippet,
+                                              CompileResult compileResult,
+                                              ExecuteResult executeResult,
+                                              String replacementSource,
+                                              boolean replaceTargetClassSource,
+                                              String replacementDiagnostic) {
+            return new ValidationResult(true,
+                    compileResult,
+                    executeResult,
+                    "",
+                    validatedSnippet,
+                    replacementSource == null ? "" : replacementSource,
+                    replaceTargetClassSource,
+                    replacementDiagnostic == null ? "" : replacementDiagnostic);
         }
 
         public static ValidationResult failed(String failureReason,
                                               CompileResult compileResult,
-                                              ExecuteResult executeResult) {
-            return new ValidationResult(false, compileResult, executeResult, failureReason == null ? "" : failureReason);
+                                              ExecuteResult executeResult,
+                                              GeneratedTestSnippet validatedSnippet,
+                                              String replacementSource,
+                                              boolean replaceTargetClassSource,
+                                              String replacementDiagnostic) {
+            return new ValidationResult(false,
+                    compileResult,
+                    executeResult,
+                    failureReason == null ? "" : failureReason,
+                    validatedSnippet,
+                    replacementSource == null ? "" : replacementSource,
+                    replaceTargetClassSource,
+                    replacementDiagnostic == null ? "" : replacementDiagnostic);
         }
     }
 
+    @FunctionalInterface
+    public interface ScratchCompilationRepair {
+        ScratchRepairOutcome repair(ScratchCompilationFailure failure);
+    }
+
+    @FunctionalInterface
+    public interface ScratchExecutionRepair {
+        ScratchExecutionRepairOutcome repair(ScratchExecutionFailure failure);
+    }
+
+    public record ScratchCompilationFailure(Path projectRoot,
+                                            TestClassInfo classInfo,
+                                            GeneratedTestSnippet snippet,
+                                            Path scratchFile,
+                                            String scratchClassName,
+                                            String scratchClassFqcn,
+                                            String generatedMethodName,
+                                            boolean validatesMergedClass,
+                                            CompileResult compileResult) {
+    }
+
+    public record ScratchRepairOutcome(boolean success, CompileResult compileResult) {
+
+        public static ScratchRepairOutcome success(CompileResult compileResult) {
+            return new ScratchRepairOutcome(true, compileResult);
+        }
+
+        public static ScratchRepairOutcome failed(CompileResult compileResult) {
+            return new ScratchRepairOutcome(false, compileResult);
+        }
+    }
+
+    public record ScratchExecutionFailure(Path projectRoot,
+                                          TestClassInfo classInfo,
+                                          GeneratedTestSnippet snippet,
+                                          Path scratchFile,
+                                          String scratchClassName,
+                                          String scratchClassFqcn,
+                                          String generatedMethodName,
+                                          boolean validatesMergedClass,
+                                          boolean executeWholeSuite,
+                                          CompileResult compileResult,
+                                          ExecuteResult executeResult) {
+    }
+
+    public record ScratchExecutionRepairOutcome(boolean success,
+                                                CompileResult compileResult,
+                                                ExecuteResult executeResult) {
+
+        public static ScratchExecutionRepairOutcome success(CompileResult compileResult,
+                                                            ExecuteResult executeResult) {
+            return new ScratchExecutionRepairOutcome(true, compileResult, executeResult);
+        }
+
+        public static ScratchExecutionRepairOutcome failed(CompileResult compileResult,
+                                                           ExecuteResult executeResult) {
+            return new ScratchExecutionRepairOutcome(false, compileResult, executeResult);
+        }
+    }
+
+    private record ScratchCarryover(GeneratedTestSnippet validatedSnippet,
+                                    String replacementSource,
+                                    boolean replaceTargetClassSource,
+                                    String replacementDiagnostic) {
+    }
+
     private record ScratchValidationPlan(String scratchSource,
+                                         GeneratedTestSnippet preparedSnippet,
                                          String effectiveMethodName,
                                          boolean executeWholeSuite,
                                          boolean validatesMergedClass) {

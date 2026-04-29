@@ -332,6 +332,98 @@ class CoveragePipelineOrchestratorTest {
     }
 
     @Test
+    void shouldAllowSecondCoverageReasoningRoundAfterRuntimeRepairWithSameCoverageSignature() throws Exception {
+        Path testFile = createTestFile();
+        AtomicInteger llmCalls = new AtomicInteger();
+        AtomicInteger patchCount = new AtomicInteger();
+        AtomicBoolean runtimeRepaired = new AtomicBoolean(false);
+
+        CompilationReasoningService reasoningService = new CompilationReasoningService(
+                new LlmClient() {
+                    @Override
+                    public String requestStructuredResponse(String prompt) {
+                        llmCalls.incrementAndGet();
+                        return """
+                                {
+                                  "decision": "APPLY_FIX",
+                                  "actions": [
+                                    { "type": "APPLY_PATCH", "args": { "path": "%s", "patch": "@@\\n-assertTrue(false);\\n+assertTrue(true);\\n" } }
+                                  ],
+                                  "memory_updates": {}
+                                }
+                                """.formatted(testFile.toString().replace("\\", "\\\\"));
+                    }
+
+                    @Override
+                    public com.gigachat.unit.tests.generator.dto.GeneratedTestSnippet generateTestSnippet(String prompt,
+                                                                                                          com.gigachat.unit.tests.generator.dto.TestClassInfo classInfo,
+                                                                                                          com.gigachat.unit.tests.generator.dto.TestMethodInfo methodInfo,
+                                                                                                          com.gigachat.unit.tests.generator.dto.MockPlan plan) {
+                        throw new UnsupportedOperationException();
+                    }
+                },
+                new com.gigachat.unit.tests.generator.reasoning.prompt.CompilationReasoningPromptBuilder(),
+                new ReasoningResponseParser());
+
+        CoveragePipelineOrchestrator orchestrator = new CoveragePipelineOrchestrator(
+                new PipelineLogger(tempDir),
+                successCompiler(),
+                (projectRoot, testClassFile, methodName) -> {
+                    if (patchCount.get() == 1 && !runtimeRepaired.get()) {
+                        return new ExecuteResult(false,
+                                List.of("shouldSendWelcomeEmailWithoutError"),
+                                "",
+                                "AssertionFailedError: expected: <true> but was: <false>");
+                    }
+                    return new ExecuteResult(true, List.of(), "", "");
+                },
+                reasoningService);
+
+        ToolActionExecutor executor = new ToolActionExecutor(
+                new com.gigachat.unit.tests.generator.reasoning.service.SourceFileEditor(),
+                successCompiler(),
+                successExecutor(),
+                tempDir,
+                testFile,
+                "com.example.NotificationServiceTest",
+                "shouldSendWelcomeEmailWithoutError") {
+            @Override
+            public ActionExecutionResult execute(com.gigachat.unit.tests.generator.reasoning.model.ToolAction action) {
+                patchCount.incrementAndGet();
+                return new ActionExecutionResult(Map.of(), List.of("APPLY_PATCH"));
+            }
+        };
+
+        CoveragePipelineOrchestrator.CoverageStageResult result = orchestrator.run(
+                tempDir,
+                testFile,
+                "com.example.NotificationServiceTest",
+                "shouldSendWelcomeEmailWithoutError",
+                List.of(60),
+                () -> patchCount.get() >= 2
+                        ? new CoverageResult(true, true, new CoverageSummary("NotificationService", "sendWelcome", 3, 0, 1, 0), tempDir.resolve("jacoco.xml"), "", "")
+                        : new CoverageResult(true, true, new CoverageSummary("NotificationService", "sendWelcome", 1, 2, 0, 1), tempDir.resolve("jacoco.xml"), "", ""),
+                executor,
+                new ProjectContextCollector(tempDir),
+                noOpFixingOrchestrator(testFile),
+                (compileResult, executeResult) -> {
+                    runtimeRepaired.set(true);
+                    return new CoveragePipelineOrchestrator.RuntimeRegressionResult(
+                            true,
+                            compileResult,
+                            new ExecuteResult(true, List.of(), "", ""),
+                            new ActionExecutionResult(Map.of("runtimeRepair", "sibling-fixed"), List.of("RUNTIME_SIBLING_REPAIR")));
+                });
+
+        assertTrue(result.success());
+        assertEquals(2, llmCalls.get(), "Expected coverage reasoning to get a second round after runtime repair");
+        assertEquals(2, patchCount.get(), "Expected a second coverage fix after runtime repair kept the same signature");
+        String logs = Files.readString(tempDir.resolve(".agent/logs/pipeline.log"));
+        assertTrue(logs.contains("Allowing follow-up reasoning after runtime repair for shouldSendWelcomeEmailWithoutError"));
+        assertTrue(logs.contains("Allowing repeated coverage signature after bounded follow-up for shouldSendWelcomeEmailWithoutError"));
+    }
+
+    @Test
     void shouldReturnToExecutionRepairWhenCoverageMeasurementSeesFailingSiblingTests() throws Exception {
         Path testFile = createTestFile();
         AtomicBoolean runtimeRepaired = new AtomicBoolean(false);

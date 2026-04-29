@@ -145,15 +145,45 @@ public class ToolContextActionExecutor {
 
     private Path resolveClassToPath(String className) {
         for (String candidateClassName : resolveProjectClassCandidates(className)) {
-            String relative = candidateClassName.replace('.', '/') + ".java";
-            for (String sourceRoot : List.of("src/main/java", "src/test/java")) {
-                Path candidate = projectRoot.resolve(sourceRoot).resolve(relative).normalize().toAbsolutePath();
-                if (Files.exists(candidate)) {
-                    return candidate;
+            for (String sourceClassName : candidateSourceClassNames(candidateClassName)) {
+                String relative = sourceClassName.replace('.', '/') + ".java";
+                for (String sourceRoot : List.of("src/main/java", "src/test/java")) {
+                    Path candidate = projectRoot.resolve(sourceRoot).resolve(relative).normalize().toAbsolutePath();
+                    if (Files.exists(candidate)) {
+                        return candidate;
+                    }
                 }
             }
         }
         return null;
+    }
+
+    private List<String> candidateSourceClassNames(String className) {
+        if (className == null || className.isBlank()) {
+            return List.of();
+        }
+        List<String> candidates = new ArrayList<>();
+        String normalized = className.replace('$', '.');
+        candidates.add(normalized);
+        String ownerCandidate = normalized;
+        while ((ownerCandidate = nestedOwnerCandidate(ownerCandidate)) != null) {
+            candidates.add(ownerCandidate);
+        }
+        return candidates.stream().distinct().toList();
+    }
+
+    private String nestedOwnerCandidate(String className) {
+        int lastDot = className.lastIndexOf('.');
+        if (lastDot < 0) {
+            return null;
+        }
+        String owner = className.substring(0, lastDot);
+        int ownerLastDot = owner.lastIndexOf('.');
+        if (ownerLastDot < 0 || ownerLastDot + 1 >= owner.length()) {
+            return null;
+        }
+        String ownerLastSegment = owner.substring(ownerLastDot + 1);
+        return Character.isUpperCase(ownerLastSegment.charAt(0)) ? owner : null;
     }
 
     private List<String> resolveProjectClassCandidates(String className) {

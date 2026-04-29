@@ -70,6 +70,11 @@ public class RecipeOperationApplier {
                     requireString(operation, "sutMethod"),
                     requireString(operation, "userVariable"),
                     parseInt(operation.get("minimumAttempts"), 3));
+            case "promote_ref_initializer_to_created_object" -> promoteRefInitializerToCreatedObject(source,
+                    requireString(operation, "testMethodName"),
+                    requireString(operation, "refVariable"),
+                    requireString(operation, "refTypeExpression"),
+                    requireString(operation, "objectTypeFqcn"));
             case "collapse_consecutive_annotation" -> collapseConsecutiveAnnotation(source,
                     requireString(operation, "annotation"));
             case "insert_method_before_class_end" -> insertMethodBeforeClassEnd(source,
@@ -96,6 +101,47 @@ public class RecipeOperationApplier {
             previousKeptTrimmed = trimmed;
         }
         return String.join("\n", filtered);
+    }
+
+    private String promoteRefInitializerToCreatedObject(String source,
+                                                        String testMethodName,
+                                                        String refVariable,
+                                                        String refTypeExpression,
+                                                        String objectTypeFqcn) {
+        if (source == null
+                || source.isBlank()
+                || refVariable == null
+                || refVariable.isBlank()
+                || refTypeExpression == null
+                || refTypeExpression.isBlank()
+                || objectTypeFqcn == null
+                || objectTypeFqcn.isBlank()) {
+            return source;
+        }
+        List<String> lines = new ArrayList<>(Arrays.asList(source.split("\n", -1)));
+        String methodName = testMethodName == null || testMethodName.isBlank() ? targetTestMethodName : testMethodName;
+        int methodStart = findMethodStart(lines, methodName);
+        int methodEnd = methodStart >= 0 ? findMethodEnd(lines, methodStart) : -1;
+        if (methodStart < 0 || methodEnd < methodStart) {
+            return source;
+        }
+        Pattern pattern = Pattern.compile("(\\b"
+                + Pattern.quote(refVariable)
+                + "\\s*=\\s*)new\\s+"
+                + Pattern.quote(refTypeExpression)
+                + "\\s*\\(\\s*\\)\\s*;");
+        for (int index = methodStart; index <= methodEnd && index < lines.size(); index++) {
+            String line = lines.get(index);
+            Matcher matcher = pattern.matcher(line);
+            if (!matcher.find()) {
+                continue;
+            }
+            String replacement = matcher.replaceFirst(Matcher.quoteReplacement(
+                    matcher.group(1) + "new " + refTypeExpression + "(new " + objectTypeFqcn + "());"));
+            lines.set(index, replacement);
+            return String.join("\n", lines);
+        }
+        return source;
     }
 
     private String insertMethodBeforeClassEnd(String source, String methodSource) {

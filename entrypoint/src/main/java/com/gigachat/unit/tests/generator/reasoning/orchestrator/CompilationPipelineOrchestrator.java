@@ -86,6 +86,10 @@ public class CompilationPipelineOrchestrator {
     public CompileResult runFixingLoop() {
         CompileResult lastResult = null;
         ActionExecutionResult cumulativeResult = ActionExecutionResult.empty();
+        logger.info("[COMPILATION_REASONING] Stage=START method="
+                + methodName
+                + " testFile="
+                + testFile.toAbsolutePath().normalize());
         StateGraphController controller = new StateGraphController(
                 logger,
                 methodName,
@@ -93,16 +97,31 @@ public class CompilationPipelineOrchestrator {
                 AgentState.S0_INIT,
                 "starting compile-fix loop");
         ReasoningMemory memory = controller.memory();
+        int repeatedSignatureGraceRounds = 0;
         for (int attempt = 0; attempt < loopPolicy.maxIterations(); attempt++) {
             controller.incrementAttempt();
             lastResult = compilerInvoker.compileWithoutCache(projectRoot, testFile, methodName);
             if (lastResult.success()) {
+                logger.info("[COMPILATION_REASONING] Stage=COMPILATION_SUCCEEDED method="
+                        + methodName
+                        + " attempt="
+                        + (attempt + 1));
                 controller.move("RESULT", AgentState.S5_COMPILATION_SUCCESS, "compile-fix loop finished successfully");
                 return lastResult;
             }
             controller.move("RESULT", AgentState.S2_COMPILATION_FAILED, "compile failed");
+            logger.warn("[COMPILATION_REASONING] Compile errors method="
+                    + methodName
+                    + " attempt="
+                    + (attempt + 1)
+                    + " errors="
+                    + summariseCompileResult(lastResult));
             CompilationErrorInfo errorInfo = CompilationErrorInfoBuilder.from(lastResult, testFile, testFileFqcn);
             CompilationErrorReport report = errorClassifier.classify(lastResult.stderr());
+            logger.info("[COMPILATION_REASONING] Classified compile errors method="
+                    + methodName
+                    + " summary="
+                    + summariseReport(report));
             ActionExecutionResult deterministicRepair = tryDeterministicImportRepair(report, controller, memory);
             if (!deterministicRepair.getPerformedActions().isEmpty()) {
                 cumulativeResult = cumulativeResult.merge(deterministicRepair);
@@ -114,11 +133,31 @@ public class CompilationPipelineOrchestrator {
             controller.addErrorSignature(signature);
             logger.trace("RESULT", methodName, AgentState.S2_COMPILATION_FAILED.name(), "compile failed signature=" + signature);
             if (controller.countOccurrences(signature) >= loopPolicy.repeatedSignatureThreshold()) {
-                controller.move("RESULT", AgentState.S6_GIVE_UP, "repeated compilation failure signature=" + signature);
-                throw new FixingFailureException("Repeated compilation errors detected. Giving up.", lastResult);
+                if (repeatedSignatureGraceRounds > 0) {
+                    repeatedSignatureGraceRounds--;
+                    logger.info("[COMPILATION_REASONING] action=ALLOW_REPEATED_SIGNATURE_AFTER_CONTEXT method="
+                            + methodName
+                            + " signature="
+                            + signature
+                            + " remainingGraceRounds="
+                            + repeatedSignatureGraceRounds);
+                } else {
+                    logger.warn("[COMPILATION_REASONING] action=GIVE_UP method="
+                            + methodName
+                            + " reason=REPEATED_SIGNATURE signature="
+                            + signature
+                            + " errors="
+                            + summariseCompileResult(lastResult));
+                    controller.move("RESULT", AgentState.S6_GIVE_UP, "repeated compilation failure signature=" + signature);
+                    throw new FixingFailureException("Repeated compilation errors detected. Giving up.", lastResult);
+                }
             }
 
             if (looksLikeFrameworkClasspathFault(lastResult, report)) {
+                logger.warn("[COMPILATION_REASONING] action=STOP_ENVIRONMENT_FAULT method="
+                        + methodName
+                        + " reason=missing test framework classpath errors="
+                        + summariseCompileResult(lastResult));
                 controller.move("RESULT",
                         AgentState.S6_GIVE_UP,
                         "compile environment missing framework classpath entries; skipping reasoning loop");
@@ -135,6 +174,11 @@ public class CompilationPipelineOrchestrator {
                     controller.move("RESULT", AgentState.S3_FALSE_DEPENDENCY_DETECTED, "false dependency detected");
                 }
                 memory.addKnownMissingSymbol(missingSymbol);
+                logger.info("[COMPILATION_REASONING] action=MARK_FALSE_DEPENDENCY method="
+                        + methodName
+                        + " symbol="
+                        + missingSymbol
+                        + " reason=unresolved_by_agent_tools");
                 logger.trace("RESULT",
                         methodName,
                         memory.getState().name(),
@@ -148,11 +192,27 @@ public class CompilationPipelineOrchestrator {
                     report,
                     memory,
                     ReasoningStage.COMPILATION);
+            logger.info("[COMPILATION_REASONING] Stage=ASK_LLM method="
+                    + methodName
+                    + " state="
+                    + memory.getState()
+                    + " signature="
+                    + signature
+                    + " recipes="
+                    + deterministicRecipes.size());
             ReasoningResponse response = reasoningService.reasonAboutError(loopContext);
             String decision = response == null ? "STOP" : response.getDecision();
             if (decision == null || decision.isBlank()) {
                 decision = "STOP";
             }
+            logger.info("[COMPILATION_REASONING] action="
+                    + decision
+                    + " method="
+                    + methodName
+                    + " state="
+                    + memory.getState()
+                    + " actions="
+                    + summariseReasoningActions(response));
             logger.trace("DECISION", methodName, memory.getState().name(), "compile reasoning chose " + decision + " actions=" + summariseReasoningActions(response));
 
             if ("REQUEST_CONTEXT".equals(decision)) {
@@ -160,10 +220,25 @@ public class CompilationPipelineOrchestrator {
                 controller.logAction("executing REQUEST_CONTEXT");
                 ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
                 cumulativeResult = cumulativeResult.merge(iterationResult);
+                logger.info("[COMPILATION_REASONING] actionResult=REQUEST_CONTEXT method="
+                        + methodName
+                        + " performedActions="
+                        + iterationResult.getPerformedActions()
+                        + " infoKeys="
+                        + iterationResult.getInformation().keySet());
                 memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
                         response.getMemoryUpdates().getAppliedFixSignatures(),
                         extractContextCache(iterationResult));
                 controller.logAction("request-context result actions=" + iterationResult.getPerformedActions() + " infoKeys=" + iterationResult.getInformation().keySet());
+                if (producedUsefulContext(iterationResult)) {
+                    repeatedSignatureGraceRounds++;
+                    logger.info("[COMPILATION_REASONING] action=ALLOW_FOLLOW_UP_AFTER_CONTEXT method="
+                            + methodName
+                            + " graceRounds="
+                            + repeatedSignatureGraceRounds
+                            + " infoKeys="
+                            + iterationResult.getInformation().keySet());
+                }
                 controller.decrementContextBudget();
                 if (controller.contextBudgetRemaining() <= 0) {
                     controller.move("RESULT", AgentState.S6_GIVE_UP, "context request budget exhausted");
@@ -174,6 +249,12 @@ public class CompilationPipelineOrchestrator {
                 controller.logAction("executing APPLY_FIX");
                 ActionExecutionResult iterationResult = actionExecutor.execute(response.toToolAction());
                 cumulativeResult = cumulativeResult.merge(iterationResult);
+                logger.info("[COMPILATION_REASONING] actionResult=APPLY_FIX method="
+                        + methodName
+                        + " performedActions="
+                        + iterationResult.getPerformedActions()
+                        + " infoKeys="
+                        + iterationResult.getInformation().keySet());
                 memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
                         response.getMemoryUpdates().getAppliedFixSignatures(),
                         extractContextCache(iterationResult));
@@ -186,13 +267,25 @@ public class CompilationPipelineOrchestrator {
                 memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
                         response.getMemoryUpdates().getAppliedFixSignatures(),
                         response.getMemoryUpdates().getContextCache());
+                logger.info("[COMPILATION_REASONING] actionResult=MARK_FALSE_DEPENDENCY method="
+                        + methodName
+                        + " knownMissingSymbols="
+                        + response.getMemoryUpdates().getKnownMissingSymbols());
                 controller.moveForDecision("TRANSITION", decision, AgentState.S3_FALSE_DEPENDENCY_DETECTED, "marked false dependency");
                 continue;
             } else {
+                logger.info("[COMPILATION_REASONING] action=GIVE_UP method="
+                        + methodName
+                        + " reason=STOP_DECISION errors="
+                        + summariseCompileResult(lastResult));
                 controller.moveForDecision("RESULT", "STOP", AgentState.S6_GIVE_UP, "compile reasoning stopped");
                 throw new FixingFailureException("Reasoning agent stopped after repeated failures", lastResult);
             }
         }
+        logger.warn("[COMPILATION_REASONING] action=GIVE_UP method="
+                + methodName
+                + " reason=MAX_ITERATIONS errors="
+                + summariseCompileResult(lastResult));
         controller.move("RESULT", AgentState.S6_GIVE_UP, "reached max compile-fix iterations");
         throw new FixingFailureException("Reached maximum reasoning iterations without a successful compile", lastResult);
     }
@@ -255,6 +348,12 @@ public class CompilationPipelineOrchestrator {
             return ActionExecutionResult.empty();
         }
         memory.addAppliedFixSignature(autoFixSignature);
+        logger.info("[COMPILATION_REASONING] action=APPLY_DETERMINISTIC_IMPORT_REPAIR method="
+                + methodName
+                + " symbol="
+                + missingSymbol
+                + " performedActions="
+                + repairResult.getPerformedActions());
         controller.logAction("deterministic compile repair actions=" + repairResult.getPerformedActions());
         controller.move("TRANSITION",
                 AgentState.S4_FIX_APPLIED,
@@ -313,6 +412,51 @@ public class CompilationPipelineOrchestrator {
                 && Character.isLowerCase(symbol.charAt(0));
     }
 
+    private String summariseCompileResult(CompileResult compileResult) {
+        if (compileResult == null) {
+            return "unknown";
+        }
+        if (compileResult.stderr() != null && !compileResult.stderr().isBlank()) {
+            return abbreviate(compileResult.stderr().replaceAll("\\s+", " ").trim());
+        }
+        if (compileResult.messages() != null && !compileResult.messages().isEmpty()) {
+            return abbreviate(String.join(" | ", compileResult.messages()).replaceAll("\\s+", " ").trim());
+        }
+        if (compileResult.stdout() != null && !compileResult.stdout().isBlank()) {
+            return abbreviate(compileResult.stdout().replaceAll("\\s+", " ").trim());
+        }
+        return "unknown";
+    }
+
+    private String summariseReport(CompilationErrorReport report) {
+        if (report == null || report.getErrors() == null || report.getErrors().isEmpty()) {
+            return "none";
+        }
+        return abbreviate(report.getErrors().stream()
+                .limit(4)
+                .map(error -> {
+                    String symbol = error.getSymbol() == null || error.getSymbol().isBlank()
+                            ? "-"
+                            : error.getSymbol();
+                    String location = error.getLine() == null ? "" : ":" + error.getLine();
+                    return error.getErrorClass()
+                            + "[symbol="
+                            + symbol
+                            + location
+                            + "] "
+                            + error.getNormalizedMessage();
+                })
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("none"));
+    }
+
+    private String abbreviate(String value) {
+        if (value == null || value.length() <= 1800) {
+            return value;
+        }
+        return value.substring(0, 1800) + "...";
+    }
+
     private boolean looksLikeFrameworkClasspathFault(CompileResult compileResult, CompilationErrorReport report) {
         if (compileResult == null || report == null || report.getTopMissingPackages().isEmpty()) {
             return false;
@@ -346,5 +490,12 @@ public class CompilationPipelineOrchestrator {
             return converted;
         }
         return java.util.Collections.emptyMap();
+    }
+
+    private boolean producedUsefulContext(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return false;
+        }
+        return result.getInformation().keySet().stream().anyMatch(key -> !"errors".equals(key));
     }
 }

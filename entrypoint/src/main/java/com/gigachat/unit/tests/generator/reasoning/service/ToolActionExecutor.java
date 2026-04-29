@@ -10,9 +10,11 @@ import com.gigachat.unit.tests.generator.reasoning.model.ToolActionStep;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * Executes tool actions returned by the reasoning model. Information-gathering steps append data to
@@ -26,6 +28,7 @@ public class ToolActionExecutor {
     private final ToolContextActionExecutor contextActionExecutor;
     private final ToolMutationActionExecutor mutationActionExecutor;
     private final ToolRunActionExecutor runActionExecutor;
+    private final Path testFile;
 
     public ToolActionExecutor(SourceFileEditor sourceFileEditor,
                               CompilerInvoker compilerInvoker,
@@ -37,7 +40,7 @@ public class ToolActionExecutor {
         this.sourceFileEditor = Objects.requireNonNull(sourceFileEditor, "sourceFileEditor");
         Objects.requireNonNull(compilerInvoker, "compilerInvoker");
         Objects.requireNonNull(projectRoot, "projectRoot");
-        Objects.requireNonNull(testFile, "testFile");
+        this.testFile = Objects.requireNonNull(testFile, "testFile");
         this.symbolLookupService = new SymbolLookupService(projectRoot, sourceFileEditor);
         this.contextActionExecutor = new ToolContextActionExecutor(sourceFileEditor, symbolLookupService, projectRoot);
         this.mutationActionExecutor = new ToolMutationActionExecutor(sourceFileEditor, projectRoot, testFile, methodName);
@@ -137,7 +140,7 @@ public class ToolActionExecutor {
         if (preferStaticImport && staticImportCandidates.size() == 1) {
             return new ImportResolution(staticImportCandidates.get(0), true);
         }
-        List<String> projectCandidates = symbolLookupService.lookupProjectCandidates(symbol).stream()
+        List<String> projectCandidates = preferContextualProjectCandidates(symbolLookupService.lookupProjectCandidates(symbol)).stream()
                 .filter(this::isImportableCandidate)
                 .distinct()
                 .toList();
@@ -164,11 +167,95 @@ public class ToolActionExecutor {
         return null;
     }
 
+    private List<String> preferContextualProjectCandidates(List<String> candidates) {
+        if (candidates == null || candidates.size() <= 1) {
+            return candidates == null ? List.of() : candidates;
+        }
+        List<String> ownerImported = filterCandidatesByImportedOwnerType(candidates);
+        if (ownerImported.size() == 1) {
+            return ownerImported;
+        }
+        List<String> ownerReferenced = filterCandidatesByReferencedOwnerType(candidates);
+        if (ownerReferenced.size() == 1) {
+            return ownerReferenced;
+        }
+        return candidates;
+    }
+
+    private List<String> filterCandidatesByImportedOwnerType(List<String> candidates) {
+        List<String> importedTypes = readImportedTypeNames();
+        if (importedTypes.isEmpty()) {
+            return List.of();
+        }
+        return candidates.stream()
+                .filter(candidate -> {
+                    String ownerType = ownerTypeFqcn(candidate);
+                    return ownerType != null && importedTypes.contains(ownerType);
+                })
+                .distinct()
+                .toList();
+    }
+
+    private List<String> filterCandidatesByReferencedOwnerType(List<String> candidates) {
+        String source = sourceFileEditor.readFile(testFile);
+        if (source.isBlank()) {
+            return List.of();
+        }
+        List<String> matches = new ArrayList<>();
+        for (String candidate : candidates) {
+            String ownerSimpleName = ownerTypeSimpleName(candidate);
+            if (ownerSimpleName == null || ownerSimpleName.isBlank()) {
+                continue;
+            }
+            Pattern ownerPattern = Pattern.compile("\\b" + Pattern.quote(ownerSimpleName) + "\\b");
+            if (ownerPattern.matcher(source).find()) {
+                matches.add(candidate);
+            }
+        }
+        return matches.stream().distinct().toList();
+    }
+
+    private List<String> readImportedTypeNames() {
+        return sourceFileEditor.readImports(testFile).stream()
+                .map(String::trim)
+                .filter(importLine -> importLine.startsWith("import ") && !importLine.startsWith("import static "))
+                .map(importLine -> importLine.substring("import ".length(), importLine.length() - 1).trim())
+                .toList();
+    }
+
+    private String ownerTypeFqcn(String candidate) {
+        if (candidate == null || candidate.isBlank()) {
+            return null;
+        }
+        String normalized = candidate.replace('$', '.');
+        int lastDot = normalized.lastIndexOf('.');
+        if (lastDot < 0) {
+            return null;
+        }
+        String prefix = normalized.substring(0, lastDot);
+        int ownerSegmentStart = prefix.lastIndexOf('.') + 1;
+        if (ownerSegmentStart >= prefix.length()) {
+            return null;
+        }
+        char ownerInitial = prefix.charAt(ownerSegmentStart);
+        if (!Character.isUpperCase(ownerInitial)) {
+            return null;
+        }
+        return prefix;
+    }
+
+    private String ownerTypeSimpleName(String candidate) {
+        String ownerType = ownerTypeFqcn(candidate);
+        if (ownerType == null || ownerType.isBlank()) {
+            return null;
+        }
+        return ownerType.substring(ownerType.lastIndexOf('.') + 1);
+    }
+
     private boolean isImportableCandidate(String candidate) {
         return candidate != null
                 && !candidate.isBlank()
-                && candidate.contains(".")
-                && !candidate.contains("$");
+                && candidate.contains(".");
     }
 
     private List<ToolActionStep> resolveSteps(ToolAction action) {
