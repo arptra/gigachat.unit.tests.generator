@@ -1592,6 +1592,124 @@ class InitialGenerationStepExecutionReasoningTest {
         assertTrue(logs.contains("Using deterministic constructor-state fallback"));
     }
 
+    @Test
+    void abonentStaticInitializerFailureCanUseDeterministicExecutionRecipeWithoutRegeneration() throws Exception {
+        Path testFile = tempDir.resolve("src/test/java/mtd/abonent/NEW_AUTOTest.java");
+        Files.createDirectories(testFile.getParent());
+        TestMethodInfo methodInfo = new TestMethodInfo(
+                "public final void NEW_AUTO_VALIDATE(final bd.Abonent.Ref THIS, final Varchar2 PLP$CLASS, final Varchar2 P_MESSAGE, final Varchar2 P_INFO)",
+                "void",
+                """
+                        final Resolution resolution = resolveRef(THIS, PLP$CLASS);
+                        lastRef = resolution.ref;
+                        lastClass = resolution.classId;
+                        """
+        );
+        TestClassInfo classInfo = new TestClassInfo(
+                "mtd.abonent.NEW_AUTO",
+                "NEW_AUTOTest",
+                testFile,
+                List.of(),
+                List.of(methodInfo)
+        );
+
+        MethodSignatureRegistry registry = new MethodSignatureRegistry();
+        PipelineLogger logger = new PipelineLogger(tempDir);
+        TestClassWriter writer = new TestClassWriter(logger);
+        Analyze analyze = new Analyze(registry) {
+            @Override
+            public AnalysisSummary analyze(AgentConfig config, TestClassInfo currentClassInfo, TestMethodInfo currentMethodInfo) {
+                return new AnalysisSummary(
+                        new MockPlan(List.of(), MockStrategy.MOCKITO, List.of(), List.of()),
+                        new MethodAnalysisResult(new MethodMetadata(
+                                "NEW_AUTO_VALIDATE",
+                                "public final void NEW_AUTO_VALIDATE(final bd.Abonent.Ref THIS, final Varchar2 PLP$CLASS, final Varchar2 P_MESSAGE, final Varchar2 P_INFO)",
+                                "void"), List.of(), List.of(), List.of(), List.of()),
+                        "{}",
+                        Map.of(),
+                        new TestTargetContext("mtd.abonent.NEW_AUTO", "o", true, false),
+                        true,
+                        List.of(),
+                        Set.of(),
+                        Set.of(),
+                        Map.of(),
+                        Map.of("mtd.abonent.NEW_AUTO", List.of("NEW_AUTO_VALIDATE(...)")),
+                        Set.of(),
+                        Set.of()
+                );
+            }
+        };
+
+        StaticInitExecutionRepairLlmClient llmClient = new StaticInitExecutionRepairLlmClient();
+        AtomicInteger executionCalls = new AtomicInteger();
+        InitialGenerationStep generationStep = new InitialGenerationStep(
+                logger,
+                writer,
+                new SkeletonPromptBuilder(),
+                analyze,
+                new PromptBuilder(),
+                llmClient,
+                new DiffEngine(writer, logger),
+                (projectRoot, testClassFilePath, generatedMethodName) -> new CompileResult(true, List.of(), "", ""),
+                (projectRoot, testClassFilePath, generatedMethodName) -> {
+                    executionCalls.incrementAndGet();
+                    String source;
+                    try {
+                        source = Files.readString(testClassFilePath);
+                    } catch (java.io.IOException exception) {
+                        throw new RuntimeException(exception);
+                    }
+                    if (source.contains("mock(Ref.class)")
+                            && source.contains("when(ref.isCreated()).thenReturn(true);")
+                            && source.contains("when(ref.getClassId()).thenReturn(new Varchar2(\"ABONENT\"));")) {
+                        return new ExecuteResult(true, List.of(), "", "");
+                    }
+                    return new ExecuteResult(false,
+                            List.of("mtd.abonent.NEW_AUTOTest.NEW_AUTO_VALIDATE_shouldAvoidStaticInitBootstrap"),
+                            "",
+                            """
+                                    java.lang.AssertionError: No global settings provided
+                                    Unexpected exception thrown: java.lang.NoClassDefFoundError: Could not initialize class bd.Abonent
+                                    Caused by: java.lang.NoClassDefFoundError: Could not initialize class bd.Abonent
+                                    at bd.Abonent$Ref.getTargetId(Abonent.java:130)
+                                    at mtd.abonent.NEW_AUTO.NEW_AUTO_VALIDATE(NEW_AUTO.java:27)
+                                    """);
+                },
+                new SnapshotStorage(tempDir, logger),
+                registry,
+                new CompilationReasoningService(
+                        llmClient,
+                        new CompilationReasoningPromptBuilder(),
+                        new ReasoningResponseParser())
+        );
+
+        AgentConfig config = new AgentConfigBuilder()
+                .mode(AgentMode.SCAN)
+                .projectPath(tempDir)
+                .moduleOption("pipeline.compile.enabled", true)
+                .moduleOption("pipeline.execute.enabled", true)
+                .moduleOption("pipeline.snapshots.enabled", false)
+                .build();
+
+        ErrorsReport report = generationStep.run(config, List.of(classInfo));
+
+        assertEquals(1, llmClient.generationCalls.get(), "Expected execution repair instead of regeneration");
+        assertEquals(0, llmClient.reasoningCalls.get(), "Expected deterministic execution recipe before LLM reasoning");
+        assertEquals(2, executionCalls.get(), "Expected rerun after deterministic runtime recipe");
+        String generatedTest = Files.readString(testFile);
+        assertTrue(generatedTest.contains("Ref ref = mock(Ref.class);"));
+        assertTrue(generatedTest.contains("when(ref.isNull_booleanValue()).thenReturn(false);"));
+        assertTrue(generatedTest.contains("when(ref.isCreated()).thenReturn(true);"));
+        assertTrue(generatedTest.contains("when(ref.getClassId()).thenReturn(new Varchar2(\"ABONENT\"));"));
+        assertFalse(generatedTest.contains("Ref ref = new Ref();"));
+
+        String logs = Files.readString(tempDir.resolve(".agent/logs/pipeline.log"));
+        assertTrue(logs.contains("[EXECUTION_REASONING] Starting execution reasoning for method NEW_AUTO_VALIDATE_shouldAvoidStaticInitBootstrap"));
+        assertTrue(logs.contains("[EXECUTION_REASONING] action=APPLY_DETERMINISTIC_RECIPE method=NEW_AUTO_VALIDATE_shouldAvoidStaticInitBootstrap"));
+        assertTrue(logs.contains("APPLY_RECIPE for NEW_AUTO_VALIDATE_shouldAvoidStaticInitBootstrap"));
+        assertFalse(logs.contains("skipping full regeneration"));
+    }
+
     private static class LifecycleThenInventedSetterLlmClient implements LlmClient {
 
         private final AtomicInteger generationCalls = new AtomicInteger();
@@ -2258,6 +2376,54 @@ class InitialGenerationStepExecutionReasoningTest {
                 );
             }
             throw new AssertionError("Generation retry should not be reached when scratch execution reasoning succeeds");
+        }
+    }
+
+    private static class StaticInitExecutionRepairLlmClient implements LlmClient {
+        private final AtomicInteger generationCalls = new AtomicInteger();
+        private final AtomicInteger reasoningCalls = new AtomicInteger();
+
+        @Override
+        public String requestStructuredResponse(String prompt) {
+            reasoningCalls.incrementAndGet();
+            return """
+                    {
+                      "decision":"APPLY_FIX",
+                      "actions":[
+                        {
+                          "type":"APPLY_RECIPE",
+                          "args":{"recipeId":"ALIGN_NEW_AUTO_STATIC_INIT_REF_FIXTURE"}
+                        }
+                      ],
+                      "memory_updates":{"knownMissingSymbols":[],"appliedFixSignatures":[],"contextCache":{}}
+                    }
+                    """;
+        }
+
+        @Override
+        public GeneratedTestSnippet generateTestSnippet(String prompt,
+                                                        TestClassInfo classInfo,
+                                                        TestMethodInfo methodInfo,
+                                                        MockPlan plan) {
+            generationCalls.incrementAndGet();
+            return new GeneratedTestSnippet(
+                    classInfo.getTestClassName(),
+                    "NEW_AUTO_VALIDATE_shouldAvoidStaticInitBootstrap",
+                    """
+                            @Test
+                            void NEW_AUTO_VALIDATE_shouldAvoidStaticInitBootstrap() {
+                                Ref ref = new Ref();
+                                Varchar2 plpClass = new Varchar2("ABONENT");
+                                NEW_AUTO o = new NEW_AUTO();
+                                o.NEW_AUTO_VALIDATE(ref, plpClass, new Varchar2(), new Varchar2());
+                            }
+                            """,
+                    List.of(
+                            "import org.junit.jupiter.api.Test;",
+                            "import bd.Abonent.Ref;",
+                            "import rt.Varchar2;"
+                    )
+            );
         }
     }
 

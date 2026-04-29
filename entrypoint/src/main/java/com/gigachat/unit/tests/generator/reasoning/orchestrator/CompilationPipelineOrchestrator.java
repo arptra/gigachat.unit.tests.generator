@@ -98,6 +98,7 @@ public class CompilationPipelineOrchestrator {
                 "starting compile-fix loop");
         ReasoningMemory memory = controller.memory();
         int repeatedSignatureGraceRounds = 0;
+        boolean finalContextFollowUpGranted = false;
         for (int attempt = 0; attempt < loopPolicy.maxIterations(); attempt++) {
             controller.incrementAttempt();
             lastResult = compilerInvoker.compileWithoutCache(projectRoot, testFile, methodName);
@@ -230,7 +231,8 @@ public class CompilationPipelineOrchestrator {
                         response.getMemoryUpdates().getAppliedFixSignatures(),
                         extractContextCache(iterationResult));
                 controller.logAction("request-context result actions=" + iterationResult.getPerformedActions() + " infoKeys=" + iterationResult.getInformation().keySet());
-                if (producedUsefulContext(iterationResult)) {
+                boolean usefulContext = producedUsefulContext(iterationResult);
+                if (usefulContext) {
                     repeatedSignatureGraceRounds++;
                     logger.info("[COMPILATION_REASONING] action=ALLOW_FOLLOW_UP_AFTER_CONTEXT method="
                             + methodName
@@ -240,9 +242,19 @@ public class CompilationPipelineOrchestrator {
                             + iterationResult.getInformation().keySet());
                 }
                 controller.decrementContextBudget();
-                if (controller.contextBudgetRemaining() <= 0) {
+                boolean allowFinalFollowUp = usefulContext
+                        && controller.contextBudgetRemaining() <= 0
+                        && !finalContextFollowUpGranted;
+                if (controller.contextBudgetRemaining() <= 0 && !allowFinalFollowUp) {
                     controller.move("RESULT", AgentState.S6_GIVE_UP, "context request budget exhausted");
                     throw new FixingFailureException("Context request budget exhausted", lastResult);
+                }
+                if (allowFinalFollowUp) {
+                    finalContextFollowUpGranted = true;
+                    logger.info("[COMPILATION_REASONING] action=ALLOW_FINAL_FOLLOW_UP_AFTER_CONTEXT method="
+                            + methodName
+                            + " infoKeys="
+                            + iterationResult.getInformation().keySet());
                 }
                 continue;
             } else if ("APPLY_FIX".equals(decision)) {

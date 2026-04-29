@@ -277,7 +277,7 @@ class CompilationPipelineOrchestratorTest {
                 "testRollbackWhenFeatureEnabledAndReboundHigh");
 
         assertThrows(Exception.class, orchestrator::runFixingLoop);
-        assertEquals(3, compileCalls.get());
+        assertEquals(4, compileCalls.get());
         assertEquals(original, Files.readString(testFile));
     }
 

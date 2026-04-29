@@ -126,5 +126,27 @@
       }
     ],
     "requiredImports": []
+  },
+  "STATIC_INIT_REF_FIXTURE_RUNTIME_ALIGNMENT": {
+    "id": "ALIGN_${sourceClassUpper}_STATIC_INIT_REF_FIXTURE",
+    "kind": "STATIC_INIT_REF_FIXTURE_RUNTIME_ALIGNMENT",
+    "state": "S2_2_EXECUTION_FAILED",
+    "summary": "Replace the real ${refTypeExpression} fixture with a Mockito mock so ${sourceClassSimple} can avoid static initializer bootstrap on ${failingClassFqcn}.",
+    "sourceClass": "${sourceClassSimple}",
+    "operations": [
+      {
+        "type": "replace_ref_initializer_with_mock_fixture",
+        "testMethodName": "${testMethodName}",
+        "refVariable": "${refVariable}",
+        "refTypeExpression": "${refTypeExpression}",
+        "classIdLiteral": "${classIdLiteral}",
+        "objectTypeFqcn": "${objectTypeFqcn}"
+      }
+    ],
+    "requiredImports": [
+      "rt.Varchar2",
+      "static org.mockito.Mockito.mock",
+      "static org.mockito.Mockito.when"
+    ]
   }
 }

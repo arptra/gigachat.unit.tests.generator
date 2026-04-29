@@ -21,6 +21,8 @@ import com.gigachat.unit.tests.generator.reasoning.model.ReasoningMemory;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningResponse;
 import com.gigachat.unit.tests.generator.reasoning.model.ReasoningStage;
 import com.gigachat.unit.tests.generator.reasoning.model.ToolAction;
+import com.gigachat.unit.tests.generator.reasoning.model.ToolActionStep;
+import com.gigachat.unit.tests.generator.reasoning.model.ToolActionType;
 import com.gigachat.unit.tests.generator.reasoning.service.ExecutionFailureContextCollector;
 import com.gigachat.unit.tests.generator.reasoning.service.NextContextBuilder;
 import com.gigachat.unit.tests.generator.reasoning.service.ProjectContextCollector;
@@ -115,6 +117,7 @@ public class ExecutionPipelineOrchestrator {
         ExecutionFailureParseResult currentFailureParseResult = failureParseResult;
         List<TestReportFailure> currentReportFailures = reportFailures == null ? List.of() : List.copyOf(reportFailures);
         int repeatedSignatureGraceRounds = 0;
+        boolean finalContextFollowUpGranted = false;
 
         for (int iteration = 0; iteration < loopPolicy.maxIterations(); iteration++) {
             controller.incrementAttempt();
@@ -122,6 +125,85 @@ public class ExecutionPipelineOrchestrator {
             actionExecutor.setAvailableRecipes(deterministicRecipes);
             if (!deterministicRecipes.isEmpty()) {
                 controller.addForbiddenAction("APPLY_PATCH");
+            }
+            ToolAction deterministicRecipeAction = singleDeterministicRecipeAction(deterministicRecipes, memory);
+            if (deterministicRecipeAction != null) {
+                Object recipeId = deterministicRecipes.get(0).get("id");
+                logger.info("[EXECUTION_REASONING] action=APPLY_DETERMINISTIC_RECIPE method="
+                        + generatedMethodName
+                        + " recipeId="
+                        + recipeId);
+                ActionExecutionResult recipeResult = actionExecutor.execute(deterministicRecipeAction);
+                cumulativeResult = cumulativeResult.merge(recipeResult);
+                if (recipeId != null) {
+                    memory.addAppliedFixSignature("RECIPE:" + recipeId);
+                }
+                logExecutionReasoningActionResult("APPLY_RECIPE", generatedMethodName, recipeResult);
+                if (recipeResult.getPerformedActions().isEmpty()) {
+                    logger.warn("[EXECUTION_REASONING] Deterministic recipe produced no persisted change for method "
+                            + generatedMethodName
+                            + ". Falling back to reasoning.");
+                } else {
+                    currentCompileResult = compilerInvoker.compileWithoutCache(config.getProjectPath(),
+                            classInfo.getTargetPath(),
+                            generatedMethodName);
+                    logger.info("[EXECUTION_REASONING] Recompile after deterministic recipe for "
+                            + generatedMethodName
+                            + " -> success="
+                            + currentCompileResult.success());
+                    if (!currentCompileResult.success()) {
+                        try {
+                            logger.warn("[EXECUTION_REASONING] Deterministic recipe caused compilation failure for "
+                                    + generatedMethodName
+                                    + ". Trying compile-fix loop before falling back.");
+                            currentCompileResult = compilationOrchestrator.runFixingLoop();
+                        } catch (FixingFailureException exception) {
+                            logger.error("Compilation fixing loop failed during deterministic execution repair: "
+                                    + exception.getMessage(), exception);
+                            currentCompileResult = exception.getLastResult();
+                        }
+                        if (currentCompileResult == null || !currentCompileResult.success()) {
+                            return new ExecutionRepairResult(false,
+                                    true,
+                                    currentCompileResult,
+                                    currentExecuteResult,
+                                    currentFailureParseResult,
+                                    currentReportFailures,
+                                    cumulativeResult);
+                        }
+                    }
+                    currentExecuteResult = executionInvoker.execute(config.getProjectPath(),
+                            classInfo.getTargetPath(),
+                            executionMethodName);
+                    logger.info("[EXECUTION_REASONING] Reran test after deterministic recipe for "
+                            + generatedMethodName
+                            + " -> success="
+                            + currentExecuteResult.success());
+                    if (currentExecuteResult.success()) {
+                        logger.info("[EXECUTION_REASONING] Deterministic execution recipe fixed runtime failure for method "
+                                + generatedMethodName);
+                        controller.move("RESULT", AgentState.S5_COMPILATION_SUCCESS, "execution repaired by deterministic recipe");
+                        return new ExecutionRepairResult(true,
+                                false,
+                                currentCompileResult,
+                                currentExecuteResult,
+                                new ExecutionFailureParseResult(List.of(), Optional.empty()),
+                                List.of(),
+                                cumulativeResult);
+                    }
+                    currentFailureParseResult = parseExecutionLog(currentExecuteResult);
+                    currentReportFailures = parseExecutionReport(config.getProjectPath(), currentFailureParseResult);
+                    cumulativeResult = cumulativeResult.merge(executionFailureContextCollector.collect(config.getProjectPath(),
+                            classInfo,
+                            methodInfo,
+                            analysisSummary,
+                            currentExecuteResult,
+                            currentFailureParseResult,
+                            currentReportFailures));
+                    controller.move("RESULT",
+                            AgentState.S2_2_EXECUTION_FAILED,
+                            "runtime still failing after deterministic execution recipe");
+                }
             }
 
             String signature = deriveExecutionErrorSignature(currentExecuteResult, currentReportFailures);
@@ -188,12 +270,13 @@ public class ExecutionPipelineOrchestrator {
                 ActionExecutionResult iterationResult = actionExecutor.execute(toolAction);
                 cumulativeResult = cumulativeResult.merge(iterationResult);
                 applyMemoryUpdates(memory, response, iterationResult);
+                boolean usefulContext = producedUsefulContext(iterationResult);
                 controller.moveForDecision("STATE",
                         decision,
                         AgentState.S2_1_NEED_MORE_CONTEXT,
                         "context requested during execution reasoning");
                 logExecutionReasoningActionResult("REQUEST_CONTEXT", generatedMethodName, iterationResult);
-                if (producedUsefulContext(iterationResult)) {
+                if (usefulContext) {
                     repeatedSignatureGraceRounds++;
                     logger.info("[EXECUTION_REASONING] Allowing follow-up reasoning after REQUEST_CONTEXT for method "
                             + generatedMethodName
@@ -203,12 +286,21 @@ public class ExecutionPipelineOrchestrator {
                             + iterationResult.getInformation().keySet());
                 }
                 controller.decrementContextBudget();
-                if (controller.contextBudgetRemaining() <= 0) {
+                boolean allowFinalFollowUp = usefulContext
+                        && controller.contextBudgetRemaining() <= 0
+                        && !finalContextFollowUpGranted;
+                if (controller.contextBudgetRemaining() <= 0 && !allowFinalFollowUp) {
                     logger.warn("[EXECUTION_REASONING] Context budget exhausted for method "
                             + generatedMethodName
                             + ". Keeping current test state and not regenerating.");
                     controller.move("RESULT", AgentState.S6_GIVE_UP, "execution context request budget exhausted");
                     break;
+                }
+                if (allowFinalFollowUp) {
+                    finalContextFollowUpGranted = true;
+                    logger.info("[EXECUTION_REASONING] Context budget reached zero after useful context for method "
+                            + generatedMethodName
+                            + ". Allowing one final follow-up reasoning round with cached sources.");
                 }
                 continue;
             }
@@ -511,8 +603,18 @@ public class ExecutionPipelineOrchestrator {
             return;
         }
         memory.applyUpdates(response.getMemoryUpdates().getKnownMissingSymbols(),
-                response.getMemoryUpdates().getAppliedFixSignatures(),
+                mergeAppliedFixSignatures(response.getMemoryUpdates().getAppliedFixSignatures(), actionResult),
                 mergeContextCache(response.getMemoryUpdates().getContextCache(), extractContextCache(actionResult)));
+    }
+
+    private java.util.Set<String> mergeAppliedFixSignatures(java.util.Set<String> declaredFixes,
+                                                            ActionExecutionResult actionResult) {
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+        if (declaredFixes != null) {
+            merged.addAll(declaredFixes);
+        }
+        merged.addAll(extractAppliedFixSignatures(actionResult));
+        return merged;
     }
 
     private Map<String, String> mergeContextCache(Map<String, String> declaredUpdates,
@@ -545,6 +647,24 @@ public class ExecutionPipelineOrchestrator {
         return Map.of();
     }
 
+    @SuppressWarnings("unchecked")
+    private java.util.Set<String> extractAppliedFixSignatures(ActionExecutionResult result) {
+        if (result == null || result.getInformation().isEmpty()) {
+            return java.util.Set.of();
+        }
+        Object appliedRecipes = result.getInformation().get("appliedRecipeIds");
+        if (!(appliedRecipes instanceof List<?> recipes) || recipes.isEmpty()) {
+            return java.util.Set.of();
+        }
+        java.util.LinkedHashSet<String> signatures = new java.util.LinkedHashSet<>();
+        for (Object recipeId : recipes) {
+            if (recipeId != null && !recipeId.toString().isBlank()) {
+                signatures.add("RECIPE:" + recipeId);
+            }
+        }
+        return signatures;
+    }
+
     private boolean producedUsefulContext(ActionExecutionResult result) {
         if (result == null || result.getInformation().isEmpty()) {
             return false;
@@ -568,6 +688,24 @@ public class ExecutionPipelineOrchestrator {
             }
         }
         return List.copyOf(deduplicated.values());
+    }
+
+    private ToolAction singleDeterministicRecipeAction(List<Map<String, Object>> recipes,
+                                                       ReasoningMemory memory) {
+        if (recipes == null || recipes.size() != 1) {
+            return null;
+        }
+        Object recipeId = recipes.get(0).get("id");
+        if (recipeId == null || recipeId.toString().isBlank()) {
+            return null;
+        }
+        String signature = "RECIPE:" + recipeId;
+        if (memory != null && memory.getAppliedFixSignatures().contains(signature)) {
+            return null;
+        }
+        ToolActionStep step = new ToolActionStep(ToolActionType.APPLY_RECIPE,
+                Map.of("recipeId", recipeId.toString()));
+        return new ToolAction(ToolActionType.APPLY_RECIPE, null, step);
     }
 
     private String deriveExecutionErrorSignature(ExecuteResult executeResult,

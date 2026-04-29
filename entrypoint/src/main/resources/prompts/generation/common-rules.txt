@@ -20,6 +20,8 @@ For non-instantiable method parameter value objects, prefer listed public factor
 If a referenced type has no listed no-arg constructor, never use Type() for that type, even after fixing imports or package names.
 When a domain object's state must change, prefer listed public mutators such as activate(), deactivate(), incrementAttempts(), or markLoggedIn() instead of guessed setters like setActive(...) or setLoginAttempts(...).
 If a constructor already establishes default state, never assert the opposite default before invoking the target method; call a listed public mutator first to reach that precondition.
+When the target method is a no-arg accessor or getter that simply returns stored state, never assume a non-null or non-default value immediately after plain construction.
+For accessor/getter tests, seed the returned state only through listed public methods from availableMethods that can legally establish it; if no such public path exists, assert the constructor default state instead of inventing a populated one.
 If a chosen public mutator returns void, call it on its own line and then reuse the same object variable; never chain that void mutator inside add(...), assertX(...), return, or constructor arguments.
 For static mutable collection state, never read or write the private static field; isolate through public APIs by clearing first, seeding through a public emitter or recorder, asserting through a public snapshot/accessor, and clearing again in finally.
 When the class under test has a Clock constructor and the source records timestamps, use a fixed Clock and avoid comparing source timestamps to moving Instant.now() values.

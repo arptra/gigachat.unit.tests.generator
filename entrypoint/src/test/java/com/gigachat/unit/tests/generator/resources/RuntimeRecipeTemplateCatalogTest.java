@@ -147,4 +147,28 @@ class RuntimeRecipeTemplateCatalogTest {
         assertEquals("promote_ref_initializer_to_created_object", operations.get(0).get("type"));
         assertEquals("ref", operations.get(0).get("refVariable"));
     }
+
+    @Test
+    void shouldRenderStaticInitRefFixtureRuntimeRecipeTemplate() {
+        RuntimeRecipeTemplateCatalog catalog = new RuntimeRecipeTemplateCatalog();
+
+        Map<String, Object> recipe = catalog.render("STATIC_INIT_REF_FIXTURE_RUNTIME_ALIGNMENT", Map.of(
+                "sourceClassUpper", "NEW_AUTO",
+                "sourceClassSimple", "NEW_AUTO",
+                "testMethodName", "test_NEW_AUTO_VALIDATE_WithNonNullAndValidThis",
+                "refVariable", "ref",
+                "refTypeExpression", "Ref",
+                "classIdLiteral", "ABONENT",
+                "failingClassFqcn", "bd.Abonent",
+                "objectTypeFqcn", "bd.Abonent"
+        ));
+
+        assertEquals("ALIGN_NEW_AUTO_STATIC_INIT_REF_FIXTURE", recipe.get("id"));
+        assertEquals("STATIC_INIT_REF_FIXTURE_RUNTIME_ALIGNMENT", recipe.get("kind"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>) recipe.get("operations");
+        assertEquals("replace_ref_initializer_with_mock_fixture", operations.get(0).get("type"));
+        assertEquals("ABONENT", operations.get(0).get("classIdLiteral"));
+        assertEquals("bd.Abonent", operations.get(0).get("objectTypeFqcn"));
+    }
 }

@@ -123,6 +123,7 @@ public class CoveragePipelineOrchestrator {
 
             boolean goalReached = false;
             int repeatedSignatureGraceRounds = 0;
+            boolean finalContextFollowUpGranted = false;
             for (int iteration = 0; iteration < loopPolicy.maxIterations(); iteration++) {
                 controller.incrementAttempt();
                 if (isRuntimeFailureBlockingCoverage(coverageResult) && runtimeRegressionHandler == null) {
@@ -232,7 +233,8 @@ public class CoveragePipelineOrchestrator {
                             + iterationResult.getInformation().keySet()
                             + " contextKeys="
                             + extractContextCache(iterationResult).keySet());
-                    if (producedUsefulContext(iterationResult)) {
+                    boolean usefulContext = producedUsefulContext(iterationResult);
+                    if (usefulContext) {
                         repeatedSignatureGraceRounds++;
                         logger.info("[COVERAGE_REASONING] Allowing follow-up reasoning after REQUEST_CONTEXT for "
                                 + generatedMethodName
@@ -243,9 +245,18 @@ public class CoveragePipelineOrchestrator {
                     }
                     controller.moveForDecision("STATE", decision, AgentState.S2_1_NEED_MORE_CONTEXT, "coverage context requested");
                     controller.decrementContextBudget();
-                    if (controller.contextBudgetRemaining() <= 0) {
+                    boolean allowFinalFollowUp = usefulContext
+                            && controller.contextBudgetRemaining() <= 0
+                            && !finalContextFollowUpGranted;
+                    if (controller.contextBudgetRemaining() <= 0 && !allowFinalFollowUp) {
                         controller.move("RESULT", AgentState.S6_GIVE_UP, "coverage context budget exhausted");
                         return new CoverageStageResult(false, coverageResult);
+                    }
+                    if (allowFinalFollowUp) {
+                        finalContextFollowUpGranted = true;
+                        logger.info("[COVERAGE_REASONING] Context budget reached zero after useful context for "
+                                + generatedMethodName
+                                + ". Allowing one final follow-up reasoning round with cached sources.");
                     }
                     controller.move("STATE",
                             AgentState.S5_COMPILATION_SUCCESS,

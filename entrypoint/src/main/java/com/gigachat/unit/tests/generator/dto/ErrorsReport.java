@@ -1,7 +1,9 @@
 package com.gigachat.unit.tests.generator.dto;
 
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -28,8 +30,26 @@ public final class ErrorsReport {
         return Collections.unmodifiableList(compileErrors);
     }
 
+    public void resolveCompileErrors(Path testClassFile, String methodName) {
+        if (testClassFile == null || methodName == null || methodName.isBlank()) {
+            return;
+        }
+        Path normalizedPath = testClassFile.toAbsolutePath().normalize();
+        compileErrors.removeIf(error -> Objects.equals(error.testClassFile().toAbsolutePath().normalize(), normalizedPath)
+                && Objects.equals(error.methodName(), methodName));
+    }
+
     public List<ExecuteErrors> getExecuteErrors() {
         return Collections.unmodifiableList(executeErrors);
+    }
+
+    public void resolveExecuteErrors(Path testClassFile, String methodName) {
+        if (testClassFile == null || methodName == null || methodName.isBlank()) {
+            return;
+        }
+        Path normalizedPath = testClassFile.toAbsolutePath().normalize();
+        executeErrors.removeIf(error -> Objects.equals(error.testClassFile().toAbsolutePath().normalize(), normalizedPath)
+                && Objects.equals(error.methodName(), methodName));
     }
 
     public void addCoverageErrors(CoverageErrors errors) {

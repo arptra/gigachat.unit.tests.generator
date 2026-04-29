@@ -260,6 +260,103 @@ class RecipeOperationApplierTest {
     }
 
     @Test
+    void shouldReplaceZeroArgRefInitializerWithMockFixtureForStaticInitFailures() {
+        String source = """
+                class NEW_AUTOTest {
+                    void anotherTest() {
+                        Ref ref = new Ref();
+                    }
+
+                    void test_NEW_AUTO_VALIDATE_WithNonNullAndValidThis() {
+                        Ref ref = new Ref();
+                        Varchar2 plpClass = new Varchar2("ABONENT");
+                        NEW_AUTO o = new NEW_AUTO();
+                        o.NEW_AUTO_VALIDATE(ref, plpClass, new Varchar2(), new Varchar2());
+                    }
+                }
+                """;
+
+        RecipeOperationApplier applier = new RecipeOperationApplier("test_NEW_AUTO_VALIDATE_WithNonNullAndValidThis");
+        String updated = applier.apply(source, Map.of(
+                "type", "replace_ref_initializer_with_mock_fixture",
+                "testMethodName", "test_NEW_AUTO_VALIDATE_WithNonNullAndValidThis",
+                "refVariable", "ref",
+                "refTypeExpression", "Ref",
+                "classIdLiteral", "ABONENT",
+                "objectTypeFqcn", "bd.Abonent"
+        ));
+
+        assertTrue(updated.contains("void anotherTest() {\n        Ref ref = new Ref();"));
+        assertTrue(updated.contains("void test_NEW_AUTO_VALIDATE_WithNonNullAndValidThis() {\n        Ref ref = mock(Ref.class);"));
+        assertTrue(updated.contains("when(ref.isNull_booleanValue()).thenReturn(false);"));
+        assertTrue(updated.contains("when(ref.isCreated()).thenReturn(true);"));
+        assertTrue(updated.contains("when(ref.getClassId()).thenReturn(new Varchar2(\"ABONENT\"));"));
+        assertFalse(updated.contains("void test_NEW_AUTO_VALIDATE_WithNonNullAndValidThis() {\n        Ref ref = new Ref();"));
+    }
+
+    @Test
+    void shouldReplaceConstructorBackedRefInitializerWithMockFixtureForStaticInitFailures() {
+        String source = """
+                class NEW_AUTOTest {
+                    void NEW_AUTO_VALIDATE_shouldSetLastRefAndLastClass() {
+                        Abonent abonent = new Abonent();
+                        Ref ref = new Ref(abonent);
+                        Varchar2 plpClass = new Varchar2("ABONENT");
+                        NEW_AUTO o = new NEW_AUTO();
+                        o.NEW_AUTO_VALIDATE(ref, plpClass, new Varchar2(), new Varchar2());
+                    }
+                }
+                """;
+
+        RecipeOperationApplier applier = new RecipeOperationApplier("NEW_AUTO_VALIDATE_shouldSetLastRefAndLastClass");
+        String updated = applier.apply(source, Map.of(
+                "type", "replace_ref_initializer_with_mock_fixture",
+                "testMethodName", "NEW_AUTO_VALIDATE_shouldSetLastRefAndLastClass",
+                "refVariable", "ref",
+                "refTypeExpression", "Ref",
+                "classIdLiteral", "ABONENT",
+                "objectTypeFqcn", "bd.Abonent"
+        ));
+
+        assertTrue(updated.contains("Abonent abonent = null;"));
+        assertTrue(updated.contains("Ref ref = mock(Ref.class);"));
+        assertTrue(updated.contains("when(ref.isNull_booleanValue()).thenReturn(false);"));
+        assertTrue(updated.contains("when(ref.isCreated()).thenReturn(true);"));
+        assertTrue(updated.contains("when(ref.getClassId()).thenReturn(new Varchar2(\"ABONENT\"));"));
+        assertFalse(updated.contains("Ref ref = new Ref(abonent);"));
+    }
+
+    @Test
+    void shouldReplaceInlineAbonentRefInitializerWithMockFixtureForStaticInitFailures() {
+        String source = """
+                class NEW_AUTOTest {
+                    void NEW_AUTO_EXECUTE_ResolvesAndUpdatesCache() {
+                        NEW_AUTO o = new NEW_AUTO();
+                        Ref thisRef = new Ref(new Abonent());
+                        Varchar2 plpClass = new Varchar2("ABONENT");
+                        Ref result = o.NEW_AUTO_EXECUTE(thisRef, plpClass);
+                    }
+                }
+                """;
+
+        RecipeOperationApplier applier = new RecipeOperationApplier("NEW_AUTO_EXECUTE_ResolvesAndUpdatesCache");
+        String updated = applier.apply(source, Map.of(
+                "type", "replace_ref_initializer_with_mock_fixture",
+                "testMethodName", "NEW_AUTO_EXECUTE_ResolvesAndUpdatesCache",
+                "refVariable", "thisRef",
+                "refTypeExpression", "Ref",
+                "classIdLiteral", "ABONENT",
+                "objectTypeFqcn", "bd.Abonent"
+        ));
+
+        assertTrue(updated.contains("Ref thisRef = mock(Ref.class);"));
+        assertTrue(updated.contains("when(thisRef.isNull_booleanValue()).thenReturn(false);"));
+        assertTrue(updated.contains("when(thisRef.isCreated()).thenReturn(true);"));
+        assertTrue(updated.contains("when(thisRef.getClassId()).thenReturn(new Varchar2(\"ABONENT\"));"));
+        assertFalse(updated.contains("Ref thisRef = new Ref(new Abonent());"));
+    }
+
+    @Test
     void shouldVerifyStaticVoidCallInsideMockScopeAndRemoveInstanceVerify() {
         String source = """
                 class ParentConnectionWorkflowTest {

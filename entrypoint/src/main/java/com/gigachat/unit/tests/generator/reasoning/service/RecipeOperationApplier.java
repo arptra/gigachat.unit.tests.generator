@@ -5,6 +5,7 @@ import com.gigachat.unit.tests.generator.pipeline.helpers.repair.UserConstructor
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -75,6 +76,12 @@ public class RecipeOperationApplier {
                     requireString(operation, "refVariable"),
                     requireString(operation, "refTypeExpression"),
                     requireString(operation, "objectTypeFqcn"));
+            case "replace_ref_initializer_with_mock_fixture" -> replaceRefInitializerWithMockFixture(source,
+                    requireString(operation, "testMethodName"),
+                    requireString(operation, "refVariable"),
+                    requireString(operation, "refTypeExpression"),
+                    requireString(operation, "classIdLiteral"),
+                    requireString(operation, "objectTypeFqcn"));
             case "collapse_consecutive_annotation" -> collapseConsecutiveAnnotation(source,
                     requireString(operation, "annotation"));
             case "insert_method_before_class_end" -> insertMethodBeforeClassEnd(source,
@@ -142,6 +149,137 @@ public class RecipeOperationApplier {
             return String.join("\n", lines);
         }
         return source;
+    }
+
+    private String replaceRefInitializerWithMockFixture(String source,
+                                                        String testMethodName,
+                                                        String refVariable,
+                                                        String refTypeExpression,
+                                                        String classIdLiteral,
+                                                        String objectTypeFqcn) {
+        if (source == null
+                || source.isBlank()
+                || refVariable == null
+                || refVariable.isBlank()
+                || refTypeExpression == null
+                || refTypeExpression.isBlank()) {
+            return source;
+        }
+        List<String> lines = new ArrayList<>(Arrays.asList(source.split("\n", -1)));
+        String methodName = testMethodName == null || testMethodName.isBlank() ? targetTestMethodName : testMethodName;
+        int methodStart = findMethodStart(lines, methodName);
+        int methodEnd = methodStart >= 0 ? findMethodEnd(lines, methodStart) : -1;
+        if (methodStart < 0 || methodEnd < methodStart) {
+            return source;
+        }
+        Pattern pattern = Pattern.compile("(?<prefix>\\b"
+                + Pattern.quote(refVariable)
+                + "\\s*=\\s*)new\\s+"
+                + Pattern.quote(refTypeExpression)
+                + "\\s*\\((?<args>[^;]*)\\)\\s*;");
+        for (int index = methodStart; index <= methodEnd && index < lines.size(); index++) {
+            String line = lines.get(index);
+            Matcher matcher = pattern.matcher(line);
+            if (!matcher.find()) {
+                continue;
+            }
+            String constructorArgs = matcher.group("args") == null ? "" : matcher.group("args").trim();
+            if (!constructorArgs.isBlank()
+                    && !looksLikeVariableReference(constructorArgs)
+                    && !looksLikeInlineObjectConstructor(constructorArgs, objectTypeFqcn)) {
+                continue;
+            }
+            String replacement = matcher.replaceFirst(Matcher.quoteReplacement(
+                    matcher.group("prefix") + "mock(" + refTypeExpression + ".class);"));
+            lines.set(index, replacement);
+            if (looksLikeVariableReference(constructorArgs)) {
+                neutralizeObjectConstructor(lines, methodStart, methodEnd, constructorArgs, objectTypeFqcn);
+            }
+            String indent = leadingIndent(line);
+            insertIfMissing(lines,
+                    index + 1,
+                    indent + "when(" + refVariable + ".isNull_booleanValue()).thenReturn(false);");
+            insertIfMissing(lines,
+                    index + 2,
+                    indent + "when(" + refVariable + ".isCreated()).thenReturn(true);");
+            String normalizedClassId = defaultClassIdLiteral(classIdLiteral, objectTypeFqcn);
+            insertIfMissing(lines,
+                    index + 3,
+                    indent + "when(" + refVariable + ".getClassId()).thenReturn(new Varchar2(\""
+                            + escapeJava(normalizedClassId)
+                            + "\"));");
+            return String.join("\n", lines);
+        }
+        return source;
+    }
+
+    private void neutralizeObjectConstructor(List<String> lines,
+                                             int methodStart,
+                                             int methodEnd,
+                                             String variableName,
+                                             String objectTypeFqcn) {
+        if (lines == null || variableName == null || variableName.isBlank()) {
+            return;
+        }
+        String objectSimpleName = simpleName(objectTypeFqcn);
+        if (objectSimpleName.isBlank()) {
+            return;
+        }
+        Pattern pattern = Pattern.compile("(?<indent>\\s*)(?:final\\s+)?(?<type>(?:[A-Za-z_][A-Za-z0-9_$.]*\\.)?"
+                + Pattern.quote(objectSimpleName)
+                + ")\\s+"
+                + Pattern.quote(variableName)
+                + "\\s*=\\s*new\\s+(?:[A-Za-z_][A-Za-z0-9_$.]*\\.)?"
+                + Pattern.quote(objectSimpleName)
+                + "\\s*\\(\\s*\\)\\s*;");
+        for (int index = methodStart; index <= methodEnd && index < lines.size(); index++) {
+            String line = lines.get(index);
+            Matcher matcher = pattern.matcher(line);
+            if (!matcher.find()) {
+                continue;
+            }
+            lines.set(index, matcher.group("indent") + matcher.group("type") + " " + variableName + " = null;");
+            return;
+        }
+    }
+
+    private boolean looksLikeVariableReference(String value) {
+        return value != null && value.trim().matches("[A-Za-z_][A-Za-z0-9_]*");
+    }
+
+    private boolean looksLikeInlineObjectConstructor(String value, String objectTypeFqcn) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String objectSimpleName = simpleName(objectTypeFqcn);
+        if (objectSimpleName.isBlank()) {
+            return false;
+        }
+        return value.trim().matches("new\\s+(?:[A-Za-z_][A-Za-z0-9_$.]*\\.)?"
+                + Pattern.quote(objectSimpleName)
+                + "\\s*\\(\\s*\\)");
+    }
+
+    private String defaultClassIdLiteral(String classIdLiteral, String objectTypeFqcn) {
+        if (classIdLiteral != null && !classIdLiteral.isBlank()) {
+            return classIdLiteral;
+        }
+        String simpleName = simpleName(objectTypeFqcn);
+        if (simpleName.isBlank()) {
+            return "UNKNOWN";
+        }
+        return simpleName
+                .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+                .replaceAll("[^A-Za-z0-9]+", "_")
+                .toUpperCase(Locale.ROOT);
+    }
+
+    private String simpleName(String fqcn) {
+        if (fqcn == null || fqcn.isBlank()) {
+            return "";
+        }
+        int separator = fqcn.lastIndexOf('.');
+        return separator >= 0 ? fqcn.substring(separator + 1) : fqcn;
     }
 
     private String insertMethodBeforeClassEnd(String source, String methodSource) {
@@ -453,6 +591,19 @@ public class RecipeOperationApplier {
             }
         }
         return false;
+    }
+
+    private void insertIfMissing(List<String> lines, int index, String statement) {
+        if (lines == null || statement == null || statement.isBlank()) {
+            return;
+        }
+        for (String line : lines) {
+            if (statement.equals(line.trim()) || line.trim().equals(statement.trim())) {
+                return;
+            }
+        }
+        int boundedIndex = Math.max(0, Math.min(index, lines.size()));
+        lines.add(boundedIndex, statement);
     }
 
     private boolean methodContainsText(List<String> lines, int methodStart, int methodEnd, String expected) {

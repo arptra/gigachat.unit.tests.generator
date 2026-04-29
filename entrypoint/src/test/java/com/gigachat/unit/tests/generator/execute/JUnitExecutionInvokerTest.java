@@ -169,4 +169,15 @@ class JUnitExecutionInvokerTest {
         assertTrue(logs.contains("[EXECUTION][stderr] streamed stderr line"));
         assertTrue(logs.contains("[EXECUTION] Process finished with exitCode=1"));
     }
+
+    @Test
+    void shouldIncludeForkedRunnerOwningCodeSourceInDirectExecutionClasspath() {
+        JUnitExecutionInvoker invoker = new JUnitExecutionInvoker(new PipelineLogger(tempDir));
+
+        List<String> entries = invoker.owningClasspathEntries();
+
+        assertFalse(entries.isEmpty());
+        assertTrue(entries.stream().anyMatch(entry -> entry.contains("entrypoint")
+                || entry.endsWith(".jar")));
+    }
 }

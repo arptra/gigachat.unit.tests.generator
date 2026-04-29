@@ -176,24 +176,6 @@ public class DeterministicCoverageRecipeBuilder {
                 return List.of(sourceDerivedReturnBranchRecipe);
             }
 
-            Map<String, Object> newAutoValidateReturnBranchRecipe = buildNewAutoValidateReturnBranchRecipe(
-                    baselineMethod,
-                    usedNames,
-                    targetMethod,
-                    goalPercent);
-            if (newAutoValidateReturnBranchRecipe != null && !newAutoValidateReturnBranchRecipe.isEmpty()) {
-                return List.of(newAutoValidateReturnBranchRecipe);
-            }
-
-            Map<String, Object> legacyValidateNullBranchRecipe = buildLegacyValidateNullBranchRecipe(
-                    baselineMethod,
-                    usedNames,
-                    targetMethod,
-                    goalPercent);
-            if (legacyValidateNullBranchRecipe != null && !legacyValidateNullBranchRecipe.isEmpty()) {
-                return List.of(legacyValidateNullBranchRecipe);
-            }
-
             Map<String, Object> stateToggleBooleanBranchRecipe = buildStateToggleBooleanBranchRecipe(
                     baselineMethod,
                     usedNames,
@@ -490,112 +472,6 @@ public class DeterministicCoverageRecipeBuilder {
                 siblingVariant,
                 targetMethod,
                 goalPercent);
-    }
-
-    private Map<String, Object> buildLegacyValidateNullBranchRecipe(MethodDeclaration baselineMethod,
-                                                                    LinkedHashSet<String> usedNames,
-                                                                    String targetMethod,
-                                                                    int goalPercent) {
-        if (!"NEW_AUTO_VALIDATE".equals(targetMethod) || baselineMethod == null || baselineMethod.getBody().isEmpty()) {
-            return null;
-        }
-        BlockStmt body = baselineMethod.getBody().orElse(null);
-        int actIndex = body == null ? -1 : findActStatementIndex(body, targetMethod);
-        if (actIndex < 0) {
-            return null;
-        }
-        MethodCallExpr targetCall = findTargetMethodCall(body.getStatement(actIndex), targetMethod);
-        if (targetCall == null || targetCall.getArguments().size() < 4 || targetCall.getScope().isEmpty()) {
-            return null;
-        }
-        VariableDeclarator thisVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(0));
-        VariableDeclarator classVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(1));
-        VariableDeclarator messageVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(2));
-        VariableDeclarator infoVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(3));
-        if (thisVariable == null || classVariable == null || messageVariable == null || infoVariable == null) {
-            return null;
-        }
-        String refFactory = initializerSource(thisVariable);
-        String classNonAbonentFactory = factoryExpressionWithString(classVariable, "CLASS");
-        String messageFactory = factoryExpressionWithString(messageVariable, "MESSAGE");
-        String infoFactory = factoryExpressionWithString(infoVariable, "INFO");
-        if (refFactory == null || classNonAbonentFactory == null || messageFactory == null || infoFactory == null) {
-            return null;
-        }
-        if (!baselineMethod.toString().contains(".isLocked()")) {
-            return null;
-        }
-        String methodName = resolveUniqueVariantName(usedNames, baselineMethod.getNameAsString());
-        String sutExpression = targetCall.getScope().map(Expression::toString).orElse("");
-        String methodSource = String.join("\n",
-                "    @Test",
-                "    void " + methodName + "() {",
-                "        " + classVariable.getType() + " nonAbonentClass = " + classNonAbonentFactory + ";",
-                "        " + messageVariable.getType() + " message = " + messageFactory + ";",
-                "        " + infoVariable.getType() + " info = " + infoFactory + ";",
-                "        " + sutExpression + "." + targetMethod + "(null, nonAbonentClass, message, info);",
-                "",
-                "        " + thisVariable.getType() + " ref = " + refFactory + ";",
-                "        " + sutExpression + "." + targetMethod + "(ref, nonAbonentClass, null, null);",
-                "",
-                "        assertThat(ref.isLocked()).isTrue();",
-                "    }");
-        return renderRecipe(
-                "ADD_LEGACY_VALIDATE_NULL_BRANCH_SIBLING_TEST",
-                methodSource,
-                targetMethod,
-                goalPercent,
-                List.of("static org.assertj.core.api.Assertions.assertThat"));
-    }
-
-    private Map<String, Object> buildNewAutoValidateReturnBranchRecipe(MethodDeclaration baselineMethod,
-                                                                       LinkedHashSet<String> usedNames,
-                                                                       String targetMethod,
-                                                                       int goalPercent) {
-        if (!"NEW_AUTO_VALIDATE".equals(targetMethod) || baselineMethod == null || baselineMethod.getBody().isEmpty()) {
-            return null;
-        }
-        BlockStmt body = baselineMethod.getBody().orElse(null);
-        int actIndex = body == null ? -1 : findActStatementIndex(body, targetMethod);
-        if (actIndex < 0) {
-            return null;
-        }
-        MethodCallExpr targetCall = findTargetMethodCall(body.getStatement(actIndex), targetMethod);
-        if (targetCall == null || targetCall.getArguments().size() < 4 || targetCall.getScope().isEmpty()) {
-            return null;
-        }
-        String sutExpression = targetCall.getScope().map(Expression::toString).orElse("");
-        if (!isReceiverBoundToType(baselineMethod, sutExpression, "NEW_AUTO")) {
-            return null;
-        }
-        VariableDeclarator classVariable = findVariableDeclaration(baselineMethod, targetCall.getArgument(1));
-        if (classVariable == null) {
-            return null;
-        }
-        String validClassFactory = stringInitializerWithValue(classVariable, "ABONENT");
-        if (validClassFactory == null || validClassFactory.isBlank()) {
-            return null;
-        }
-        if (sutExpression.isBlank()) {
-            return null;
-        }
-        String methodName = resolveUniqueVariantName(usedNames, baselineMethod.getNameAsString());
-        String methodSource = String.join("\n",
-                "    @Test",
-                "    void " + methodName + "() {",
-                "        " + classVariable.getType() + " validAbonentClass = " + validClassFactory + ";",
-                "",
-                "        " + sutExpression + "." + targetMethod + "(null, validAbonentClass, null, null);",
-                "",
-                "        assertThat(" + sutExpression + ".lastRef()).isNotNull();",
-                "        assertThat(" + sutExpression + ".lastClass().toString()).isEqualTo(\"ABONENT\");",
-                "    }");
-        return renderRecipe(
-                "ADD_SOURCE_DERIVED_RETURN_BRANCH_SIBLING_TEST",
-                methodSource,
-                targetMethod,
-                goalPercent,
-                List.of("static org.assertj.core.api.Assertions.assertThat"));
     }
 
     private Map<String, Object> buildNullGuardRecipe(MethodDeclaration baselineMethod,

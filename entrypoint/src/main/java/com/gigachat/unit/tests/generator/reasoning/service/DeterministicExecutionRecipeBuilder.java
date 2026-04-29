@@ -1,5 +1,8 @@
 package com.gigachat.unit.tests.generator.reasoning.service;
 
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.gigachat.unit.tests.generator.analyzer.ConstructorMetadata;
+import com.gigachat.unit.tests.generator.analyzer.ParameterMetadata;
 import com.gigachat.unit.tests.generator.dto.MockPlan;
 import com.gigachat.unit.tests.generator.dto.TestClassInfo;
 import com.gigachat.unit.tests.generator.dto.TestMethodInfo;
@@ -44,6 +47,22 @@ public class DeterministicExecutionRecipeBuilder {
             "(?m)^\\s*(?<owner>[a-zA-Z0-9_$.]+)\\.(?<method>[A-Za-z_][A-Za-z0-9_]*)\\([^\\n]*\\)$");
     private static final Pattern ZERO_ARG_OBJECT_CREATION_ASSIGNMENT = Pattern.compile(
             "(?m)(?:final\\s+)?(?:var|[\\w.$<>\\[\\]]+)\\s+(?<var>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*new\\s+(?<type>[A-Za-z_][A-Za-z0-9_$.]*)\\s*\\(\\s*\\)\\s*;");
+    private static final Pattern REF_CREATION_ASSIGNMENT = Pattern.compile(
+            "(?m)(?:final\\s+)?(?:var|[\\w.$<>\\[\\]]+)\\s+(?<var>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*new\\s+(?<type>[A-Za-z_][A-Za-z0-9_$.]*)\\s*\\((?<args>[^;]*)\\)\\s*;");
+    private static final Pattern STATIC_INIT_FAILURE = Pattern.compile(
+            "could\\s+not\\s+initialize\\s+class\\s+(?<class>[A-Za-z_][\\w.$]*)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern STATIC_INITIALIZER_STACK_FRAME = Pattern.compile(
+            "(?m)^\\s*(?:at\\s+)?(?<class>[A-Za-z_][\\w.$]*)\\.<clinit>\\([^\\n]*\\)$");
+    private static final Pattern JUNIT_METHOD_SOURCE_NAME = Pattern.compile(
+            "methodName\\s*=\\s*'(?<method>[A-Za-z_][A-Za-z0-9_$]*)'");
+    private static final Pattern JUNIT_CONSOLE_METHOD_NAME = Pattern.compile(
+            "JUnit\\s+Jupiter:[^:\\r\\n]+:(?<method>[A-Za-z_][A-Za-z0-9_$]*)\\(");
+    private static final Pattern META_ID_ANNOTATION = Pattern.compile(
+            "@MetaId\\s*\\(\\s*\"(?<id>[^\"]+)\"\\s*\\)");
+    private static final Pattern STATIC_STRING_ID_ASSIGNMENT = Pattern.compile(
+            "(?m)\\b(?:private|protected|public)?\\s*static\\s+final\\s+String\\s+"
+                    + "(?:id|classId|metaId|typeId)\\s*=\\s*\"(?<id>[^\"]+)\"\\s*;");
     private static final RuntimeRecipeTemplateCatalog RECIPE_TEMPLATES = new RuntimeRecipeTemplateCatalog();
 
     public List<Map<String, Object>> build(Path projectRoot,
@@ -62,7 +81,8 @@ public class DeterministicExecutionRecipeBuilder {
                 methodInfo,
                 rawCombinedFailure));
         String targetBody = defaultString(methodInfo.getBody());
-        Map<String, Object> thresholdRejectionRecipe = buildThresholdRejectionRuntimeRecipe(classInfo,
+        Map<String, Object> thresholdRejectionRecipe = buildThresholdRejectionRuntimeRecipe(projectRoot,
+                classInfo,
                 methodInfo,
                 targetBody,
                 rawCombinedFailure,
@@ -71,7 +91,8 @@ public class DeterministicExecutionRecipeBuilder {
         if (thresholdRejectionRecipe != null && !thresholdRejectionRecipe.isEmpty()) {
             recipes.add(thresholdRejectionRecipe);
         }
-        Map<String, Object> temporalNowRecipe = buildTemporalNowAssertionWindowRecipe(classInfo,
+        Map<String, Object> temporalNowRecipe = buildTemporalNowAssertionWindowRecipe(projectRoot,
+                classInfo,
                 methodInfo,
                 targetBody,
                 rawCombinedFailure,
@@ -80,7 +101,8 @@ public class DeterministicExecutionRecipeBuilder {
         if (temporalNowRecipe != null && !temporalNowRecipe.isEmpty()) {
             recipes.add(temporalNowRecipe);
         }
-        Map<String, Object> reboundThresholdAttemptsRecipe = buildReboundThresholdAttemptsRecipe(classInfo,
+        Map<String, Object> reboundThresholdAttemptsRecipe = buildReboundThresholdAttemptsRecipe(projectRoot,
+                classInfo,
                 methodInfo,
                 targetBody,
                 rawCombinedFailure,
@@ -89,13 +111,25 @@ public class DeterministicExecutionRecipeBuilder {
         if (reboundThresholdAttemptsRecipe != null && !reboundThresholdAttemptsRecipe.isEmpty()) {
             recipes.add(reboundThresholdAttemptsRecipe);
         }
-        Map<String, Object> badClassIdRefRecipe = buildBadClassIdRefRecipe(classInfo,
+        Map<String, Object> badClassIdRefRecipe = buildBadClassIdRefRecipe(projectRoot,
+                classInfo,
                 methodInfo,
+                analysisSummary,
                 rawCombinedFailure,
                 executeResult,
                 reportFailures);
         if (badClassIdRefRecipe != null && !badClassIdRefRecipe.isEmpty()) {
             recipes.add(badClassIdRefRecipe);
+        }
+        Map<String, Object> staticInitRefRecipe = buildStaticInitRefRecipe(projectRoot,
+                classInfo,
+                methodInfo,
+                analysisSummary,
+                rawCombinedFailure,
+                executeResult,
+                reportFailures);
+        if (staticInitRefRecipe != null && !staticInitRefRecipe.isEmpty()) {
+            recipes.add(staticInitRefRecipe);
         }
         MockPlan mockPlan = analysisSummary.mockPlan();
         if (mockPlan == null || mockPlan.shouldMock().isEmpty()) {
@@ -256,7 +290,8 @@ public class DeterministicExecutionRecipeBuilder {
         ));
     }
 
-    private Map<String, Object> buildThresholdRejectionRuntimeRecipe(TestClassInfo classInfo,
+    private Map<String, Object> buildThresholdRejectionRuntimeRecipe(Path projectRoot,
+                                                                     TestClassInfo classInfo,
                                                                      TestMethodInfo methodInfo,
                                                                      String targetBody,
                                                                      String rawCombinedFailure,
@@ -278,7 +313,7 @@ public class DeterministicExecutionRecipeBuilder {
         }
 
         String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
-        String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
+        String failingTestSource = readGeneratedTestMethod(projectRoot, classInfo, executeResult, reportFailures, failingTestMethod);
         if (!looksLikeRejectionExpectation(failingTestMethod, failingTestSource)) {
             return null;
         }
@@ -328,7 +363,8 @@ public class DeterministicExecutionRecipeBuilder {
         ));
     }
 
-    private Map<String, Object> buildTemporalNowAssertionWindowRecipe(TestClassInfo classInfo,
+    private Map<String, Object> buildTemporalNowAssertionWindowRecipe(Path projectRoot,
+                                                                      TestClassInfo classInfo,
                                                                       TestMethodInfo methodInfo,
                                                                       String targetBody,
                                                                       String rawCombinedFailure,
@@ -349,7 +385,7 @@ public class DeterministicExecutionRecipeBuilder {
         }
 
         String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
-        String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
+        String failingTestSource = readGeneratedTestMethod(projectRoot, classInfo, executeResult, reportFailures, failingTestMethod);
         if (!looksLikeTemporalNowAssertion(failingTestSource)) {
             return null;
         }
@@ -381,7 +417,8 @@ public class DeterministicExecutionRecipeBuilder {
                 || lower.contains(".isbefore");
     }
 
-    private Map<String, Object> buildReboundThresholdAttemptsRecipe(TestClassInfo classInfo,
+    private Map<String, Object> buildReboundThresholdAttemptsRecipe(Path projectRoot,
+                                                                    TestClassInfo classInfo,
                                                                     TestMethodInfo methodInfo,
                                                                     String targetBody,
                                                                     String rawCombinedFailure,
@@ -404,7 +441,7 @@ public class DeterministicExecutionRecipeBuilder {
         }
 
         String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
-        String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
+        String failingTestSource = readGeneratedTestMethod(projectRoot, classInfo, executeResult, reportFailures, failingTestMethod);
         if (!looksLikeHighReboundExpectation(failingTestMethod, failingTestSource, sutMethod)) {
             return null;
         }
@@ -427,8 +464,10 @@ public class DeterministicExecutionRecipeBuilder {
         ));
     }
 
-    private Map<String, Object> buildBadClassIdRefRecipe(TestClassInfo classInfo,
+    private Map<String, Object> buildBadClassIdRefRecipe(Path projectRoot,
+                                                         TestClassInfo classInfo,
                                                          TestMethodInfo methodInfo,
+                                                         Analyze.AnalysisSummary analysisSummary,
                                                          String rawCombinedFailure,
                                                          ExecuteResult executeResult,
                                                          List<TestReportFailure> reportFailures) {
@@ -439,14 +478,18 @@ public class DeterministicExecutionRecipeBuilder {
         if (!combinedFailure.contains("bad_class_id") || !combinedFailure.contains("transactionexception")) {
             return null;
         }
-        String sutMethod = extractMethodNameFromSignature(methodInfo.getSignature());
-        if (!"NEW_AUTO_EXECUTE".equals(sutMethod)) {
-            return null;
-        }
         String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
-        String failingTestSource = readGeneratedTestMethod(classInfo.getTargetPath(), failingTestMethod);
+        String failingTestSource = readGeneratedTestMethod(projectRoot, classInfo, executeResult, reportFailures, failingTestMethod);
         RefInitializerDetails refInitializer = findZeroArgumentRefInitializer(failingTestSource);
         if (refInitializer == null) {
+            return null;
+        }
+        String objectTypeFqcn = resolveReferenceOwnerType(projectRoot,
+                classInfo,
+                methodInfo,
+                analysisSummary,
+                refInitializer.typeExpression());
+        if (objectTypeFqcn.isBlank()) {
             return null;
         }
         String sourceClass = simpleName(classInfo.getClassName());
@@ -459,7 +502,62 @@ public class DeterministicExecutionRecipeBuilder {
                 "testMethodName", failingTestMethod,
                 "refVariable", refInitializer.variableName(),
                 "refTypeExpression", refInitializer.typeExpression(),
-                "objectTypeFqcn", "bd.Abonent"
+                "objectTypeFqcn", objectTypeFqcn
+        ));
+    }
+
+    private Map<String, Object> buildStaticInitRefRecipe(Path projectRoot,
+                                                         TestClassInfo classInfo,
+                                                         TestMethodInfo methodInfo,
+                                                         Analyze.AnalysisSummary analysisSummary,
+                                                         String rawCombinedFailure,
+                                                         ExecuteResult executeResult,
+                                                         List<TestReportFailure> reportFailures) {
+        if (classInfo == null || methodInfo == null) {
+            return null;
+        }
+        String combinedFailure = rawCombinedFailure == null ? "" : rawCombinedFailure.toLowerCase(Locale.ROOT);
+        if (!combinedFailure.contains("noclassdeffounderror")
+                && !combinedFailure.contains("exceptionininitializererror")
+                && !combinedFailure.contains("could not initialize class")
+                && !combinedFailure.contains("<clinit>")) {
+            return null;
+        }
+        String failingClass = resolveStaticInitFailingClass(rawCombinedFailure);
+        if (failingClass.isBlank()) {
+            return null;
+        }
+        String failingTestMethod = firstFailureMethodName(executeResult, reportFailures);
+        String failingTestSource = readGeneratedTestMethod(projectRoot, classInfo, executeResult, reportFailures, failingTestMethod);
+        RefInitializerDetails refInitializer = findStaticInitRefInitializer(failingTestSource, failingClass);
+        if (refInitializer == null) {
+            return null;
+        }
+        String ownerTypeFqcn = resolveReferenceOwnerType(projectRoot,
+                classInfo,
+                methodInfo,
+                analysisSummary,
+                refInitializer.typeExpression());
+        if (ownerTypeFqcn.isBlank()) {
+            ownerTypeFqcn = failingClass;
+        }
+        if (ownerTypeFqcn.isBlank()) {
+            return null;
+        }
+        String sourceClass = simpleName(classInfo.getClassName());
+        if (sourceClass.isBlank()) {
+            return null;
+        }
+        String classIdLiteral = resolveClassIdLiteral(projectRoot, ownerTypeFqcn);
+        return RECIPE_TEMPLATES.render("STATIC_INIT_REF_FIXTURE_RUNTIME_ALIGNMENT", Map.of(
+                "sourceClassUpper", sourceClass.toUpperCase(Locale.ROOT),
+                "sourceClassSimple", sourceClass,
+                "testMethodName", failingTestMethod,
+                "refVariable", refInitializer.variableName(),
+                "refTypeExpression", refInitializer.typeExpression(),
+                "classIdLiteral", classIdLiteral,
+                "failingClassFqcn", failingClass,
+                "objectTypeFqcn", ownerTypeFqcn
         ));
     }
 
@@ -487,6 +585,31 @@ public class DeterministicExecutionRecipeBuilder {
         return matcher.find() ? matcher.group(1) : "";
     }
 
+    private RefInitializerDetails findStaticInitRefInitializer(String methodSource, String objectTypeFqcn) {
+        if (methodSource == null || methodSource.isBlank()) {
+            return null;
+        }
+        Matcher matcher = REF_CREATION_ASSIGNMENT.matcher(methodSource);
+        while (matcher.find()) {
+            String typeExpression = matcher.group("type");
+            if (!looksLikeReferenceType(typeExpression)) {
+                continue;
+            }
+            String args = matcher.group("args") == null ? "" : matcher.group("args").trim();
+            if (!args.isBlank()) {
+                if (looksLikeSimpleVariable(args)) {
+                    if (!isVariableConstructedFromType(methodSource, args, objectTypeFqcn)) {
+                        continue;
+                    }
+                } else if (!looksLikeInlineObjectConstructor(args, objectTypeFqcn)) {
+                    continue;
+                }
+            }
+            return new RefInitializerDetails(matcher.group("var"), typeExpression);
+        }
+        return null;
+    }
+
     private RefInitializerDetails findZeroArgumentRefInitializer(String methodSource) {
         if (methodSource == null || methodSource.isBlank()) {
             return null;
@@ -494,7 +617,7 @@ public class DeterministicExecutionRecipeBuilder {
         Matcher matcher = ZERO_ARG_OBJECT_CREATION_ASSIGNMENT.matcher(methodSource);
         while (matcher.find()) {
             String typeExpression = matcher.group("type");
-            if (!"Ref".equals(simpleName(typeExpression))) {
+            if (!looksLikeReferenceType(typeExpression)) {
                 continue;
             }
             return new RefInitializerDetails(matcher.group("var"), typeExpression);
@@ -502,10 +625,283 @@ public class DeterministicExecutionRecipeBuilder {
         return null;
     }
 
+    private String resolveStaticInitFailingClass(String rawCombinedFailure) {
+        String failure = rawCombinedFailure == null ? "" : rawCombinedFailure;
+        Matcher failureMatcher = STATIC_INIT_FAILURE.matcher(failure);
+        if (failureMatcher.find()) {
+            return failureMatcher.group("class").replace('$', '.');
+        }
+        Matcher stackMatcher = STATIC_INITIALIZER_STACK_FRAME.matcher(failure);
+        if (stackMatcher.find()) {
+            return stackMatcher.group("class").replace('$', '.');
+        }
+        return "";
+    }
+
+    private boolean looksLikeSimpleVariable(String value) {
+        return value != null && value.trim().matches("[A-Za-z_][A-Za-z0-9_]*");
+    }
+
+    private boolean looksLikeReferenceType(String typeExpression) {
+        String simple = simpleName(typeExpression);
+        return "Ref".equals(simple) || simple.endsWith("Ref");
+    }
+
+    private boolean looksLikeInlineObjectConstructor(String value, String objectTypeFqcn) {
+        if (value == null || value.isBlank() || objectTypeFqcn == null || objectTypeFqcn.isBlank()) {
+            return false;
+        }
+        Matcher matcher = Pattern.compile("new\\s+(?<type>[A-Za-z_][A-Za-z0-9_$.]*)\\s*\\(\\s*\\)").matcher(value.trim());
+        if (!matcher.matches()) {
+            return false;
+        }
+        return typesMatch(matcher.group("type"), objectTypeFqcn);
+    }
+
+    private boolean isVariableConstructedFromType(String methodSource, String variableName, String objectTypeFqcn) {
+        if (methodSource == null
+                || methodSource.isBlank()
+                || variableName == null
+                || variableName.isBlank()
+                || objectTypeFqcn == null
+                || objectTypeFqcn.isBlank()) {
+            return false;
+        }
+        Pattern pattern = Pattern.compile("(?m)(?:final\\s+)?(?:var|[\\w.$<>\\[\\]]+)\\s+"
+                + Pattern.quote(variableName)
+                + "\\s*=\\s*new\\s+(?<type>[A-Za-z_][A-Za-z0-9_$.]*)\\s*\\((?<args>[^;]*)\\)\\s*;");
+        Matcher matcher = pattern.matcher(methodSource);
+        while (matcher.find()) {
+            String args = matcher.group("args") == null ? "" : matcher.group("args").trim();
+            if (!args.isBlank()) {
+                continue;
+            }
+            if (typesMatch(matcher.group("type"), objectTypeFqcn)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean typesMatch(String left, String right) {
+        if (left == null || right == null || left.isBlank() || right.isBlank()) {
+            return false;
+        }
+        return normalizeClassLikeName(left).equals(normalizeClassLikeName(right))
+                || simpleName(left).equals(simpleName(right));
+    }
+
+    private String normalizeClassLikeName(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.replace('$', '.').trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String resolveReferenceOwnerType(Path projectRoot,
+                                             TestClassInfo classInfo,
+                                             TestMethodInfo methodInfo,
+                                             Analyze.AnalysisSummary analysisSummary,
+                                             String refTypeExpression) {
+        String ownerFromType = ownerFromReferenceType(refTypeExpression);
+        if (!ownerFromType.isBlank()) {
+            return ownerFromType;
+        }
+        String refSimpleName = simpleName(refTypeExpression);
+        if (refSimpleName.isBlank()) {
+            return "";
+        }
+        String ownerFromSignature = ownerFromMethodSignature(methodInfo, refSimpleName);
+        if (!ownerFromSignature.isBlank()) {
+            return ownerFromSignature;
+        }
+        String ownerFromImports = ownerFromImports(classInfo, refSimpleName);
+        if (!ownerFromImports.isBlank()) {
+            return ownerFromImports;
+        }
+        return ownerFromConstructors(projectRoot, classInfo, analysisSummary, refSimpleName);
+    }
+
+    private String ownerFromReferenceType(String refTypeExpression) {
+        if (refTypeExpression == null || refTypeExpression.isBlank()) {
+            return "";
+        }
+        int nestedIndex = refTypeExpression.lastIndexOf(".Ref");
+        if (nestedIndex <= 0) {
+            return "";
+        }
+        return refTypeExpression.substring(0, nestedIndex).trim();
+    }
+
+    private String ownerFromMethodSignature(TestMethodInfo methodInfo, String refSimpleName) {
+        if (methodInfo == null || refSimpleName == null || refSimpleName.isBlank()) {
+            return "";
+        }
+        for (String candidate : referencedTypes(methodInfo)) {
+            int nestedIndex = candidate.lastIndexOf("." + refSimpleName);
+            if (nestedIndex > 0) {
+                return candidate.substring(0, nestedIndex).trim();
+            }
+        }
+        return "";
+    }
+
+    private List<String> referencedTypes(TestMethodInfo methodInfo) {
+        if (methodInfo == null) {
+            return List.of();
+        }
+        List<String> referenced = new ArrayList<>();
+        MethodDeclaration declaration = methodInfo.getDeclaration();
+        if (declaration != null) {
+            referenced.add(declaration.getType().asString());
+            declaration.getParameters().forEach(parameter -> referenced.add(parameter.getType().asString()));
+            return referenced;
+        }
+        String signature = methodInfo.getSignature();
+        if (signature == null || signature.isBlank()) {
+            return List.of();
+        }
+        try {
+            MethodDeclaration parsed = com.github.javaparser.StaticJavaParser.parseMethodDeclaration(signature + " {}");
+            referenced.add(parsed.getType().asString());
+            parsed.getParameters().forEach(parameter -> referenced.add(parameter.getType().asString()));
+        } catch (Exception ignored) {
+            Matcher matcher = Pattern.compile("([A-Za-z_][\\w$.]*)").matcher(signature);
+            while (matcher.find()) {
+                referenced.add(matcher.group(1));
+            }
+        }
+        return referenced;
+    }
+
+    private String ownerFromImports(TestClassInfo classInfo, String refSimpleName) {
+        if (classInfo == null || refSimpleName == null || refSimpleName.isBlank()) {
+            return "";
+        }
+        for (String importLine : classInfo.getImports()) {
+            String importedType = importedType(importLine);
+            if (importedType.isBlank()) {
+                continue;
+            }
+            int nestedIndex = importedType.lastIndexOf("." + refSimpleName);
+            if (nestedIndex > 0) {
+                return importedType.substring(0, nestedIndex).trim();
+            }
+        }
+        return "";
+    }
+
+    private String ownerFromConstructors(Path projectRoot,
+                                         TestClassInfo classInfo,
+                                         Analyze.AnalysisSummary analysisSummary,
+                                         String refSimpleName) {
+        if (analysisSummary == null || analysisSummary.availableConstructors() == null || refSimpleName == null || refSimpleName.isBlank()) {
+            return "";
+        }
+        for (Map.Entry<String, List<ConstructorMetadata>> entry : analysisSummary.availableConstructors().entrySet()) {
+            if (!simpleName(entry.getKey()).equals(refSimpleName)) {
+                continue;
+            }
+            for (ConstructorMetadata constructor : entry.getValue()) {
+                if (constructor == null || constructor.parameters().size() != 1) {
+                    continue;
+                }
+                ParameterMetadata parameter = constructor.parameters().get(0);
+                if (parameter == null || parameter.type().isBlank()) {
+                    continue;
+                }
+                String resolved = resolveTypeFqcn(projectRoot, classInfo, parameter.type());
+                if (!resolved.isBlank()) {
+                    return resolved;
+                }
+            }
+        }
+        return "";
+    }
+
+    private String resolveTypeFqcn(Path projectRoot, TestClassInfo classInfo, String typeName) {
+        String normalized = stripTypeDecorations(typeName);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        if (normalized.contains(".")) {
+            return normalized;
+        }
+        for (String importLine : classInfo == null ? List.<String>of() : classInfo.getImports()) {
+            String importedType = importedType(importLine);
+            if (simpleName(importedType).equals(normalized)) {
+                return importedType;
+            }
+        }
+        Path sourceFile = resolveMainSourceByFqcn(projectRoot, normalized);
+        if (sourceFile == null) {
+            sourceFile = resolveMainSource(projectRoot, normalized);
+        }
+        if (sourceFile == null) {
+            return normalized;
+        }
+        String source = readSource(sourceFile);
+        Matcher packageMatcher = Pattern.compile("(?m)^\\s*package\\s+([A-Za-z_][\\w.]*)\\s*;").matcher(source);
+        if (packageMatcher.find()) {
+            return packageMatcher.group(1) + "." + normalized;
+        }
+        return normalized;
+    }
+
+    private String stripTypeDecorations(String typeName) {
+        if (typeName == null || typeName.isBlank()) {
+            return "";
+        }
+        String normalized = typeName.trim();
+        int genericIndex = normalized.indexOf('<');
+        if (genericIndex >= 0) {
+            normalized = normalized.substring(0, genericIndex).trim();
+        }
+        while (normalized.endsWith("[]")) {
+            normalized = normalized.substring(0, normalized.length() - 2).trim();
+        }
+        return normalized;
+    }
+
+    private String importedType(String importLine) {
+        if (importLine == null || importLine.isBlank()) {
+            return "";
+        }
+        Matcher matcher = Pattern.compile("^import\\s+([A-Za-z_][\\w.]*)\\s*;?$").matcher(importLine.trim());
+        return matcher.find() ? matcher.group(1).trim() : "";
+    }
+
+    private String resolveClassIdLiteral(Path projectRoot, String objectTypeFqcn) {
+        if (objectTypeFqcn == null || objectTypeFqcn.isBlank()) {
+            return "UNKNOWN";
+        }
+        Path sourceFile = resolveMainSourceByFqcn(projectRoot, objectTypeFqcn);
+        if (sourceFile == null) {
+            sourceFile = resolveMainSource(projectRoot, simpleName(objectTypeFqcn));
+        }
+        String source = readSource(sourceFile);
+        Matcher metaIdMatcher = META_ID_ANNOTATION.matcher(source);
+        if (metaIdMatcher.find()) {
+            return metaIdMatcher.group("id");
+        }
+        Matcher idMatcher = STATIC_STRING_ID_ASSIGNMENT.matcher(source);
+        if (idMatcher.find()) {
+            return idMatcher.group("id");
+        }
+        return simpleName(objectTypeFqcn)
+                .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+                .replaceAll("[^A-Za-z0-9]+", "_")
+                .toUpperCase(Locale.ROOT);
+    }
+
     private String firstFailureMethodName(ExecuteResult executeResult, List<TestReportFailure> reportFailures) {
         String reportMethod = firstFailureMethodName(reportFailures);
         if (!reportMethod.isBlank()) {
             return reportMethod;
+        }
+        String outputMethod = firstFailureMethodName(buildCombinedFailureText(executeResult, reportFailures));
+        if (!outputMethod.isBlank()) {
+            return outputMethod;
         }
         if (executeResult == null || executeResult.failedTests() == null) {
             return "";
@@ -531,6 +927,21 @@ public class DeterministicExecutionRecipeBuilder {
         return "";
     }
 
+    private String firstFailureMethodName(String rawFailureText) {
+        if (rawFailureText == null || rawFailureText.isBlank()) {
+            return "";
+        }
+        Matcher methodSourceMatcher = JUNIT_METHOD_SOURCE_NAME.matcher(rawFailureText);
+        if (methodSourceMatcher.find()) {
+            return methodSourceMatcher.group("method");
+        }
+        Matcher consoleMatcher = JUNIT_CONSOLE_METHOD_NAME.matcher(rawFailureText);
+        if (consoleMatcher.find()) {
+            return consoleMatcher.group("method");
+        }
+        return "";
+    }
+
     private String extractFailureMethodName(String failedTest) {
         if (failedTest == null || failedTest.isBlank()) {
             return "";
@@ -545,6 +956,28 @@ public class DeterministicExecutionRecipeBuilder {
             return trimmed.substring(separator + 1);
         }
         return trimmed;
+    }
+
+    private String readGeneratedTestMethod(Path projectRoot,
+                                           TestClassInfo classInfo,
+                                           ExecuteResult executeResult,
+                                           List<TestReportFailure> reportFailures,
+                                           String methodName) {
+        List<Path> candidates = new ArrayList<>();
+        if (classInfo != null && classInfo.getTargetPath() != null) {
+            candidates.add(classInfo.getTargetPath());
+        }
+        Path failurePath = resolveFailureTestPath(projectRoot, classInfo, executeResult, reportFailures);
+        if (failurePath != null) {
+            candidates.add(failurePath);
+        }
+        for (Path candidate : candidates) {
+            String source = readGeneratedTestMethod(candidate, methodName);
+            if (!source.isBlank()) {
+                return source;
+            }
+        }
+        return "";
     }
 
     private String readGeneratedTestMethod(Path testPath, String methodName) {
@@ -577,6 +1010,81 @@ public class DeterministicExecutionRecipeBuilder {
             return "";
         }
         return "";
+    }
+
+    private Path resolveFailureTestPath(Path projectRoot,
+                                        TestClassInfo classInfo,
+                                        ExecuteResult executeResult,
+                                        List<TestReportFailure> reportFailures) {
+        if (projectRoot == null) {
+            return null;
+        }
+        String failureClassName = firstFailureClassName(reportFailures);
+        if (failureClassName.isBlank()) {
+            failureClassName = firstFailureClassName(executeResult);
+        }
+        if (failureClassName.isBlank()) {
+            return null;
+        }
+        List<String> classCandidates = new ArrayList<>();
+        classCandidates.add(failureClassName);
+        int lastDot = failureClassName.lastIndexOf('.');
+        if (lastDot > 0) {
+            classCandidates.add(failureClassName.substring(0, lastDot));
+        }
+        String targetPackage = packageName(classInfo == null ? "" : classInfo.getClassName());
+        List<String> qualifiedCandidates = new ArrayList<>();
+        for (String candidateName : classCandidates) {
+            if (candidateName == null || candidateName.isBlank()) {
+                continue;
+            }
+            qualifiedCandidates.add(candidateName);
+            if (!candidateName.contains(".") && !targetPackage.isBlank()) {
+                qualifiedCandidates.add(targetPackage + "." + candidateName);
+            }
+        }
+        for (String candidateName : qualifiedCandidates) {
+            Path candidate = projectRoot.resolve("src/test/java/" + candidateName.replace('.', '/') + ".java");
+            if (Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().normalize();
+            }
+        }
+        return null;
+    }
+
+    private String firstFailureClassName(List<TestReportFailure> reportFailures) {
+        if (reportFailures == null) {
+            return "";
+        }
+        for (TestReportFailure failure : reportFailures) {
+            if (failure != null && failure.className() != null && !failure.className().isBlank()) {
+                return failure.className().trim();
+            }
+        }
+        return "";
+    }
+
+    private String firstFailureClassName(ExecuteResult executeResult) {
+        if (executeResult == null || executeResult.failedTests() == null) {
+            return "";
+        }
+        for (String failedTest : executeResult.failedTests()) {
+            if (failedTest == null || failedTest.isBlank()) {
+                continue;
+            }
+            String trimmed = failedTest.trim();
+            int hashIndex = trimmed.lastIndexOf('#');
+            return hashIndex >= 0 ? trimmed.substring(0, hashIndex) : trimmed;
+        }
+        return "";
+    }
+
+    private String packageName(String fqcn) {
+        if (fqcn == null || fqcn.isBlank()) {
+            return "";
+        }
+        int separator = fqcn.lastIndexOf('.');
+        return separator > 0 ? fqcn.substring(0, separator) : "";
     }
 
     private boolean looksLikeRejectionExpectation(String methodName, String methodSource) {
@@ -810,6 +1318,17 @@ public class DeterministicExecutionRecipeBuilder {
         } catch (IOException exception) {
             return null;
         }
+    }
+
+    private Path resolveMainSourceByFqcn(Path projectRoot, String fqcn) {
+        if (projectRoot == null || fqcn == null || fqcn.isBlank()) {
+            return null;
+        }
+        Path direct = projectRoot.resolve("src/main/java/" + fqcn.replace('.', '/') + ".java");
+        if (Files.isRegularFile(direct)) {
+            return direct.toAbsolutePath().normalize();
+        }
+        return null;
     }
 
     private String readSource(Path path) {

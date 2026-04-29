@@ -9,6 +9,8 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -216,6 +218,7 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
         runtimeClasspath.entries().stream()
                 .map(path -> path.toAbsolutePath().normalize().toString())
                 .forEach(classpathEntries::add);
+        owningClasspathEntries().forEach(classpathEntries::add);
         if (!currentClasspath.isBlank()) {
             for (String part : currentClasspath.split(File.pathSeparator)) {
                 if (!part.isBlank()) {
@@ -235,6 +238,34 @@ public class JUnitExecutionInvoker implements ExecutionInvoker {
                 determineTestClassName(projectRoot, testClassFile),
                 methodName == null ? "" : methodName
         );
+    }
+
+    List<String> owningClasspathEntries() {
+        LinkedHashSet<String> entries = new LinkedHashSet<>();
+        addCodeSource(entries, ForkedJUnitRunner.class);
+        addCodeSource(entries, JUnitExecutionInvoker.class);
+        return List.copyOf(entries);
+    }
+
+    private void addCodeSource(Set<String> entries, Class<?> type) {
+        if (entries == null || type == null) {
+            return;
+        }
+        try {
+            URL location = type.getProtectionDomain() == null
+                    || type.getProtectionDomain().getCodeSource() == null
+                    ? null
+                    : type.getProtectionDomain().getCodeSource().getLocation();
+            if (location == null) {
+                return;
+            }
+            Path path = Path.of(location.toURI()).toAbsolutePath().normalize();
+            if (Files.exists(path)) {
+                entries.add(path.toString());
+            }
+        } catch (URISyntaxException | IllegalArgumentException ignored) {
+            // Best-effort only: if code source cannot be resolved, current JVM classpath remains as fallback.
+        }
     }
 
     private Path resolveCompiledTestClass(Path moduleRoot, Path projectRoot, Path testClassFile) {

@@ -40,6 +40,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -132,6 +133,8 @@ public class GenerationMethodOrchestrator {
         ExecuteResult lastExecuteResult = null;
         ExecutionFailureParseResult lastFailureParseResult = null;
         List<TestReportFailure> lastReportFailures = List.of();
+        List<String> recordedCompileErrorMethods = new ArrayList<>();
+        List<String> recordedExecuteErrorMethods = new ArrayList<>();
 
         while (attempt < MAX_ATTEMPTS) {
             PreMergeScratchValidator.ValidationResult scratchValidation = preMergeScratchValidator.validate(
@@ -375,6 +378,7 @@ public class GenerationMethodOrchestrator {
                             lastCompileResult.messages(),
                             lastCompileResult.stdout(),
                             lastCompileResult.stderr()));
+                    recordedCompileErrorMethods.add(snippet.methodName());
                     try {
                         logger.info("[COMPILATION_REASONING] action=START_COMPILE_FIX_LOOP method="
                                 + snippet.methodName());
@@ -419,6 +423,7 @@ public class GenerationMethodOrchestrator {
                             + " result=COMPILE_SUCCESS");
                     logger.trace("RESULT", snippet.methodName(), AgentState.S5_COMPILATION_SUCCESS.name(), "compile repaired successfully");
                 }
+                clearRecordedCompileErrors(report, classInfo.getTargetPath(), recordedCompileErrorMethods);
             } else {
                 logger.info("Compilation disabled via configuration; skipping compile step.");
                 lastCompileResult = new CompileResult(true, List.of(), "", "");
@@ -436,6 +441,7 @@ public class GenerationMethodOrchestrator {
                             lastExecuteResult.failedTests(),
                             lastExecuteResult.stdout(),
                             lastExecuteResult.stderr()));
+                    recordedExecuteErrorMethods.add(snippet.methodName());
                     logger.info("[EXECUTION_REASONING] Stage=PARSE_RUNTIME_FAILURE method=" + snippet.methodName());
                     lastFailureParseResult = support.parseExecutionLog(lastExecuteResult);
                     lastReportFailures = support.parseExecutionReport(config.getProjectPath(), lastFailureParseResult);
@@ -462,6 +468,8 @@ public class GenerationMethodOrchestrator {
                     lastFailureParseResult = executionRepairResult.failureParseResult();
                     lastReportFailures = executionRepairResult.reportFailures();
                     if (executionRepairResult.success()) {
+                        report.resolveExecuteErrors(classInfo.getTargetPath(), snippet.methodName());
+                        clearRecordedExecuteErrors(report, classInfo.getTargetPath(), recordedExecuteErrorMethods);
                         logger.trace("RESULT", snippet.methodName(), AgentState.S5_COMPILATION_SUCCESS.name(), "execution repaired successfully; continuing to coverage");
                     }
                     if (executionRepairResult.success()) {
@@ -501,6 +509,10 @@ public class GenerationMethodOrchestrator {
                         attempt++;
                         continue;
                     }
+                }
+                if (lastExecuteResult.success()) {
+                    report.resolveExecuteErrors(classInfo.getTargetPath(), snippet.methodName());
+                    clearRecordedExecuteErrors(report, classInfo.getTargetPath(), recordedExecuteErrorMethods);
                 }
             } else {
                 logger.info("Execution disabled via configuration; skipping execution step.");
@@ -572,6 +584,30 @@ public class GenerationMethodOrchestrator {
         }
 
         logger.info("Generation pipeline completed successfully for method " + snippet.methodName());
+    }
+
+    private void clearRecordedCompileErrors(ErrorsReport report,
+                                            Path testClassFile,
+                                            List<String> recordedMethodNames) {
+        clearRecordedErrors(testClassFile, recordedMethodNames, methodName -> report.resolveCompileErrors(testClassFile, methodName));
+    }
+
+    private void clearRecordedExecuteErrors(ErrorsReport report,
+                                            Path testClassFile,
+                                            List<String> recordedMethodNames) {
+        clearRecordedErrors(testClassFile, recordedMethodNames, methodName -> report.resolveExecuteErrors(testClassFile, methodName));
+    }
+
+    private void clearRecordedErrors(Path testClassFile,
+                                     List<String> recordedMethodNames,
+                                     java.util.function.Consumer<String> resolver) {
+        if (testClassFile == null || recordedMethodNames == null || recordedMethodNames.isEmpty()) {
+            return;
+        }
+        for (String methodName : List.copyOf(recordedMethodNames)) {
+            resolver.accept(methodName);
+        }
+        recordedMethodNames.clear();
     }
 
     private DiffEngine.MergeResult applyValidatedScratchSource(TestClassInfo classInfo,
